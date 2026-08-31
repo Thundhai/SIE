@@ -88,3 +88,75 @@ class TenantScopedRepository(Generic[ModelType, CreateSchemaType]):
             .limit(limit)
         )
         return list(db.execute(stmt).scalars().all())
+
+
+class NullableTenantScopedRepository(Generic[ModelType]):
+    """Read-side repository for tables with a *nullable* `organization_id`.
+
+    This is the knowledge domain's counterpart to `TenantScopedRepository`,
+    for tables that can hold either GLOBAL rows (`organization_id IS NULL`)
+    or ORGANIZATION-owned rows (`organization_id` set) — KnowledgeSource and
+    KnowledgeDocument. The same non-negotiable-signature approach applies:
+    every method takes `organization_id` explicitly (defaulting to `None`,
+    which means "global"), and the two scopes are never mixed in a single
+    query result:
+
+      * `organization_id=None`  -> only global rows (`organization_id IS NULL`)
+      * `organization_id=<uuid>` -> only that organization's rows
+        (`organization_id == <uuid>`)
+
+    There is no mode that returns both, so an endpoint built on this can't
+    accidentally return another tenant's private rows alongside global ones,
+    and a caller can't list "everything" in one call.
+
+    Only `get`/`list` live here — creation semantics differ per model in
+    this domain (KnowledgeSource validates/derives scope from its own
+    input; KnowledgeDocument derives it from its parent source), so `create`
+    is left to each concrete service.
+    """
+
+    def __init__(self, model: type[ModelType]) -> None:
+        self.model = model
+
+    def get(
+        self,
+        db: Session,
+        *,
+        id: uuid.UUID,
+        organization_id: uuid.UUID | None = None,
+    ) -> ModelType | None:
+        stmt = select(self.model).where(self.model.id == id)
+        if organization_id is None:
+            stmt = stmt.where(self.model.organization_id.is_(None))
+        else:
+            stmt = stmt.where(self.model.organization_id == organization_id)
+        return db.execute(stmt).scalar_one_or_none()
+
+    def list(
+        self,
+        db: Session,
+        *,
+        organization_id: uuid.UUID | None = None,
+        skip: int = 0,
+        limit: int = 100,
+    ) -> list[ModelType]:
+        stmt = select(self.model)
+        if organization_id is None:
+            stmt = stmt.where(self.model.organization_id.is_(None))
+        else:
+            stmt = stmt.where(self.model.organization_id == organization_id)
+        stmt = stmt.order_by(self.model.created_at).offset(skip).limit(limit)
+        return list(db.execute(stmt).scalars().all())
+
+    def get_unscoped(self, db: Session, *, id: uuid.UUID) -> ModelType | None:
+        """Fetch a row by id with no tenant filter at all.
+
+        Not tenant-safe to expose directly through an API. This exists
+        only for internal server-side resolution — e.g. looking up a
+        KnowledgeSource by the id a client supplied so its *actual* scope
+        can be determined and then enforced (see
+        KnowledgeDocumentService.create), before any tenant-facing data is
+        returned to that caller.
+        """
+        stmt = select(self.model).where(self.model.id == id)
+        return db.execute(stmt).scalar_one_or_none()

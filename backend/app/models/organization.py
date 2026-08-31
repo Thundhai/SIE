@@ -32,6 +32,10 @@ class Organization(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         back_populates="organization",
         cascade="all, delete-orphan",
     )
+    knowledge_sources: Mapped[list["KnowledgeSource"]] = relationship(  # noqa: F821
+        back_populates="organization",
+        cascade="all, delete-orphan",
+    )
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<Organization id={self.id!s} name={self.name!r}>"

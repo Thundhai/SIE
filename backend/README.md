@@ -1,4 +1,4 @@
-# SIE Backend — Safety Intelligence Engine (Foundation v0.1)
+# SIE Backend — Safety Intelligence Engine
 
 SIE is an independent, multi-tenant safety intelligence platform. This
 service is not architecturally coupled to any single client application.
@@ -7,13 +7,24 @@ consumer of the SIE API — but it is a consumer, not a dependency. Any
 authorized enterprise application connects the same way: through the
 versioned REST API under `/api/v1`.
 
-This is the **foundation phase**: a clean backend with core tenancy
-models, a REST API, and infrastructure. The AI/LLM layer, RAG, vector
-search, predictive models, and Safelytic integration are all out of scope
-here and are stubbed out only as empty, documented package placeholders
-(`app/intelligence`, `app/knowledge`, `app/ingestion`, `app/analytics`,
-`app/predictions`, `app/governance`) so later phases have a predictable
-home without a restructure.
+Two milestones are implemented so far:
+
+* **Foundation v0.1** — core tenancy models (Organization, Site, User,
+  DataSource), a REST API, and infrastructure (FastAPI, PostgreSQL,
+  SQLAlchemy, Alembic, Docker Compose).
+* **Knowledge Foundation v0.1** — the data model and service layer for
+  storing and governing safety knowledge (KnowledgeSource,
+  KnowledgeDocument, KnowledgeDocumentVersion, KnowledgeChunk). See
+  [Knowledge architecture](#knowledge-architecture) below.
+
+The AI/LLM layer, RAG, embeddings, vector search, predictive models, and
+Safelytic integration are all out of scope so far and are stubbed out only
+as empty, documented package placeholders (`app/intelligence`,
+`app/ingestion`, `app/analytics`, `app/predictions`, `app/governance`) so
+later phases have a predictable home without a restructure. **No AI
+training, embeddings, RAG, or predictive analytics exist in this codebase
+yet** — the knowledge foundation below stores and structures content for
+that future work; it does not perform it.
 
 ## Architecture
 
@@ -21,14 +32,17 @@ home without a restructure.
 backend/
   app/
     api/            HTTP layer: FastAPI routers + request-scoped dependencies
-      v1/            Versioned routes (health, organizations, sites, data-sources)
+      v1/            Versioned routes (health, organizations, sites,
+                      data-sources, knowledge)
     core/           Configuration (Pydantic Settings) and DB engine/session setup
-    models/         SQLAlchemy 2.x ORM models (Organization, Site, User, DataSource)
+    models/         SQLAlchemy 2.x ORM models (Organization, Site, User,
+                     DataSource, KnowledgeSource, KnowledgeDocument,
+                     KnowledgeDocumentVersion, KnowledgeChunk)
     schemas/        Pydantic v2 request/response schemas
     services/       Tenant-scoped repository/service layer (see below)
     intelligence/   Reserved for a future AI/LLM layer
-    knowledge/      Reserved for future knowledge/RAG work
-    ingestion/      Reserved for future data ingestion pipelines
+    ingestion/      Reserved for future data ingestion pipelines (crawling,
+                     document processing workers, chunk extraction)
     analytics/      Reserved for future analytics
     predictions/    Reserved for future predictive models
     governance/     Reserved for future governance/compliance features
@@ -41,6 +55,14 @@ backend/
   alembic.ini
   .env.example
 ```
+
+Note: the empty `app/knowledge/` placeholder package from Foundation v0.1
+has been removed — the knowledge domain now lives in `app/models`,
+`app/schemas`, `app/services`, and `app/api/v1/knowledge.py` alongside
+every other resource, matching how Site/DataSource are organized, rather
+than in its own package. The remaining placeholders (`app/intelligence`,
+`app/ingestion`, `app/analytics`, `app/predictions`, `app/governance`)
+are untouched.
 
 **Request flow:** router (`app/api/v1/*`) → dependency resolves and
 validates the organization from the URL (`app/api/deps.py`) → service
@@ -78,6 +100,10 @@ enforced at two levels, deliberately redundant:
 
 This is covered directly by `tests/test_tenant_isolation.py`, both through
 the HTTP API and by calling the service layer directly.
+
+The knowledge domain (below) reuses this exact same architecture rather
+than inventing a second mechanism — see
+[Knowledge architecture](#knowledge-architecture).
 
 ## Prerequisites
 
@@ -168,7 +194,13 @@ alembic revision --autogenerate -m "describe the change"
 alembic downgrade -1
 ```
 
-## API endpoints (v0.1)
+Two migrations exist so far: `0001` (Foundation v0.1 — organizations,
+sites, users, data_sources) and `0002` (Knowledge Foundation v0.1 —
+knowledge_sources, knowledge_documents, knowledge_document_versions,
+knowledge_chunks). `0001` is not modified by `0002`; new schema changes
+are always a new migration on top.
+
+## API endpoints
 
 | Method | Path                                                    | Description                          |
 |--------|----------------------------------------------------------|---------------------------------------|
@@ -179,8 +211,15 @@ alembic downgrade -1
 | GET    | `/api/v1/organizations/{organization_id}/sites`          | List sites for an organization       |
 | POST   | `/api/v1/organizations/{organization_id}/data-sources`   | Create a data source                 |
 | GET    | `/api/v1/organizations/{organization_id}/data-sources`   | List data sources for an organization|
+| POST   | `/api/v1/knowledge/sources`                              | Create a knowledge source (GLOBAL or ORGANIZATION) |
+| GET    | `/api/v1/knowledge/sources`                              | List knowledge sources (GLOBAL, or one organization's — see below) |
+| GET    | `/api/v1/knowledge/sources/{source_id}`                  | Get a knowledge source               |
+| POST   | `/api/v1/knowledge/documents`                            | Create a document under a source     |
+| GET    | `/api/v1/knowledge/documents/{document_id}`              | Get a knowledge document             |
+| POST   | `/api/v1/knowledge/documents/{document_id}/versions`     | Create a document version            |
+| GET    | `/api/v1/knowledge/documents/{document_id}/versions`     | List a document's versions           |
 
-## Data model (v0.1)
+## Data model
 
 * **Organization** — the tenant root. `id`, `name`, `industry`, `country`,
   `status`, `created_at`, `updated_at`.
@@ -190,9 +229,151 @@ alembic downgrade -1
   `email` (unique per organization), `role`.
 * **DataSource** — a system SIE ingests from (ingestion itself is not
   implemented yet). Adds `organization_id`, `source_type`, `last_sync_at`.
+* **KnowledgeSource, KnowledgeDocument, KnowledgeDocumentVersion,
+  KnowledgeChunk** — the knowledge foundation; see
+  [Knowledge architecture](#knowledge-architecture) below for the full
+  field list and design.
 
 All primary keys are UUIDs generated application-side. All timestamps are
 timezone-aware and stored in UTC.
+
+## Knowledge architecture
+
+The knowledge foundation stores and governs safety knowledge as a linear
+chain of increasingly granular records:
+
+```
+Global Knowledge  ─┐
+                    ├──▶ Knowledge Source ──▶ Knowledge Document ──▶ Document Version ──▶ Knowledge Chunk
+Organization       ─┘
+Knowledge
+```
+
+* **KnowledgeSource** — the root provenance record: who published this
+  knowledge, what kind of thing it is (`source_type`), and its governance
+  state (`verification_status`: PENDING → UNDER_REVIEW → VERIFIED /
+  REJECTED / EXPIRED / SUPERSEDED). This is where GLOBAL vs. ORGANIZATION
+  scope is decided (see below) — every document under a source inherits
+  that scope.
+* **KnowledgeDocument** — one document belonging to a source (e.g. one
+  regulation section, one internal procedure). Carries its own
+  `organization_id`, denormalized from its source, so document queries can
+  be tenant-filtered directly.
+* **KnowledgeDocumentVersion** — one immutable, ingested snapshot of a
+  document's content. Versions are append-only: re-ingesting the same
+  content is idempotent (`content_hash`, see below), and a superseded
+  version is marked via `superseded_at` rather than edited or deleted. No
+  binary file is stored in PostgreSQL — `storage_reference` is a
+  placeholder pointer at wherever the real file will eventually live in
+  object storage, and `extracted_text` holds plain extracted text for
+  downstream processing.
+* **KnowledgeChunk** — a citable slice of one version's content
+  (`chunk_index`, `content`, `character_count`, optional `page_number` /
+  `section_title` / free-form `metadata`). This is the smallest unit of
+  provenance, intended to support a future evidence-citation feature. No
+  embedding or vector column exists on this table yet.
+
+### Global Knowledge vs. Organization Knowledge
+
+A `KnowledgeSource` is either:
+
+* **GLOBAL** — published knowledge not owned by any tenant (a regulation,
+  an industry standard, a public safety bulletin). `organization_id` is
+  `NULL`.
+* **ORGANIZATION** — a tenant's own knowledge (an internal procedure, an
+  incident report). `organization_id` is required.
+
+This is enforced at the database level by a `CHECK` constraint on
+`knowledge_sources` (`ck_knowledge_sources_scope_org_consistency`), not
+just application logic — a row that is GLOBAL with an `organization_id`
+set, or ORGANIZATION with `organization_id` NULL, cannot exist. Every
+`KnowledgeDocument` under a source inherits that same scope: its
+`organization_id` is always derived server-side from its source, never
+accepted at face value from a client
+(`KnowledgeDocumentService.create` — see
+`app/services/knowledge_document_service.py`), so a document can never end
+up attached to a different organization than its source, or organization-
+scoped under a GLOBAL source.
+
+`KnowledgeDocumentVersion` and `KnowledgeChunk` do not carry their own
+`organization_id` — their tenancy is transitive, resolved by walking the
+foreign-key chain back to their document (and its source). An endpoint
+that needs to authorize access to a version or chunk resolves and
+tenant-checks the parent document first (see `app/api/v1/knowledge.py`),
+exactly the same "resolve-then-authorize" shape as
+`get_organization_or_404` in the foundation.
+
+### Tenant isolation (reused, not reinvented)
+
+The knowledge domain is built on the *same* tenant-scoping architecture as
+the rest of SIE — `app/services/base.py` — extended with one addition,
+`NullableTenantScopedRepository`, for the two knowledge tables whose
+`organization_id` can legitimately be `NULL` (GLOBAL). It applies the
+identical non-negotiable-signature principle as `TenantScopedRepository`:
+every `get`/`list` call takes `organization_id` explicitly, and the two
+scopes are never mixed in one query result — `organization_id=None`
+returns only global rows, a UUID returns only that organization's rows,
+and there is no third mode that returns both. This is what makes
+"a caller cannot accidentally list all organization-private knowledge"
+structural rather than a matter of remembering to add a filter.
+
+Because knowledge routes aren't nested under
+`/organizations/{organization_id}/...` (a source can be GLOBAL, so there's
+no single tenant path segment that always applies), organization context
+is passed explicitly as an `organization_id` query parameter instead:
+omitted to reach GLOBAL knowledge, required and checked against the actual
+owner to reach ORGANIZATION-scoped knowledge. A source or document that
+belongs to a different organization than the one asserted (or none at
+all) returns 404, the same as an unknown id — existence is never leaked
+across tenants.
+
+### Duplicate content and versioning
+
+`KnowledgeDocumentVersionService.create` is idempotent on
+`(document_id, content_hash)`: re-ingesting byte-identical content for a
+document returns the existing version rather than creating a diverging
+duplicate row. A unique constraint on that pair
+(`uq_knowledge_document_versions_document_content`) is the safety net for
+concurrent writers. When a genuinely new version is created, it becomes
+the document's `current_version_id`, and the version it replaces has its
+`superseded_at` set — a simple, linear versioning policy (newest ingested
+version wins) that is easy to change later without touching the schema.
+
+### Provenance / lineage
+
+Every knowledge record is traceable back to its source through the
+foreign-key chain itself — `KnowledgeChunk.document_version_id` →
+`KnowledgeDocumentVersion.document_id` → `KnowledgeDocument.source_id` →
+`KnowledgeSource` — rather than a separate event-log table. A
+`KnowledgeDocumentVersion`'s `ingestion_status` and `created_at` serve as
+its ingestion event for now. `app/services/knowledge_provenance_service.py`
+provides `get_chunk_provenance()`, a read-side helper that walks this
+chain and returns the full lineage for one chunk; no new data model is
+introduced for it, matching the milestone's instruction not to
+overengineer a separate event system before one is needed.
+
+### What this milestone deliberately does not do
+
+**No AI training, embeddings, RAG, semantic/vector search, or predictive
+analytics exist in this codebase.** This phase only stores and structures
+knowledge content — plain text chunks with structural metadata — so that
+future work has a stable foundation to build on:
+
+* `KnowledgeChunk` has the fields (content, ordering, page/section) an
+  embeddings/vector-search layer will need to index, but no embedding or
+  vector column.
+* `verification_status` on `KnowledgeSource` gives a source-verification
+  workflow states to move through, but no workflow engine exists yet.
+* Chunk `metadata` and the full provenance chain are what an evidence-
+  citation feature will read from, but no citation feature exists yet.
+* `app/ingestion` remains an empty placeholder package — chunk creation
+  has a service (`KnowledgeChunkService.create_many`) but no HTTP endpoint
+  or worker calls it yet; that lands with a real ingestion pipeline.
+* `external_reference`/`external_document_id` give an external-ingestion
+  source system something to key off of, but no crawler or external
+  connector exists yet.
+* `knowledge_freshness` (staleness monitoring against `review_date`) is
+  not implemented — `review_date` is stored but nothing acts on it yet.
 
 ## Configuration
 
@@ -223,3 +404,19 @@ integration, Redis, and any microservice/Kubernetes topology.
 * **No structured logging, tracing, or rate limiting.**
 * **No CI pipeline** wired up in this repository yet to run `pytest`
   automatically on push.
+* **No chunk HTTP endpoints or ingestion worker yet.** `KnowledgeChunkService`
+  exists and is tested at the service layer, but nothing in `app/ingestion`
+  calls it yet — there is no document-processing step that produces chunks
+  from a version's `extracted_text`.
+* **No `KnowledgeSourceUpdate`/verification-workflow transition endpoint.**
+  `verification_status` can only be set at creation (defaults to PENDING);
+  moving a source through UNDER_REVIEW → VERIFIED etc. isn't exposed yet.
+* **The GLOBAL/ORGANIZATION scope-consistency `CHECK` constraint is
+  single-table.** It guarantees `knowledge_sources.organization_id` is
+  NULL iff `scope_type` is GLOBAL. The corresponding invariant on
+  `knowledge_documents` (its `organization_id` must match its source's) is
+  enforced only in `KnowledgeDocumentService.create` — PostgreSQL `CHECK`
+  constraints cannot reference another table, so this one is
+  application-enforced, not database-enforced. A direct SQL write that
+  bypasses the service layer could violate it; this is the one place in
+  the knowledge foundation with that gap.

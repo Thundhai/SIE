@@ -7,6 +7,10 @@ in tests.
 
 from app.models.base import Base
 from app.models.data_source import DataSource
+from app.models.knowledge_chunk import KnowledgeChunk
+from app.models.knowledge_document import KnowledgeDocument
+from app.models.knowledge_document_version import KnowledgeDocumentVersion
+from app.models.knowledge_source import KnowledgeSource
 from app.models.organization import Organization
 from app.models.site import Site
 from app.models.user import User
@@ -17,4 +21,8 @@ __all__ = [
     "Site",
     "User",
     "DataSource",
+    "KnowledgeSource",
+    "KnowledgeDocument",
+    "KnowledgeDocumentVersion",
+    "KnowledgeChunk",
 ]

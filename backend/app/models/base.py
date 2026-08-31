@@ -21,10 +21,19 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
 
-__all__ = ["Base", "UUIDPrimaryKeyMixin", "TimestampMixin", "OrganizationScopedMixin"]
+__all__ = [
+    "Base",
+    "UUIDPrimaryKeyMixin",
+    "TimestampMixin",
+    "OrganizationScopedMixin",
+    "utcnow",
+]
 
 
-def _utcnow() -> datetime:
+def utcnow() -> datetime:
+    """Current UTC time. Shared by every model that needs a raw timestamp
+    default outside of `TimestampMixin` (e.g. version rows, which have
+    `created_at` but no `updated_at`)."""
     return datetime.now(timezone.utc)
 
 
@@ -43,13 +52,13 @@ class TimestampMixin:
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=_utcnow,
+        default=utcnow,
         nullable=False,
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
-        default=_utcnow,
-        onupdate=_utcnow,
+        default=utcnow,
+        onupdate=utcnow,
         nullable=False,
     )
 
