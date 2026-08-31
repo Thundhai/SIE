@@ -1,18 +1,19 @@
 """The generic ingestion pipeline, DB-independent and directly testable:
 
     file bytes -> detect -> (adapter selection) -> validate -> hash
-        -> extract -> normalize -> chunk -> PipelineOutcome
+        -> extract -> normalize -> structure detection -> PipelineOutcome
 
 This module has no database dependency and never touches
 `StorageProvider` — it is pure transformation of bytes into
 `PipelineOutcome`, which is what makes it independently testable (see
 tests/test_ingestion_pipeline.py) without a database or storage fixture.
 Persistence (IngestedFile/IngestionJob/KnowledgeDocument/
-KnowledgeDocumentVersion/KnowledgeChunk rows, storage, audit) is
-`app/services/ingestion_service.py`'s job, one layer up — the same
-separation the rest of this codebase draws between "what a thing is"
-(adapters, this module) and "what happens to it in the system"
-(services).
+KnowledgeDocumentVersion rows, storage, audit) is
+`app/services/ingestion_service.py`'s job, one layer up; turning this
+module's `normalized_content` into `KnowledgeChunk` rows is
+`app/services/chunking_service.py`'s job, a further layer up still — see
+that module's docstring for why chunking itself (not just persistence)
+happens after the database version exists rather than here.
 
 The stages above map directly onto the milestone's pipeline diagram:
 
@@ -21,15 +22,18 @@ The stages above map directly onto the milestone's pipeline diagram:
         -> Content extraction -> Structure detection -> Normalization
         -> Quality checks -> Persistence -> Provenance
 
+everything up to and including "Structure detection" happens here (via
+`app/ingestion/structure.py`, itself pure); "Source/document
+association", the "Knowledge Units"/chunking stages, "Persistence", and
+"Provenance" happen above this module, since they need the database and
+the authorized tenant context this module deliberately has no access to.
+
 Detection is split into its own cheap, no-parsing step
 (`detect_supported_type`) precisely so `ingestion_service.py` can reject
 an unsupported upload *before* resolving source/document association or
 writing anything to the database, while still resolving that association
 (and therefore attributing a job to the right source/document) *before*
-attempting the possibly-failing parse in `extract_and_normalize`. The
-"Source/document association" and "Persistence"/"Provenance" stages
-happen in that gap, in the service layer, which is why they aren't part
-of one single function here.
+attempting the possibly-failing parse in `extract_and_normalize`.
 """
 
 from dataclasses import dataclass, field
@@ -40,10 +44,10 @@ from app.ingestion.adapters.base import (
     AdapterValidationError,
     DocumentAdapter,
 )
-from app.ingestion.chunking import ChunkDraft, ChunkingStrategy, SimpleChunkingStrategy
 from app.ingestion.detection import DetectedFileType, detect_file_type
 from app.ingestion.hashing import sha256_hex
 from app.ingestion.normalized_content import NormalizedContent
+from app.ingestion.structure import detect_structure
 from app.models.enums import ExtractionMethod, ExtractionStatus
 
 
@@ -73,7 +77,6 @@ class PipelineOutcome:
     extraction_status: ExtractionStatus
     warnings: list[str] = field(default_factory=list)
     normalized_content: list[NormalizedContent] = field(default_factory=list)
-    chunk_drafts: list[ChunkDraft] = field(default_factory=list)
     extraction_metadata: dict = field(default_factory=dict)
 
 
@@ -101,13 +104,12 @@ def extract_and_normalize(
     *,
     filename: str,
     adapter: DocumentAdapter,
-    chunking_strategy: ChunkingStrategy | None = None,
 ) -> PipelineOutcome:
-    """Run validate -> hash -> extract -> normalize -> chunk for a file
-    whose adapter has already been resolved via `detect_supported_type`.
-    Raises FileValidationError / FileExtractionError for a hard failure;
-    anything short of that is recorded in the returned warnings rather
-    than raised.
+    """Run validate -> hash -> extract -> normalize -> structure detection
+    for a file whose adapter has already been resolved via
+    `detect_supported_type`. Raises FileValidationError /
+    FileExtractionError for a hard failure; anything short of that is
+    recorded in the returned warnings rather than raised.
     """
     content_hash = sha256_hex(file_bytes)
 
@@ -122,8 +124,7 @@ def extract_and_normalize(
         raise FileExtractionError(str(exc)) from exc
 
     normalized = adapter.normalize(extraction)
-    strategy = chunking_strategy or SimpleChunkingStrategy()
-    chunk_drafts = strategy.chunk(normalized)
+    normalized = detect_structure(normalized)
 
     return PipelineOutcome(
         content_hash=content_hash,
@@ -133,24 +134,16 @@ def extract_and_normalize(
         extraction_status=_determine_extraction_status(adapter, normalized),
         warnings=[*validation_warnings, *extraction.warnings],
         normalized_content=normalized,
-        chunk_drafts=chunk_drafts,
         extraction_metadata=extraction.metadata,
     )
 
 
-def run_pipeline(
-    file_bytes: bytes,
-    *,
-    filename: str,
-    chunking_strategy: ChunkingStrategy | None = None,
-) -> PipelineOutcome:
-    """Convenience wrapper running the full detect -> ... -> chunk
-    pipeline in one call, for callers (tests, one-off tooling) that don't
-    need the two-step split `ingestion_service.py` uses."""
+def run_pipeline(file_bytes: bytes, *, filename: str) -> PipelineOutcome:
+    """Convenience wrapper running the full detect -> ... -> structure
+    detection pipeline in one call, for callers (tests, one-off tooling)
+    that don't need the two-step split `ingestion_service.py` uses."""
     _detected, adapter = detect_supported_type(file_bytes, filename=filename)
-    return extract_and_normalize(
-        file_bytes, filename=filename, adapter=adapter, chunking_strategy=chunking_strategy
-    )
+    return extract_and_normalize(file_bytes, filename=filename, adapter=adapter)
 
 
 def _determine_extraction_method(adapter: DocumentAdapter, extraction) -> ExtractionMethod:

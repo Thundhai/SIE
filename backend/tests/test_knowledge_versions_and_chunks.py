@@ -1,10 +1,13 @@
+from app.models.enums import QualityStatus
 from app.schemas.knowledge_chunk import KnowledgeChunkCreate
 from app.schemas.knowledge_document import KnowledgeDocumentCreate
 from app.schemas.knowledge_document_version import KnowledgeDocumentVersionCreate
 from app.schemas.knowledge_source import KnowledgeSourceCreate
 from app.services.knowledge_chunk_service import knowledge_chunk_service
 from app.services.knowledge_document_service import knowledge_document_service
-from app.services.knowledge_document_version_service import knowledge_document_version_service
+from app.services.knowledge_document_version_service import (
+    knowledge_document_version_service,
+)
 from app.services.knowledge_provenance_service import get_chunk_provenance
 from app.services.knowledge_source_service import knowledge_source_service
 
@@ -164,12 +167,14 @@ def test_create_chunks_belonging_to_a_document_version(db_session):
                 character_count=48,
                 page_number=1,
                 section_title="Scope",
+                quality_status=QualityStatus.HIGH,
                 chunk_metadata={"clause": "1910.147(a)"},
             ),
             KnowledgeChunkCreate(
                 chunk_index=1,
                 content="Energy control procedures.",
                 character_count=27,
+                quality_status=QualityStatus.HIGH,
             ),
         ],
     )
@@ -208,7 +213,14 @@ def test_chunk_provenance_traces_full_lineage(db_session):
     (chunk,) = knowledge_chunk_service.create_many(
         db_session,
         document_version=version,
-        chunks_in=[KnowledgeChunkCreate(chunk_index=0, content="text", character_count=4)],
+        chunks_in=[
+            KnowledgeChunkCreate(
+                chunk_index=0,
+                content="text",
+                character_count=4,
+                quality_status=QualityStatus.HIGH,
+            )
+        ],
     )
 
     provenance = get_chunk_provenance(db_session, chunk_id=chunk.id)

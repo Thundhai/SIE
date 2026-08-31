@@ -48,6 +48,17 @@ class Settings(BaseSettings):
     # spreadsheet/presentation formats this milestone supports.
     MAX_UPLOAD_SIZE_BYTES: int = 25 * 1024 * 1024
 
+    # Chunking (see app/ingestion/chunking.py::StructureAwareChunkingStrategy).
+    # Documented *initial* defaults, not scientifically validated optimal
+    # values — see the README's "Knowledge Quality Pipeline" section.
+    # Character-based rather than token-based: no tokenizer dependency is
+    # introduced by this milestone (that belongs with the future
+    # embedding layer, which knows which model's tokenizer to match).
+    MIN_CHUNK_CHARACTERS: int = 200
+    TARGET_CHUNK_CHARACTERS: int = 1000
+    MAX_CHUNK_CHARACTERS: int = 1800
+    OVERLAP_CHARACTERS: int = 150
+
     # Database
     # Either set DATABASE_URL directly, or set the POSTGRES_* components and
     # let it be assembled below.

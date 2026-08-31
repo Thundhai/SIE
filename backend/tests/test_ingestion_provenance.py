@@ -45,7 +45,13 @@ def test_full_lineage_from_ingestion_job_to_chunks(db_session):
     assert provenance["document_id"] == outcome.document.id
     assert provenance["source_id"] == source.id
     assert provenance["document_version_id"] == outcome.version_id
-    assert len(provenance["chunk_ids"]) == outcome.chunk_count == 2
+    # sample_procedure.pdf's single page (a short heading plus a short
+    # paragraph) fits comfortably within one chunk once
+    # StructureAwareChunkingStrategy keeps the heading attached to the
+    # content it introduces, rather than the old per-page/per-paragraph
+    # SimpleChunkingStrategy splitting them apart — see
+    # app/ingestion/chunking.py.
+    assert len(provenance["chunk_ids"]) == outcome.chunk_count == 1
 
     # And from any one of those chunks, the same chain is traceable back
     # up to the source — the two provenance helpers agree with each other.

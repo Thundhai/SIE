@@ -12,28 +12,35 @@ Row 124" for one source and "Page 47" for another, from the same
 downstream code, instead of every format being reduced to an
 undifferentiated blob of text.
 
-One `NormalizedContent` roughly corresponds to one future `KnowledgeChunk`
-(via a `ChunkingStrategy` — see chunking.py) — for text formats it's
-usually coarser than a chunk (e.g. one per page/section, subdivided
-further at chunking time); for row/record-shaped formats it's already
+One `NormalizedContent` roughly corresponds to one `KnowledgeUnit`
+(app/ingestion/knowledge_unit.py) — the next stage in the pipeline, which
+adds document-version identity, ordering, and quality assessment before
+chunking. For text formats a `NormalizedContent` is usually coarser than
+a final `KnowledgeChunk` (e.g. one per page/section, subdivided further
+at chunking time); for row/record-shaped formats it is already
 chunk-grained (one per row/slide).
+
+`section_path` (added in the Knowledge Quality & Semantic Chunking
+milestone) is deliberately left for adapters to populate only where they
+can track true hierarchy cheaply (currently: DOCX, via its heading-level
+stack — see docx_adapter.py). Where an adapter has no reliable way to
+build a multi-level path, it leaves this `None` and
+`app/ingestion/structure.py`'s generic structure-detection pass fills in
+a best-effort single-element path from `section_title` instead, at lower
+confidence — see that module for the full reasoning.
 """
 
-from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, Field
 
+from app.models.enums import ContentType
 
-class NormalizedContentType(str, Enum):
-    """What kind of thing this piece of normalized content is — not the
-    source file format (that's on the adapter/IngestedFile), but the
-    shape of this particular piece of content within it."""
-
-    TEXT = "text"
-    TABLE = "table"
-    IMAGE = "image"
-    STRUCTURED_RECORD = "structured_record"
+# Kept as the name this module has always exported; the enum itself now
+# lives in app/models/enums.py (as `ContentType`) so app/models — which
+# KnowledgeChunk needs to reuse the same values from — doesn't have to
+# import from app/ingestion. See that module's docstring.
+NormalizedContentType = ContentType
 
 
 class NormalizedContent(BaseModel):
@@ -46,6 +53,7 @@ class NormalizedContent(BaseModel):
     row_number: int | None = None
     slide_number: int | None = None
     section_title: str | None = None
+    section_path: list[str] | None = None
 
     metadata: dict[str, Any] = Field(default_factory=dict)
 

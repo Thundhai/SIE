@@ -7,7 +7,9 @@ import pytest
 from app.models.enums import IngestionJobStatus, ScopeType
 from app.schemas.knowledge_source import KnowledgeSourceCreate
 from app.services.ingestion_service import IngestionRequestError, ingestion_service
-from app.services.knowledge_document_version_service import knowledge_document_version_service
+from app.services.knowledge_document_version_service import (
+    knowledge_document_version_service,
+)
 from app.services.knowledge_source_service import knowledge_source_service
 from tests.conftest import load_fixture
 
@@ -41,7 +43,9 @@ def test_ingest_creates_document_and_version(db_session):
     assert outcome.document.source_id == source.id
     assert outcome.document.title == "LOTO Procedure"
     assert outcome.version_id is not None
-    assert outcome.chunk_count == 2
+    # See tests/test_ingestion_provenance.py's matching assertion for why
+    # this is 1, not 2, under StructureAwareChunkingStrategy.
+    assert outcome.chunk_count == 1
     assert outcome.job.status == IngestionJobStatus.COMPLETED
 
 

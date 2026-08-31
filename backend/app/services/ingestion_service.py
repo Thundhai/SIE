@@ -6,16 +6,23 @@
                         app/api/v1/ingestion.py)
 
 Everything upstream of the database (detection, validation, hashing,
-extraction, normalization, chunking) is `app/ingestion/pipeline.py`,
-called from here exactly once. This module's own job is the pipeline
-diagram's remaining stages — source/document association, persistence,
-and provenance — all of it built on the *existing* Knowledge Foundation
-services (`knowledge_document_service`, `knowledge_document_version_service`,
-`knowledge_chunk_service`) rather than any new tenant-isolation or
-document-versioning mechanism: a document's organization_id is still
+extraction, normalization, structure detection) is
+`app/ingestion/pipeline.py`, called from here exactly once. This module's
+own job is the pipeline diagram's remaining stages — source/document
+association, persistence, and provenance — all of it built on the
+*existing* Knowledge Foundation services (`knowledge_document_service`,
+`knowledge_document_version_service`) rather than any new tenant-isolation
+or document-versioning mechanism: a document's organization_id is still
 derived from its source exactly as before this milestone, and a
 duplicate `content_hash` still reuses the existing version instead of
 creating a new one.
+
+Turning that version's normalized content into `KnowledgeChunk` rows is
+delegated to `app/services/chunking_service.py`, one call below — that
+module is the one place `StructureAwareChunkingStrategy` is invoked from,
+since chunking needs the document/source identity and idempotency check
+that only exist once these rows do (see its own docstring for why this
+isn't done inside pipeline.py instead).
 
 Two distinct failure shapes on `ingest()`:
 
@@ -55,16 +62,18 @@ from app.models.enums import ExtractionStatus, IngestionJobStatus, IngestionStat
 from app.models.ingested_file import IngestedFile
 from app.models.ingestion_job import IngestionJob
 from app.models.knowledge_document import KnowledgeDocument
-from app.schemas.knowledge_chunk import KnowledgeChunkCreate
 from app.schemas.knowledge_document import KnowledgeDocumentCreate
 from app.schemas.knowledge_document_version import KnowledgeDocumentVersionCreate
 from app.services.audit_service import AuditAction, audit_service
+from app.services.chunking_service import chunking_service
 from app.services.errors import KnowledgeNotFoundError
 from app.services.ingested_file_service import ingested_file_service
 from app.services.ingestion_job_service import ingestion_job_service
-from app.services.knowledge_chunk_service import knowledge_chunk_service
 from app.services.knowledge_document_service import knowledge_document_service
-from app.services.knowledge_document_version_service import knowledge_document_version_service
+from app.services.knowledge_document_version_service import (
+    knowledge_document_version_service,
+)
+from app.services.knowledge_source_service import knowledge_source_service
 
 _MAX_STORED_EXTRACTED_TEXT_CHARS = 50_000
 
@@ -291,31 +300,27 @@ class IngestionService:
         # knowledge_document_version_service.create() is idempotent on
         # content_hash (see its own docstring) and returns the *existing*
         # version, unchanged, when this content was already ingested for
-        # this document — including chunks it already has. Re-chunking in
-        # that case would violate the (document_version_id, chunk_index)
-        # uniqueness constraint and, worse, duplicate content that isn't
-        # actually new. So: only chunk a version that doesn't have any yet.
-        existing_chunks = knowledge_chunk_service.list_for_version(db, document_version=version)
-        if existing_chunks:
-            chunk_count = len(existing_chunks)
-        elif outcome.chunk_drafts:
-            chunks_in = [
-                KnowledgeChunkCreate(
-                    chunk_index=index,
-                    content=draft.content,
-                    character_count=draft.character_count,
-                    page_number=draft.page_number,
-                    section_title=draft.section_title,
-                    chunk_metadata=draft.metadata,
-                )
-                for index, draft in enumerate(outcome.chunk_drafts)
-            ]
-            created = knowledge_chunk_service.create_many(
-                db, document_version=version, chunks_in=chunks_in
-            )
-            chunk_count = len(created)
-        else:
-            chunk_count = 0
+        # this document — including chunks it already has.
+        # chunking_service.generate_chunks() carries its own idempotency
+        # check on top of that (a version that already has chunks is
+        # returned as-is, never re-chunked) — see its own docstring.
+        source = knowledge_source_service.get(
+            db, id=document.source_id, organization_id=document.organization_id
+        )
+        if source is None:  # pragma: no cover - would mean a dangling FK
+            raise KnowledgeNotFoundError(f"knowledge source {document.source_id} not found")
+
+        chunks = chunking_service.generate_chunks(
+            db,
+            document=document,
+            source=source,
+            version=version,
+            normalized_content=outcome.normalized_content,
+            extraction_status=outcome.extraction_status,
+            extraction_method=outcome.extraction_method,
+            warnings=outcome.warnings,
+        )
+        chunk_count = len(chunks)
 
         ingested_file_service.update_status(
             db,

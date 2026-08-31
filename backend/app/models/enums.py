@@ -108,3 +108,40 @@ class ExtractionMethod(str, Enum):
     STRUCTURED_PARSE = "STRUCTURED_PARSE"
     OCR = "OCR"
     NONE = "NONE"
+
+
+class ContentType(str, Enum):
+    """What kind of thing one piece of content is — not the source file
+    format (that's on IngestedFile/KnowledgeChunk.extraction_method), but
+    the shape of this particular piece of content within it. Shared by
+    `NormalizedContent`, `KnowledgeUnit`, and `KnowledgeChunk` (see
+    app/ingestion/normalized_content.py, app/ingestion/knowledge_unit.py)
+    so a chunk's content_type is always one of the same values a caller
+    already learned to expect from the ingestion response, and is
+    directly filterable per the milestone's future-retrieval requirement
+    ("content type" — see app/services/chunking_service.py)."""
+
+    TEXT = "text"
+    TABLE = "table"
+    IMAGE = "image"
+    STRUCTURED_RECORD = "structured_record"
+
+
+class QualityStatus(str, Enum):
+    """A deterministic *extraction/structure* quality indicator — never a
+    judgment about whether the underlying safety information itself is
+    true, complete, or authoritative (that is `KnowledgeSource.authority_level`
+    and `verification_status`, entirely separate concepts — see
+    app/ingestion/quality.py's module docstring for the full reasoning
+    and why the two are never combined into one score).
+
+    INSUFFICIENT means the content is not usable as evidence at all (e.g.
+    empty/near-empty text, an image with no OCR). LOW/MEDIUM/HIGH grade
+    how complete and structurally well-formed the extraction was, not how
+    good the source material is.
+    """
+
+    HIGH = "HIGH"
+    MEDIUM = "MEDIUM"
+    LOW = "LOW"
+    INSUFFICIENT = "INSUFFICIENT"
