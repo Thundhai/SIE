@@ -7,7 +7,7 @@ consumer of the SIE API — but it is a consumer, not a dependency. Any
 authorized enterprise application connects the same way: through the
 versioned REST API under `/api/v1`.
 
-Two milestones are implemented so far:
+Three milestones are implemented so far:
 
 * **Foundation v0.1** — core tenancy models (Organization, Site, User,
   DataSource), a REST API, and infrastructure (FastAPI, PostgreSQL,
@@ -16,6 +16,11 @@ Two milestones are implemented so far:
   storing and governing safety knowledge (KnowledgeSource,
   KnowledgeDocument, KnowledgeDocumentVersion, KnowledgeChunk). See
   [Knowledge architecture](#knowledge-architecture) below.
+* **Identity & Access Foundation v0.1** — organization membership, roles,
+  permissions, authorization, and tenant context: the model SIE will
+  authenticate real users and machine clients against once a real
+  identity provider is connected. See
+  [Identity architecture](#identity-architecture) below.
 
 The AI/LLM layer, RAG, embeddings, vector search, predictive models, and
 Safelytic integration are all out of scope so far and are stubbed out only
@@ -32,14 +37,19 @@ that future work; it does not perform it.
 backend/
   app/
     api/            HTTP layer: FastAPI routers + request-scoped dependencies
+      deps.py         Organization path-resolution dependency (pre-identity)
+      deps_auth.py     Identity/authorization dependencies (see Identity architecture)
       v1/            Versioned routes (health, organizations, sites,
-                      data-sources, knowledge)
+                      data-sources, knowledge, memberships)
     core/           Configuration (Pydantic Settings) and DB engine/session setup
     models/         SQLAlchemy 2.x ORM models (Organization, Site, User,
                      DataSource, KnowledgeSource, KnowledgeDocument,
-                     KnowledgeDocumentVersion, KnowledgeChunk)
+                     KnowledgeDocumentVersion, KnowledgeChunk,
+                     OrganizationMembership, Identity, AuditLog)
     schemas/        Pydantic v2 request/response schemas
-    services/       Tenant-scoped repository/service layer (see below)
+    services/       Tenant-scoped repository/service layer, plus
+                     permissions/authorization/tenant-context/identity/audit
+                     services (see Identity architecture)
     intelligence/   Reserved for a future AI/LLM layer
     ingestion/      Reserved for future data ingestion pipelines (crawling,
                      document processing workers, chunk extraction)
@@ -104,6 +114,15 @@ the HTTP API and by calling the service layer directly.
 The knowledge domain (below) reuses this exact same architecture rather
 than inventing a second mechanism — see
 [Knowledge architecture](#knowledge-architecture).
+
+Everything above predates real identity: `organization_id` is trusted
+directly from the URL, with no check that the caller is actually allowed
+into that organization. The Identity & Access Foundation
+([below](#identity-architecture)) adds that check — `TenantContext`,
+authorized via `OrganizationMembership` — as a layer *in front of* this
+same repository architecture, not a replacement for it. See
+["Existing organization-scoped APIs"](#existing-organization-scoped-apis)
+for exactly which routes do and don't use it yet.
 
 ## Prerequisites
 
@@ -194,11 +213,15 @@ alembic revision --autogenerate -m "describe the change"
 alembic downgrade -1
 ```
 
-Two migrations exist so far: `0001` (Foundation v0.1 — organizations,
-sites, users, data_sources) and `0002` (Knowledge Foundation v0.1 —
+Three migrations exist so far: `0001` (Foundation v0.1 — organizations,
+sites, users, data_sources), `0002` (Knowledge Foundation v0.1 —
 knowledge_sources, knowledge_documents, knowledge_document_versions,
-knowledge_chunks). `0001` is not modified by `0002`; new schema changes
-are always a new migration on top.
+knowledge_chunks), and `0003` (Identity & Access Foundation v0.1 —
+organization_memberships, identities, audit_logs, plus a compatibility
+change to the `users` table — see
+["Compatibility concerns"](#identity-architecture) below). Earlier
+migrations are never modified; new schema changes are always a new
+migration on top.
 
 ## API endpoints
 
@@ -218,6 +241,15 @@ are always a new migration on top.
 | GET    | `/api/v1/knowledge/documents/{document_id}`              | Get a knowledge document             |
 | POST   | `/api/v1/knowledge/documents/{document_id}/versions`     | Create a document version            |
 | GET    | `/api/v1/knowledge/documents/{document_id}/versions`     | List a document's versions           |
+| POST   | `/api/v1/organizations/{organization_id}/members`        | Add a member (`users:manage`)        |
+| GET    | `/api/v1/organizations/{organization_id}/members`        | List members (`users:read`)          |
+| GET    | `/api/v1/organizations/{organization_id}/members/{user_id}` | Get one member (`users:read`)     |
+
+The three membership endpoints are the one place in this codebase that
+requires authentication and a permission check today — see
+[Identity architecture](#identity-architecture) for what that means in
+practice (development-mode only, no real identity provider connected
+yet) and why the routes above them still don't.
 
 ## Data model
 
@@ -225,14 +257,19 @@ are always a new migration on top.
   `status`, `created_at`, `updated_at`.
 * **Site** — a location owned by an organization. Adds `organization_id`,
   `location`.
-* **User** — a person belonging to an organization. Adds `organization_id`,
-  `email` (unique per organization), `role`.
+* **User** — a platform-level identity (not organization-scoped — see
+  [Identity architecture](#identity-architecture)). `email` (globally
+  unique), `name`, `status`, an optional `organization_id` (a convenience
+  default organization, not an access grant), and an optional
+  `platform_role`.
 * **DataSource** — a system SIE ingests from (ingestion itself is not
   implemented yet). Adds `organization_id`, `source_type`, `last_sync_at`.
 * **KnowledgeSource, KnowledgeDocument, KnowledgeDocumentVersion,
   KnowledgeChunk** — the knowledge foundation; see
   [Knowledge architecture](#knowledge-architecture) below for the full
   field list and design.
+* **OrganizationMembership, Identity, AuditLog** — the identity & access
+  foundation; see [Identity architecture](#identity-architecture) below.
 
 All primary keys are UUIDs generated application-side. All timestamps are
 timezone-aware and stored in UTC.
@@ -375,28 +412,300 @@ future work has a stable foundation to build on:
 * `knowledge_freshness` (staleness monitoring against `review_date`) is
   not implemented — `review_date` is stored but nothing acts on it yet.
 
+## Identity architecture
+
+```
+OIDC/OAuth2-compatible identity provider
+    │  (real token verification — not implemented yet)
+    ▼
+Identity Resolver        app/services/identity_service.py
+    │  (links an external identity to a SIE User, creating one if needed)
+    ▼
+SIE User                 app/models/user.py
+    │
+    ▼
+Organization Membership  app/models/organization_membership.py
+    │  (role, per organization; ACTIVE/SUSPENDED/INVITED/REVOKED)
+    ▼
+Role                     app/services/permissions.py::OrganizationRole
+    │
+    ▼
+Permissions              app/services/permissions.py::Permission, ROLE_PERMISSIONS
+    │
+    ▼
+Tenant Context            app/services/tenant_context.py
+    │  (user_id, organization_id, role, permissions — authorized, not asserted)
+    ▼
+Services / Repositories   app/services/*, app/services/base.py
+```
+
+**SIE does not implement password authentication, and never stores a
+password or credential of any kind.** There is no `password` column
+anywhere in this schema, and there won't be one — see the milestone
+constraint this was built under: no custom password system, no API keys,
+no OAuth client credentials, no commercial identity provider dependency.
+Production authentication is meant to be an external OIDC/OAuth2 identity
+provider (Auth0, Entra ID, Okta, Keycloak, or anything else that speaks
+the standard) verifying a token and handing SIE a set of claims — this
+codebase defines the *boundary* that verification plugs into
+(`app.services.identity_service.TokenVerifier`, a `Protocol`) without
+depending on any specific provider's SDK. No real implementation of that
+protocol exists yet; connecting one is future work.
+
+### Authentication vs. authorization vs. tenant isolation
+
+Three distinct concerns, each with its own module, deliberately not
+conflated:
+
+* **Authentication** — "who is making this request." Answered by
+  verifying a token's signature against an identity provider and
+  extracting its claims (not implemented — see `TokenVerifier` above),
+  then resolving those claims to a `User` via `IdentityResolverService`.
+  In this milestone, the *only* thing that stands in for this is the
+  development-only mechanism described below.
+* **Authorization** — "is this (now-known) user allowed to do this
+  specific thing." Answered by `AuthorizationService.can()`
+  (`app/services/authorization_service.py`): given a user, a `Permission`,
+  and an organization, it checks membership existence, membership status,
+  and the membership's role's permission set (or the explicit
+  `PLATFORM_ADMIN` exception).
+* **Tenant isolation** — "does this database query stay inside the
+  tenant boundary it's supposed to." Unchanged from the Foundation
+  milestones: `TenantScopedRepository` /
+  `NullableTenantScopedRepository` (`app/services/base.py`), which every
+  organization-owned table's service is still built on. Authorization
+  decides *whether* a request should proceed with a given
+  `organization_id`; tenant isolation is what makes that
+  `organization_id`, once accepted, incapable of leaking another
+  tenant's rows. Authorization without tenant isolation would still leak
+  data through a buggy query; tenant isolation without authorization
+  (Foundation v0.1's actual state, and still most of this codebase's
+  actual state — see below) means anyone can supply any
+  `organization_id` and be trusted.
+
+`TenantContext` is what carries an authorization decision into the
+tenant-isolation layer: it is the only thing
+`app/api/deps_auth.py::get_tenant_context` produces, it can only be
+constructed by `authorize_tenant_context()` (direct construction raises
+`TypeError` — see `app/services/tenant_context.py`), and that function is
+the one place all three concerns meet: it resolves the user
+(authentication's output), checks membership status and computes
+permissions (authorization), and returns the object services/repositories
+consume (tenant isolation's input).
+
+### Users, membership, roles, and permissions
+
+* **User** (`app/models/user.py`) is a platform-level identity, not an
+  organization-scoped record — see the note in the Data model section
+  above and the design-note docstring in that file for exactly how and
+  why this differs from Foundation v0.1's original User model.
+* **OrganizationMembership** (`app/models/organization_membership.py`)
+  is the authoritative user↔organization relationship: one row per
+  (user, organization) pair — never duplicated, even across statuses; a
+  status change updates the existing row rather than inserting a new one
+  (`uq_organization_memberships_user_organization`). `role` is a plain
+  string, not a native database enum, validated at the service layer
+  against `OrganizationRole` — new roles are meant to be addable without a
+  migration.
+* **Roles** (`app/services/permissions.py::OrganizationRole`): `ORG_ADMIN`,
+  `HSE_MANAGER`, `HSE_ANALYST`, `HSE_USER`, `VIEWER`. `PLATFORM_ADMIN` is
+  *not* one of these — it's a property of a `User`
+  (`User.platform_role`), because platform-wide administration isn't
+  scoped to one organization.
+* **Permissions** (`app/services/permissions.py::Permission`): a small,
+  fixed vocabulary (`organization:read`/`:manage`, `site:read`/`:manage`,
+  `knowledge:read`/`:manage`/`:verify`, `safety_data:read`/`:write`,
+  `intelligence:read`, `prediction:read`, `intervention:read`/`:manage`,
+  `governance:read`/`:manage`, `users:read`/`:manage`) with an initial
+  `ROLE_PERMISSIONS` mapping — e.g. `VIEWER` has every `:read` permission
+  and no `:manage`/`:write`/`:verify` permission at all; member management
+  (`users:manage`) is reserved for `ORG_ADMIN` (and `PLATFORM_ADMIN`).
+
+### Development-only identity mechanism
+
+There is no real authentication in this milestone. To exercise the
+Authorization → TenantContext pipeline against real HTTP requests (the
+membership endpoints), `app/api/deps_auth.py` provides
+`get_dev_authenticated_user_id`, which:
+
+* **only operates when `settings.DEV_MODE` is true** — off by default
+  (`DEV_MODE=false`), so a deployment that never configures real
+  authentication fails closed: every route that depends on it returns
+  **501 Not Implemented**, not "fall back to trusting the caller."
+* reads one request header, `X-SIE-Dev-User-Id`, naming an *existing*
+  `User` by id. No token, no signature, no expiry — it is not
+  authentication, it is a name.
+* **never accepts a permission, a role, or an organization directly.**
+  The header can only ever grant exactly what the named user's real,
+  already-stored `OrganizationMembership` rows say they have — checked by
+  the same `authorize_tenant_context()` a real integration would call.
+  There is no way to use this header to grant a permission the named user
+  doesn't otherwise have, or to reach an organization they aren't an
+  active member of.
+* is a FastAPI dependency reading a header, **not an HTTP login endpoint**
+  — no route mints, issues, or returns anything resembling a credential.
+  This follows the milestone's own stated preference for "dependency
+  injection/mocked identity... rather than exposing a development HTTP
+  endpoint."
+
+**This must be replaced by real OIDC/OAuth2 token verification
+(implementing `TokenVerifier`) before any production deployment**, and
+`DEV_MODE` must never be `true` in a production environment. See
+`tests/test_dev_mode_gate.py` for the tests covering this gate's failure
+modes.
+
+### Existing organization-scoped APIs
+
+The membership endpoints (`POST`/`GET .../members`) are this milestone's
+reference implementation of the full pipeline: every route requires a
+resolved identity and an explicit `Permission` check via
+`app/api/deps_auth.py::require_permission`, and the `organization_id` URL
+segment is only ever used to ask `authorize_tenant_context` whether the
+caller is actually an active member — never to filter data directly.
+
+The organizations/sites/data-sources/knowledge routes built in the two
+earlier milestones (`app/api/v1/organizations.py`, `sites.py`,
+`data_sources.py`, `knowledge.py`) are **deliberately left as they were**:
+they still trust `organization_id` from the URL (or, for knowledge, an
+`organization_id` query parameter) directly, with no identity or
+permission check. This was a scope decision, not an oversight — retrofitting
+every existing route to require authentication in the same change that
+introduces the *only* authentication mechanism available (the dev-only
+header) would mean every existing test starts sending a fake identity
+header to keep passing, which defeats the purpose of having a real
+authentication boundary at all. Instead:
+
+* The full pipeline (`AuthorizationService`, `TenantContext`,
+  `authorize_tenant_context`) is built, and is exercised for real by the
+  membership endpoints and by the [Knowledge architecture](#knowledge-architecture)
+  section's global-vs-organization distinction (tested directly at the
+  service layer in `tests/test_global_vs_organization_knowledge_access.py`).
+* Cutting the remaining routes over is a follow-up, not a partial,
+  silent change here — see ["What must be implemented before
+  production"](#known-gaps--next-phase).
+
+### Provenance and safety of the platform-admin exception
+
+`AuthorizationService.can()` and `authorize_tenant_context()` both grant
+full access when `User.platform_role == PLATFORM_ADMIN`, without
+requiring an `OrganizationMembership` row to exist. This is the one
+documented exception to "membership required," and it is intentionally
+narrow: it checks one specific, named field for one specific, named
+value — not a generic "is this user special" flag, a `is_superuser`
+boolean, or a bypass of the function entirely. See
+`app/services/authorization_service.py`'s module docstring for the exact
+reasoning, and `tests/test_authorization.py::test_platform_admin_status_is_not_a_generic_bypass`
+for a test that a near-miss value (wrong case) grants nothing.
+
+### Machine clients (architecture, not implementation)
+
+SIE is meant to serve both human users (an HSE Manager signing in through
+a browser) and machine clients (Safelytic, an external EHS/ERP system, an
+IoT platform, calling the API directly) — see the milestone's own framing
+of this. **Machine-client authentication (OAuth2 client credentials, API
+keys) is not implemented in this milestone**, but nothing in the identity
+model assumes a caller is a human: `Identity.provider` is a free-form
+string (not restricted to consumer IdP names), `ExternalIdentityClaims`
+has no human-specific field (no "first name", just `subject`/`issuer`/
+`email`/`display_name`), and `TenantContext` is keyed on `user_id` and
+`organization_id`/`role`/`permissions` — none of which presume a person
+is attached. A machine client's eventual `User` row (or a distinct
+principal type, if machine clients turn out to need one) would flow
+through the same `OrganizationMembership` → `Role` → `Permission` →
+`TenantContext` pipeline as a human user; this milestone doesn't build
+that caller type, but doesn't need to change this pipeline to add it
+later either.
+
+### Compatibility concerns (the `users` table change)
+
+Migration `0003` changes the `users` table's shape rather than only
+adding new tables — see that migration's docstring for the full
+before/after and why each change was made; summary:
+
+* `organization_id` becomes nullable (was required) and its FK changes
+  from `ON DELETE CASCADE` to `ON DELETE SET NULL` — it's now a
+  convenience default, not an ownership relationship.
+* `role` (one global role string) is dropped, replaced by
+  `organization_memberships.role` (per-organization) and the new
+  `users.platform_role` (the one genuinely global role).
+* `email` becomes unique platform-wide (was unique per `organization_id`).
+
+This is judged low-risk because Foundation v0.1 never shipped a
+User-facing endpoint — there is no real user data anywhere that could
+depend on the old shape. A codebase with real production user data at
+this point would need a multi-step migration (add new columns, backfill
+from the old ones, drop the old columns in a later migration) instead of
+the single-step change `0003` makes.
+
+### Audit foundation
+
+`AuditLog` (`app/models/audit_log.py`) is a minimal, synchronous,
+append-only table — not an event-streaming system — written to by
+`app/services/audit_service.py::AuditService.log()`. Wired up today (see
+`AuditAction` for the exact constants) to: `KNOWLEDGE_SOURCE_CREATED`,
+`KNOWLEDGE_VERIFIED`, `DOCUMENT_CREATED`, `DOCUMENT_VERSION_CREATED`
+(skipped on the idempotent-duplicate path — see
+[Knowledge architecture](#knowledge-architecture)), `MEMBER_ADDED`,
+`MEMBER_ROLE_CHANGED`, `MEMBER_STATUS_CHANGED`. Every action-generating
+service method accepts an optional `actor_user_id` for attribution
+(`None` where no authenticated actor is available yet, e.g. every
+knowledge route today — see "Existing organization-scoped APIs" above).
+`organization_id`/`user_id` on `AuditLog` are `ON DELETE SET NULL`, not
+`CASCADE` like most of this schema — an audit row is a historical record
+and should outlive the organization or user it refers to. Per the
+security requirements this milestone was built under, no audit call
+anywhere in this codebase logs a password, token, or secret — there
+aren't any in this schema to log.
+
 ## Configuration
 
 All configuration is environment-based (`app/core/config.py`, backed by
 Pydantic Settings and a local `.env` file — see `.env.example`). No
-secrets are committed; `.env` is git-ignored.
+secrets are committed; `.env` is git-ignored. `DEV_MODE` (default
+`false`) is the one identity-related setting — see
+[Identity architecture](#identity-architecture) above.
 
 ## Deliberate scope boundaries (v0.1)
 
-To keep this foundation phase clean and reviewable, the following are
-intentionally **not** included yet: authentication/authorization, the
-AI/LLM layer, RAG, vector search, predictive models, Safelytic
-integration, Redis, and any microservice/Kubernetes topology.
+To keep each foundation phase clean and reviewable, the following are
+intentionally **not** included yet: real OIDC/OAuth2 token verification, a
+commercial identity provider dependency, machine-client authentication
+(API keys, OAuth client credentials), the AI/LLM layer, RAG, vector
+search, predictive models, Safelytic integration, Redis, and any
+microservice/Kubernetes topology. See
+[Identity architecture](#identity-architecture) for what *is* built
+towards authentication/authorization, and the "Deliberately does not
+implement" list the Identity & Access Foundation milestone itself set
+(no password auth, no stored passwords, no API keys, no OAuth client
+credentials, no SSO config UI, no MFA, no password reset, no email
+invitations) — all of that is still true of this codebase.
 
 ## Known gaps / next phase
 
-* **No authentication or authorization yet.** Every endpoint is open, and
-  `organization_id` is trusted directly from the URL path. Before any real
-  deployment, requests must be authenticated and the caller's access to
-  the requested `organization_id` must be verified (e.g. via a JWT/session
-  carrying the caller's own organization and role) — otherwise the tenant
-  isolation this foundation implements at the query level is trivially
-  bypassed by an unauthenticated caller supplying any UUID.
+* **No real authentication.** The only mechanism that exists (see
+  [Identity architecture](#identity-architecture)) is a development-only
+  header naming an existing user, gated by `DEV_MODE` (default off, and
+  must stay off in production). Before any real deployment: implement a
+  `TokenVerifier` for a real OIDC/OAuth2 provider and wire it into
+  `app/api/deps_auth.py` in place of the dev-mode mechanism.
+* **Most existing routes still trust the URL directly.** Only the
+  membership endpoints require authentication and a permission check
+  today; organizations/sites/data-sources/knowledge do not — see
+  ["Existing organization-scoped APIs"](#existing-organization-scoped-apis).
+  Before any real deployment, every organization-scoped route must be
+  cut over to `require_permission`/`TenantContext`, the same way the
+  membership endpoints already are.
+* **No machine-client authentication.** Safelytic and any other external
+  application connecting to SIE will need OAuth2 client credentials or
+  API keys — explicitly out of scope for this milestone (see
+  ["Machine clients"](#machine-clients-architecture-not-implementation)) — plus a principal type/flow
+  for a non-human caller through the same membership/role/permission
+  pipeline.
+* **No self-registration or email invitations.** Adding a member is
+  strictly administrative today (`POST .../members` names an existing
+  `User` id) — no signup flow, no invite-by-email, no way for a new
+  person to create their own `User` row short of the identity resolver
+  (which itself has no real IdP feeding it yet).
 * **No update/delete endpoints** for any resource yet — only create and
   read, matching what was scoped for this phase.
 * **No pagination metadata** (total count, next-page cursor) on list

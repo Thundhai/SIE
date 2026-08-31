@@ -16,9 +16,26 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.api.deps_auth import DEV_USER_HEADER
+from app.core.config import settings
 from app.core.database import get_db
 from app.main import app
 from app.models import Base
+
+# The development-only identity mechanism (app/api/deps_auth.py) is gated
+# by DEV_MODE, off by default in production. Tests exercise that pipeline
+# deliberately, so it is turned on for the whole test session here — see
+# tests/test_dev_mode_gate.py for a dedicated test that DEV_MODE=False
+# fails closed, using its own local override rather than this shared one.
+settings.DEV_MODE = True
+
+
+def dev_auth_headers(user_id) -> dict[str, str]:
+    """Build the development-mode identity header for `client` requests.
+    See app/api/deps_auth.py — this names an existing user id; it cannot
+    assert a role, permission, or organization directly."""
+    return {DEV_USER_HEADER: str(user_id)}
+
 
 engine = create_engine(
     "sqlite+pysqlite:///:memory:",

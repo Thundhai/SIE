@@ -23,6 +23,19 @@ class Settings(BaseSettings):
     DEBUG: bool = False
     API_V1_PREFIX: str = "/api/v1"
 
+    # Identity & access (see app/api/deps_auth.py, app/services/identity_service.py)
+    #
+    # DEV_MODE gates the one development-only identity mechanism this
+    # codebase has: a request header naming an existing user id, trusted
+    # without any cryptographic verification (see
+    # app/api/deps_auth.py::get_dev_authenticated_user_id). It defaults to
+    # False specifically so a deployment that forgets to configure real
+    # authentication fails closed (every authenticated route returns 501,
+    # not "trust a header") rather than silently accepting spoofed
+    # identity. This must never be set true in a production environment —
+    # see the README's "Identity architecture" section.
+    DEV_MODE: bool = False
+
     # Database
     # Either set DATABASE_URL directly, or set the POSTGRES_* components and
     # let it be assembled below.

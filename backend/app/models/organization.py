@@ -24,15 +24,21 @@ class Organization(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         back_populates="organization",
         cascade="all, delete-orphan",
     )
-    users: Mapped[list["User"]] = relationship(  # noqa: F821
-        back_populates="organization",
-        cascade="all, delete-orphan",
-    )
+    # No delete-orphan here, deliberately: a User is not owned by its
+    # default organization (organization_id is a convenience reference,
+    # not tenancy — see app/models/user.py) so deleting an organization
+    # must not delete the users who merely defaulted to it. The
+    # organization_id FK itself is ON DELETE SET NULL, not CASCADE.
+    users: Mapped[list["User"]] = relationship(back_populates="organization")  # noqa: F821
     data_sources: Mapped[list["DataSource"]] = relationship(  # noqa: F821
         back_populates="organization",
         cascade="all, delete-orphan",
     )
     knowledge_sources: Mapped[list["KnowledgeSource"]] = relationship(  # noqa: F821
+        back_populates="organization",
+        cascade="all, delete-orphan",
+    )
+    memberships: Mapped[list["OrganizationMembership"]] = relationship(  # noqa: F821
         back_populates="organization",
         cascade="all, delete-orphan",
     )

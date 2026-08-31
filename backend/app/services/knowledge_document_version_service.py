@@ -16,6 +16,8 @@ responsible for resolving and authorizing the document first via
 foundation's `get_organization_or_404` pattern.
 """
 
+import uuid
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -23,6 +25,7 @@ from app.models.base import utcnow
 from app.models.knowledge_document import KnowledgeDocument
 from app.models.knowledge_document_version import KnowledgeDocumentVersion
 from app.schemas.knowledge_document_version import KnowledgeDocumentVersionCreate
+from app.services.audit_service import AuditAction, audit_service
 
 
 class KnowledgeDocumentVersionService:
@@ -32,6 +35,7 @@ class KnowledgeDocumentVersionService:
         *,
         document: KnowledgeDocument,
         obj_in: KnowledgeDocumentVersionCreate,
+        actor_user_id: uuid.UUID | None = None,
     ) -> KnowledgeDocumentVersion:
         existing = db.execute(
             select(KnowledgeDocumentVersion).where(
@@ -40,6 +44,7 @@ class KnowledgeDocumentVersionService:
             )
         ).scalar_one_or_none()
         if existing is not None:
+            # Idempotent no-op: not a new event, so no audit entry either.
             return existing
 
         previous_current_id = document.current_version_id
@@ -57,6 +62,16 @@ class KnowledgeDocumentVersionService:
 
         db.commit()
         db.refresh(version)
+
+        audit_service.log(
+            db,
+            action=AuditAction.DOCUMENT_VERSION_CREATED,
+            resource_type="KnowledgeDocumentVersion",
+            resource_id=version.id,
+            organization_id=document.organization_id,
+            user_id=actor_user_id,
+            metadata={"document_id": str(document.id), "version_label": version.version_label},
+        )
         return version
 
     def list_for_document(

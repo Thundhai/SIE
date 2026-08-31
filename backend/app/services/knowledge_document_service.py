@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.models.knowledge_document import KnowledgeDocument
 from app.schemas.knowledge_document import KnowledgeDocumentCreate
+from app.services.audit_service import AuditAction, audit_service
 from app.services.base import NullableTenantScopedRepository
 from app.services.errors import KnowledgeNotFoundError, KnowledgeValidationError
 from app.services.knowledge_source_service import knowledge_source_service
@@ -26,7 +27,13 @@ class KnowledgeDocumentService(NullableTenantScopedRepository[KnowledgeDocument]
     def __init__(self) -> None:
         super().__init__(KnowledgeDocument)
 
-    def create(self, db: Session, *, obj_in: KnowledgeDocumentCreate) -> KnowledgeDocument:
+    def create(
+        self,
+        db: Session,
+        *,
+        obj_in: KnowledgeDocumentCreate,
+        actor_user_id: uuid.UUID | None = None,
+    ) -> KnowledgeDocument:
         source = knowledge_source_service.get_by_id_unscoped(db, id=obj_in.source_id)
         if source is None:
             raise KnowledgeNotFoundError(f"knowledge source {obj_in.source_id} not found")
@@ -58,6 +65,16 @@ class KnowledgeDocumentService(NullableTenantScopedRepository[KnowledgeDocument]
         db.add(obj)
         db.commit()
         db.refresh(obj)
+
+        audit_service.log(
+            db,
+            action=AuditAction.DOCUMENT_CREATED,
+            resource_type="KnowledgeDocument",
+            resource_id=obj.id,
+            organization_id=obj.organization_id,
+            user_id=actor_user_id,
+            metadata={"source_id": str(obj.source_id), "document_type": obj.document_type},
+        )
         return obj
 
     def list_for_source(

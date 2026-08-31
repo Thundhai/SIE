@@ -25,6 +25,9 @@ services:
     environment:
       APP_ENV: ${APP_ENV:-development}
       DEBUG: ${DEBUG:-false}
+      # Default on for local docker-compose use only — see the README's
+      # "Identity architecture" section. Never set true in production.
+      DEV_MODE: ${DEV_MODE:-true}
       POSTGRES_USER: ${POSTGRES_USER:-sie}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sie}
       POSTGRES_DB: ${POSTGRES_DB:-sie}
