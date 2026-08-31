@@ -1,6 +1,12 @@
 services:
   db:
-    image: postgres:16-alpine
+    # pgvector/pgvector:pg16 is upstream PostgreSQL 16 with the pgvector
+    # extension pre-installed (not a fork) — a drop-in replacement for
+    # postgres:16-alpine. The extension itself is still only *enabled*
+    # per-database by migration 0006 (`CREATE EXTENSION IF NOT EXISTS
+    # vector`); this image just makes that extension available to enable.
+    # See the README's "Semantic Knowledge Architecture" section.
+    image: pgvector/pgvector:pg16
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-sie}
@@ -37,6 +43,13 @@ services:
       - "8000:8000"
     volumes:
       - .:/app
+    # KNOWN ISSUE: `alembic upgrade head` from a fresh database currently
+    # fails partway through migration 0005 on real PostgreSQL (a
+    # pre-existing defect, not introduced by pgvector/migration 0006 —
+    # see that migration's own docstring and the README's "Known gaps"
+    # section for the exact cause and the fix this milestone deliberately
+    # left unapplied, pending the user's decision, per the instruction
+    # not to modify migrations 0001-0005).
     command: >
       sh -c "alembic upgrade head &&
              uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"

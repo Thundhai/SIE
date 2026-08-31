@@ -7,7 +7,7 @@ consumer of the SIE API — but it is a consumer, not a dependency. Any
 authorized enterprise application connects the same way: through the
 versioned REST API under `/api/v1`.
 
-Five milestones are implemented so far:
+Six milestones are implemented so far:
 
 * **Foundation v0.1** — core tenancy models (Organization, Site, User,
   DataSource), a REST API, and infrastructure (FastAPI, PostgreSQL,
@@ -38,16 +38,29 @@ Five milestones are implemented so far:
   chunk-to-source provenance chain. See [Knowledge Quality & Semantic
   Chunking Pipeline](#knowledge-quality--semantic-chunking-pipeline)
   below.
+* **Semantic Knowledge Engine v0.1** — semantic embeddings and
+  metadata-filtered vector retrieval over `KnowledgeChunk`, on
+  PostgreSQL + pgvector: a deterministic embedding provider abstraction,
+  embedding model/version tracking (multiple models coexist per chunk,
+  never overwritten), tenant-isolated and metadata-filtered similarity
+  search with a minimum-similarity floor and a first-class
+  `NO_RELEVANT_EVIDENCE` outcome, full provenance on every result, and a
+  synthetic evaluation corpus with real, honestly-reported Recall@K
+  numbers. Proves retrieval works *before* any LLM/RAG layer exists. See
+  [Semantic Knowledge Architecture](#semantic-knowledge-architecture)
+  below.
 
-The AI/LLM layer, RAG, embeddings, vector search, predictive models,
-OCR execution, transcription, and Safelytic integration are all out of
-scope so far and are stubbed out only as empty, documented package
-placeholders (`app/intelligence`, `app/analytics`, `app/predictions`,
-`app/governance`) or interface-only modules (`app/ingestion/ocr.py`) so
-later phases have a predictable home without a restructure. **No AI
-training, embeddings, RAG, or predictive analytics exist in this codebase
-yet** — the knowledge foundation and ingestion engine below store and
-structure content for that future work; neither performs it.
+The AI/LLM layer, RAG, predictive models, OCR execution, transcription,
+and Safelytic integration are all out of scope so far and are stubbed
+out only as empty, documented package placeholders (`app/intelligence`,
+`app/analytics`, `app/predictions`, `app/governance`) or interface-only
+modules (`app/ingestion/ocr.py`) so later phases have a predictable home
+without a restructure. **No AI training, RAG, prompt engineering, answer
+generation, or predictive analytics exist in this codebase yet** — as of
+the Semantic Knowledge Engine milestone, embeddings and vector similarity
+search *do* exist (see above) — everything below that layer stores,
+structures, and now retrieves content for a future reasoning layer;
+nothing yet reasons over it or generates an answer.
 
 ## Architecture
 
@@ -154,7 +167,12 @@ for exactly which routes do and don't use it yet.
 
 * Python 3.12+
 * Docker and Docker Compose (for running PostgreSQL, and optionally the
-  API itself)
+  API itself) — `docker-compose.yml` uses `pgvector/pgvector:pg16`
+  (upstream PostgreSQL 16 with the pgvector extension pre-installed) so
+  semantic embeddings work out of the box; see [Semantic Knowledge
+  Architecture](#semantic-knowledge-architecture) and the **known
+  migration-0005 issue** in [Known gaps](#known-gaps--next-phase) before
+  relying on `docker compose up` end to end
 
 ## Running with Docker Compose (recommended)
 
@@ -229,6 +247,32 @@ temporary directory (`tmp_path`, via an autouse fixture in
 `tests/conftest.py`) rather than the real `var/ingested_files` storage
 path.
 
+**Semantic embeddings and retrieval are the one exception to "no
+external services."** `KnowledgeChunkEmbedding` rows themselves round-trip
+through pgvector's SQLAlchemy `Vector` type on SQLite fine, but the
+*search* operators (`<=>` cosine distance, `.cosine_distance()`) are
+real PostgreSQL/pgvector SQL with no SQLite equivalent — see [Semantic
+Knowledge Architecture](#semantic-knowledge-architecture) and
+`tests/postgres_support.py`. Those tests are marked
+`@pytest.mark.postgres`, live in `tests/test_retrieval_service.py`,
+`tests/test_retrieval_api.py`'s one end-to-end test, and
+`tests/evaluation/`, and are **skipped automatically** (not failed) when
+no reachable PostgreSQL + pgvector server is configured — a plain
+`pytest` run with no such server passes cleanly on everything else. To
+run them: point `PG_TEST_DATABASE_URL` at a real PostgreSQL + pgvector
+database (defaults to `postgresql+psycopg://sie:sie@localhost:5432/sie_test` —
+a separate database from the application's own `sie` one), e.g.:
+
+```bash
+PG_TEST_DATABASE_URL=postgresql+psycopg://sie:sie@localhost:5432/sie_test pytest
+```
+
+No AI provider, API key, or network access is required for *any* test in
+this suite, embeddings/retrieval included — `HashingEmbeddingProvider`
+(the only embedding provider exercised anywhere in this codebase's tests)
+is fully deterministic and offline. See [Semantic Knowledge
+Architecture](#semantic-knowledge-architecture) for why.
+
 ## Database migrations
 
 Migrations are managed with Alembic (`migrations/`). The database URL is
@@ -282,14 +326,18 @@ new migration on top.
 | GET    | `/api/v1/organizations/{organization_id}/members`        | List members (`users:read`)          |
 | GET    | `/api/v1/organizations/{organization_id}/members/{user_id}` | Get one member (`users:read`)     |
 | POST   | `/api/v1/knowledge/ingestion`                             | Upload and ingest a file (`knowledge:manage`) |
+| POST   | `/api/v1/knowledge/retrieval/search`                      | Semantic evidence search (authenticated; `knowledge:read` if `filters.organization_id` is given) |
 
-The membership endpoints and the ingestion endpoint are the routes in
-this codebase that require authentication and a permission check today —
-see [Identity architecture](#identity-architecture) for what that means
-in practice (development-mode only, no real identity provider connected
+The membership endpoints, the ingestion endpoint, and the retrieval
+search endpoint are the routes in this codebase that require
+authentication today (the retrieval endpoint additionally requires a
+permission check whenever an `organization_id` filter is supplied) — see
+[Identity architecture](#identity-architecture) for what that means in
+practice (development-mode only, no real identity provider connected
 yet) and why the other routes above them still don't, and
-[Universal ingestion architecture](#universal-ingestion-architecture) for
-the ingestion endpoint's own authorization rules (global vs.
+[Universal ingestion architecture](#universal-ingestion-architecture) /
+[Semantic Knowledge Architecture](#semantic-knowledge-architecture) for
+the ingestion and retrieval endpoints' own authorization rules (global vs.
 organization knowledge). There is deliberately no endpoint to *create* or
 modify chunks — see [Knowledge Quality & Semantic Chunking
 Pipeline](#knowledge-quality--semantic-chunking-pipeline) for why chunk
@@ -323,6 +371,10 @@ read routes.
 * **IngestedFile, IngestionJob** — the ingestion engine's own file
   metadata and per-attempt job history; see
   [Universal ingestion architecture](#universal-ingestion-architecture)
+  below.
+* **KnowledgeChunkEmbedding** — one embedding vector per
+  (chunk, provider, model_name, model_version), pgvector-backed; see
+  [Semantic Knowledge Architecture](#semantic-knowledge-architecture)
   below.
 
 All primary keys are UUIDs generated application-side. All timestamps are
@@ -386,13 +438,21 @@ accepted at face value from a client
 up attached to a different organization than its source, or organization-
 scoped under a GLOBAL source.
 
-`KnowledgeDocumentVersion` and `KnowledgeChunk` do not carry their own
-`organization_id` — their tenancy is transitive, resolved by walking the
-foreign-key chain back to their document (and its source). An endpoint
-that needs to authorize access to a version or chunk resolves and
-tenant-checks the parent document first (see `app/api/v1/knowledge.py`),
-exactly the same "resolve-then-authorize" shape as
-`get_organization_or_404` in the foundation.
+`KnowledgeDocumentVersion` does not carry its own `organization_id` — its
+tenancy is transitive, resolved by walking the foreign-key chain back to
+its document (and its source). `KnowledgeChunk` (and, one milestone
+later, `KnowledgeChunkEmbedding`) *do* carry a denormalized
+`organization_id`, copied from their document at write time — the
+Knowledge Quality & Semantic Chunking milestone added this specifically
+so chunk (and later embedding) queries can be tenant-filtered directly,
+without a join back through the version and document on every retrieval
+query — see [Semantic Knowledge
+Architecture](#semantic-knowledge-architecture)'s tenant isolation
+section for why that matters for retrieval specifically. An endpoint that
+needs to authorize access to a version resolves and tenant-checks the
+parent document first (see `app/api/v1/knowledge.py`), exactly the same
+"resolve-then-authorize" shape as `get_organization_or_404` in the
+foundation.
 
 ### Tenant isolation (reused, not reinvented)
 
@@ -1208,6 +1268,337 @@ exist in this codebase.** Attaching an embedding to a chunk later is
 additive — a new nullable column/table referencing `KnowledgeChunk.id` —
 not a redesign of anything built in this milestone.
 
+*(As of the Semantic Knowledge Engine v0.1 milestone below, this is no
+longer fully true: pgvector is enabled and semantic similarity search
+does exist — see [Semantic Knowledge
+Architecture](#semantic-knowledge-architecture). RAG and LLM integration
+still do not.)*
+
+## Semantic Knowledge Architecture
+
+    KnowledgeChunk -> EmbeddingService -> EmbeddingProvider -> Vector
+        -> KnowledgeChunkEmbedding (pgvector storage)
+        -> RetrievalService -> Metadata filter -> Vector similarity
+        -> Ranked RetrievalResult -> Provenance
+
+This is the Semantic Knowledge Engine v0.1 milestone: it proves SIE can
+retrieve semantically relevant knowledge chunks reliably, with tenant
+isolation and full provenance, **before any LLM/RAG reasoning layer is
+introduced.** No LLM, no RAG, no prompt engineering, no answer
+generation, and no reranking model exist anywhere in this codebase — see
+["What this deliberately does not do"](#future-architecture-not-built-here)
+below. `RetrievalService` returns evidence; nothing downstream of it
+exists yet to turn that evidence into a generated answer.
+
+### Why embeddings live in their own package, not inside chunking
+
+`app/embeddings/` and `app/retrieval/` are new top-level packages, not
+additions to `app/ingestion/`. Chunking (the previous milestone) produces
+`KnowledgeChunk` rows without knowing embeddings will ever exist;
+embedding a chunk happens afterward, against an already-persisted chunk,
+and is itself invisible to chunking. This mirrors the same layering
+`app/ingestion/chunking.py` and `app/services/chunking_service.py`
+already establish one level down: a pure transformation stage
+(`EmbeddingProvider`, analogous to `ChunkingStrategy`) and a DB-facing
+orchestration stage (`EmbeddingService`, analogous to `ChunkingService`)
+that gives that transformation real identity, idempotency, and
+persistence.
+
+### Embedding provider abstraction
+
+`app/embeddings/provider.py::EmbeddingProvider` is a `Protocol`
+(`embed_text`/`embed_texts`, plus `provider_name`/`model_name`/
+`model_version`/`dimensions`) — nothing above it depends on a concrete
+implementation. **`HashingEmbeddingProvider`, a deterministic,
+dependency-free feature-hashing embedding (the same "hashing trick"
+technique behind scikit-learn's `HashingVectorizer`), is the only
+provider actually exercised anywhere in this milestone** — in
+development, in the test suite, and in the evaluation harness alike. It
+is a real, working implementation, not a mock: lowercase, tokenize, drop
+a small generic/procedural stopword list, hash each surviving token into
+a signed bucket, weight by sublinear term frequency, sum, and
+L2-normalize. Two texts sharing vocabulary land closer together under
+cosine similarity than two that don't — genuine, explainable signal, just
+not a trained semantic representation, and never presented as one.
+
+This choice follows the milestone spec directly: *"If a model dependency
+would make the test suite unreliable or require downloading large model
+weights, create a deterministic test provider and a production-provider
+abstraction."* `SentenceTransformerEmbeddingProvider` is that production
+extension point — implemented, lazy-importing its optional dependency so
+this module stays importable without it — but it was **not exercised
+against a real downloaded model in this environment**, and is not the
+default. No commercial AI provider is hardcoded into the domain layer
+anywhere; `EMBEDDING_PROVIDER` (`app/core/config.py`) is a plain setting
+resolved once, at the edge, by `get_embedding_provider()`.
+
+### Embedding model/version tracking — why re-embedding never overwrites
+
+`KnowledgeChunkEmbedding` (`app/models/embedding.py`) is one row per
+`(knowledge_chunk_id, provider, model_name, model_version)` — not one row
+per chunk:
+
+    Chunk A
+    ├── Embedding(provider=hashing, model=sie-hashing-embedder, version=v1)
+    └── Embedding(provider=sentence_transformers, model=all-MiniLM-L6-v2, version=1)
+
+Changing embedding models over time must never silently invalidate
+existing vectors: re-embedding a chunk under a *different* model identity
+creates a new row, never touches the old one, and
+`RetrievalService` always searches within one pinned model identity —
+vectors from different models are never compared in the same ranking
+(mixing vector spaces from different models would be numerically
+meaningless, not just architecturally sloppy). Re-embedding the *same*
+chunk under the *same* model identity is idempotent instead: `content_hash`
+(the same SHA-256 content-addressing already used for
+`KnowledgeDocumentVersion`/`IngestedFile`) detects whether the existing
+row already reflects the chunk's current content, and — since a chunk's
+content is expected to be immutable — a hash mismatch is reported
+(`SKIPPED_STALE_CONTENT_HASH`) rather than silently overwritten; only an
+explicit `force=True` updates the existing row in place.
+
+`app/core/config.py`'s `EMBEDDING_DIMENSIONS` is the single central
+source of truth for the pgvector column's width — both
+`app/models/embedding.py`'s `Vector(...)` column and
+`migrations/versions/0006_semantic_embeddings.py` read this one value;
+neither hardcodes a dimension of its own. Changing it requires a new
+migration (a pgvector column's dimension is fixed at creation time) and
+re-embedding every chunk under a new `EMBEDDING_MODEL_VERSION`.
+
+### Embedding generation — what gets skipped, and why
+
+`app/embeddings/embedding_service.py::EmbeddingService.embed_chunk`
+never embeds a chunk with empty content (a zero vector would claim
+meaning that was never there), and never embeds an `INSUFFICIENT`-quality
+chunk unless explicitly configured
+(`EMBED_INSUFFICIENT_QUALITY_CHUNKS=true`) or the caller passes
+`force=True` — the same "do not pretend content was understood"
+principle the previous milestone's quality assessment already
+established, extended to embeddings. It never modifies the source
+chunk's own text. A provider failure is caught and reported as a typed
+outcome (`FAILED`, with a reason), never raised and never silently
+swallowed. `generate_embeddings_for_version(version_id)` batches this
+over every chunk in one version, is safe to re-run (already-embedded
+chunks are skipped, not duplicated), and collects per-chunk failures into
+one report rather than aborting the whole batch on the first bad chunk.
+
+### Tenant isolation — enforced explicitly, never by vector similarity alone
+
+This is non-negotiable, and enforced the same way tenant isolation is
+enforced everywhere else in this codebase: an **explicit SQL predicate**,
+not an assumption that semantically-unrelated content from another
+organization simply won't rank highly enough to matter.
+`KnowledgeChunkEmbedding.organization_id` is denormalized from the
+embedded chunk at write time (the same "copy tenant identity onto the
+child row" precedent as `KnowledgeChunk.organization_id` itself), and
+`RetrievalService._tenant_clause()` is the one place that predicate is
+built — always applied, never optional, always evaluated *before* the
+vector `ORDER BY`/`LIMIT`, not as a post-filter over results that could
+already have crossed a tenant boundary:
+
+* `allowed_organization_id=None` -> `organization_id IS NULL` only
+  (GLOBAL knowledge).
+* `allowed_organization_id=<uuid>` -> `organization_id IS NULL OR
+  organization_id = <uuid>` (GLOBAL **plus** that one authorized
+  organization — never more than one organization's private knowledge in
+  a single search).
+
+`allowed_organization_id` is never request input taken at face value.
+`app/api/v1/retrieval.py` resolves and authorizes it *before*
+`RetrievalService.search()` is ever called — the same
+"resolve-then-authorize-then-pass-a-trusted-value" shape
+`ChunkingService`/`IngestionService` already use — so a client cannot
+reach another organization's knowledge by simply naming its
+`organization_id` in the request body. See [Tenant isolation
+(reused, not reinvented)](#tenant-isolation-reused-not-reinvented) above
+for why this principle already runs through every other layer of this
+codebase; retrieval is one more enforcement point for it, not a new
+mechanism.
+
+### Global vs. authorized-organization knowledge
+
+A search's authorized scope always follows the same table as Ingestion's
+own authorization (`app/api/v1/ingestion.py`), with one deliberate,
+documented difference for *reads*:
+
+* `filters.organization_id` provided -> `authorization_service.can(...,
+  permission=KNOWLEDGE_READ, organization_id=...)` — an ACTIVE membership
+  granting `knowledge:read` in that organization is required, or 403.
+* `filters.organization_id` omitted -> GLOBAL-only search. Every request
+  must still be authenticated (unlike the sibling read routes in
+  `app/api/v1/knowledge.py` today — a known gap, see below), but no
+  organization-membership check applies. This deliberately departs from
+  `authorization_service.can()`'s own stricter "no organization_id ->
+  only a `PLATFORM_ADMIN` succeeds" rule, which that module's own
+  docstring already states is tuned for *global-knowledge reads never
+  being routed through it at all* — that rule exists for the
+  meaningfully more privileged act of *writing* new GLOBAL knowledge, not
+  for reading already-published GLOBAL knowledge that a legitimate
+  platform user should be able to search.
+
+### Similarity score vs. confidence
+
+`RetrievalResult.similarity` is a cosine-similarity score (pgvector's
+`<=>` cosine-distance operator, converted as `1 - distance` — see
+"Similarity method" below) — a measure of vector closeness between the
+query and a chunk, nothing more. **It is never called "confidence"
+anywhere in this codebase** — a high similarity score says the query and
+the chunk share a lot of vector space; it says nothing about whether the
+chunk's content is true, current, or authoritative (those are
+`verification_status` and `source_authority_level`, carried on every
+result unchanged from the previous milestone's own three-way
+separation). `RelevanceLevel` (`HIGH`/`MODERATE`/`LOW`) is a
+human-readable bucket over that same score, for the same reason — a
+label, not a probability or a truth judgment.
+
+### Similarity method
+
+Cosine similarity (`.cosine_distance()`, pgvector's `<=>` operator) —
+the standard choice for normalized text embeddings, and what
+`HashingEmbeddingProvider`'s own L2-normalized output is designed for. L2
+(Euclidean) distance and inner product are both supported by pgvector but
+not used here: inner product is only meaningful for unnormalized vectors
+optimized for magnitude (not the case here), and L2 distance on
+normalized vectors is a monotonic transform of cosine distance anyway —
+cosine keeps the score in an intuitive, bounded `[-1, 1]` range
+regardless of the embedding provider swapped in later. A future
+`SentenceTransformerEmbeddingProvider` (or any other real model) should
+keep using cosine unless that specific model's own documentation
+recommends otherwise.
+
+### Retrieval threshold — why `top_k` never means "always return k results"
+
+`RETRIEVAL_MIN_SIMILARITY` (default `0.12`) is a floor a result must
+clear to be returned *at all* — asking for `top_k=5` does not mean five
+results are always returned; it means at most five, only among whatever
+actually clears the bar. If nothing does, the response's `outcome` is
+`NO_RELEVANT_EVIDENCE` — a first-class, explicit response shape
+(`app/retrieval/results.py::RetrievalOutcome`), not an empty list a
+caller has to interpret the meaning of on their own, and not a set of
+weak, barely-related matches dressed up as if they were useful evidence.
+`RETRIEVAL_MODERATE_SIMILARITY` (`0.20`) and `RETRIEVAL_HIGH_SIMILARITY`
+(`0.30`) are the `RelevanceLevel` bucket boundaries above that floor.
+
+**All three are documented *initial* defaults, calibrated empirically
+against `HashingEmbeddingProvider`'s own score distribution** (see
+`tests/test_embedding_provider.py` and the calibration data in this
+milestone's final report) — unrelated text scores ~0.0 under this
+provider, genuine topical matches typically score ~0.14-0.45. A
+different embedding provider produces a differently-shaped score
+distribution and would need its own recalibration of all three values —
+the same "not scientifically validated optimal values" spirit already
+established for the chunking size defaults.
+
+### Provenance
+
+Every `RetrievalResult` carries the full chain this codebase has
+maintained since the Knowledge Foundation milestone — source authority,
+verification status, extraction quality, document version, page/sheet/
+row/slide, section, organization scope, and a human-readable
+`source_reference`-derived `location` (e.g. `"Page 47, Section 6.2"`,
+`"Slide 17"`, `"Sheet: Incident Register, Row 124"`) — nothing is
+discarded on the way through embedding or retrieval. A citation built
+from a `RetrievalResult` can point at exactly the passage it came from,
+the same guarantee `KnowledgeChunk` itself already made one milestone
+earlier.
+
+### API
+
+`POST /api/v1/knowledge/retrieval/search` is the **only** retrieval
+route, and the only chunk-adjacent write path remains ingestion — there
+is no endpoint to create, update, or delete an embedding or a chunk
+directly. Raw embedding vectors are never included in the response (only
+the named model identity: `provider`/`model_name`/`model_version`); no
+storage path, secret, API key, or provider credential is ever exposed.
+See `app/schemas/retrieval.py` for the exact request/response shape.
+
+### Security and observability
+
+Embedding generation only ever operates on a `KnowledgeChunk` the caller
+already resolved and was authorized to process — `EmbeddingService`
+performs no tenant authorization of its own, the same "caller
+authorizes, service trusts what it's given" contract as
+`ChunkingService`. Retrieval's tenant check happens before the service is
+even called (see above). Neither layer ever logs a raw embedding vector,
+a chunk's full content, a storage path, a secret, an API key, or a
+provider credential. `app/embeddings/embedding_service.py` logs each
+embedding failure (chunk id, model identity, error type/message — never
+chunk content) and each batch's summary counts; `app/retrieval/retrieval_service.py`
+logs each search request's organization scope, query *length*, result
+count, outcome, embedding model identity, and duration — the query
+*text* itself only if `LOG_RETRIEVAL_QUERY_TEXT` is explicitly turned on
+for development, since a query may contain an organization's sensitive
+operational detail.
+
+### Evaluation methodology — "Prototype retrieval evaluation"
+
+`tests/fixtures/evaluation/` is a small, synthetic, non-confidential
+safety-knowledge corpus (28 chunks across six topics: working at height,
+lifting operations, permit to work, PPE, confined spaces, emergency
+response) and a 12-query set (two natural-language queries per topic).
+`tests/evaluation/harness.py` loads that corpus through the *actual*
+production `KnowledgeChunkService`/`EmbeddingService` code path (not a
+separate mock pipeline), runs every query through the real
+`RetrievalService`, and calculates Recall@1/3/5 — whether a chunk from
+the query's expected topic appears within the top-K results.
+
+**This is explicitly labeled a "Prototype retrieval evaluation" every
+place it is surfaced (code, tests, this README, the final report) and is
+never claimed as a production or enterprise accuracy figure.** Its
+purpose is to catch regressions on this one small fixture, nothing more.
+The one real, honestly-calculated result on this fixture, using
+`HashingEmbeddingProvider`: **Recall@1 = 0.83, Recall@3 = 1.00,
+Recall@5 = 1.00** (10 of 12 queries found their expected topic at rank 1;
+all 12 found it within the top 3). This says nothing about how any real
+embedding model would perform on real organizational content — it says
+only that this milestone's retrieval pipeline, end to end, correctly
+surfaces topically relevant evidence on this fixture.
+
+### Production architecture consideration — synchronous today, a queue later
+
+`EmbeddingService`/`RetrievalService` both run synchronously in the
+request, exactly like `IngestionService` before them — no Redis, Celery,
+Kafka, or background worker exists in this milestone, per spec. Nothing
+about the architecture assumes that stays true: a future evolution is
+
+    Ingestion -> Queue -> Embedding Worker -> Vector Store
+
+with `EmbeddingService.generate_embeddings_for_version` becoming what a
+worker calls repeatedly instead of what a request calls once — the same
+kind of change `IngestionJob`'s own state machine was already built to
+absorb without an API or schema break.
+
+### Indexing decision — no ANN vector index yet
+
+`migrations/versions/0006_semantic_embeddings.py` enables pgvector and
+creates `knowledge_chunk_embeddings` with **no** IVFFlat/HNSW
+approximate-nearest-neighbor index — pgvector's exact sequential scan via
+`<=>` is both fast enough and exact at this milestone's dataset size (a
+few dozen rows in the evaluation fixture; a real deployment's current
+scale is not meaningfully larger yet), and an approximate index chosen
+without a real dataset size to tune against (IVFFlat's `lists`, HNSW's
+`m`/`ef_construction`) would only ever cost recall, never help. Adding
+one, correctly tuned to an actual dataset size, is future work — see
+"What should be built next" in the final report.
+
+### Future architecture, not built here
+
+    Semantic Retrieval (this milestone)
+        -> Hybrid Retrieval (keyword search + vector search -> fusion)
+        -> Reranking
+        -> Evidence Selection
+        -> RAG
+        -> LLM Reasoning
+
+`RetrievalService` is deliberately shaped so this evolution is additive:
+it already returns a ranked `RetrievalResponse`; adding a keyword-search
+branch and a fusion step ahead of the final ranking does not require
+changing its public contract. **None of the above exists in this
+codebase.** No BM25/keyword search, no Elasticsearch/OpenSearch or any
+other additional search engine, no reranking model, no RAG, no prompt
+engineering, no answer generation, and no LLM integration — this
+milestone stops at ranked evidence with provenance, on purpose.
+
 ## Configuration
 
 All configuration is environment-based (`app/core/config.py`, backed by
@@ -1219,36 +1610,77 @@ secrets are committed; `.env` is git-ignored. `DEV_MODE` (default
 `OVERLAP_CHARACTERS` (150) configure chunk sizing — documented initial
 defaults, not scientifically validated ones; see [Knowledge Quality &
 Semantic Chunking Pipeline](#knowledge-quality--semantic-chunking-pipeline)
-above.
+above. `EMBEDDING_PROVIDER` (`hashing`) / `EMBEDDING_MODEL_NAME` /
+`EMBEDDING_MODEL_VERSION` / `EMBEDDING_DIMENSIONS` (256, the one central
+pgvector column-width value) / `EMBED_INSUFFICIENT_QUALITY_CHUNKS`
+(`false`) and `RETRIEVAL_DEFAULT_TOP_K` (5) / `RETRIEVAL_MAX_TOP_K` (50) /
+`RETRIEVAL_MIN_SIMILARITY` (0.12) / `RETRIEVAL_MODERATE_SIMILARITY`
+(0.20) / `RETRIEVAL_HIGH_SIMILARITY` (0.30) configure embeddings and
+retrieval — see [Semantic Knowledge
+Architecture](#semantic-knowledge-architecture) above for what each
+controls and how the retrieval thresholds were calibrated.
+`LOG_RETRIEVAL_QUERY_TEXT` (`false`) gates whether a search's raw query
+text is ever written to logs (query length and an embedding-model
+identity are always logged; the query content itself is not, by
+default — see that section's "Observability" note).
 
 ## Deliberate scope boundaries (v0.1)
 
 To keep each foundation phase clean and reviewable, the following are
 intentionally **not** included yet: real OIDC/OAuth2 token verification, a
 commercial identity provider dependency, machine-client authentication
-(API keys, OAuth client credentials), the AI/LLM layer, RAG, embeddings,
-pgvector/semantic search, predictive models, machine learning, Safelytic
-integration, Redis, Celery, Kafka, Kubernetes, production (S3/Azure/GCS)
-object storage, commercial OCR, transcription, unrestricted web crawling,
-and automatic external-source trust. See
-[Identity architecture](#identity-architecture) for what *is* built
-towards authentication/authorization, and the "Deliberately does not
-implement" list the Identity & Access Foundation milestone itself set
+(API keys, OAuth client credentials), the AI/LLM layer, RAG, prompt
+engineering, answer generation, a reranking model, predictive models,
+machine learning, Safelytic integration, Redis, Celery, Kafka,
+Kubernetes, production (S3/Azure/GCS) object storage, commercial OCR,
+transcription, unrestricted web crawling, and automatic external-source
+trust. See [Identity architecture](#identity-architecture) for what *is*
+built towards authentication/authorization, and the "Deliberately does
+not implement" list the Identity & Access Foundation milestone itself set
 (no password auth, no stored passwords, no API keys, no OAuth client
 credentials, no SSO config UI, no MFA, no password reset, no email
 invitations) — all of that is still true of this codebase. Similarly, see
 [Universal ingestion architecture](#universal-ingestion-architecture) for
 what the ingestion engine does and does not implement (real OCR
 execution, semantic chunking, and a JSON/XML schema-mapping layer are
-architected for but not built), and [Knowledge Quality & Semantic
-Chunking Pipeline](#knowledge-quality--semantic-chunking-pipeline) for
-the explicit statement that embeddings, pgvector, vector search, and RAG
-are not implemented by this milestone either — only the structural
-groundwork (quality-assessed, well-attributed `KnowledgeChunk` rows) a
-future embedding layer would be built on top of.
+architected for but not built). **As of the Semantic Knowledge Engine
+v0.1 milestone, embeddings, pgvector, and semantic similarity search
+*are* implemented** — see [Semantic Knowledge
+Architecture](#semantic-knowledge-architecture) for the full design and
+its own explicit statement that hybrid/keyword retrieval, reranking,
+RAG, and LLM reasoning are still not implemented, and remain future work
+layered on top of the ranked-evidence-with-provenance this milestone
+delivers.
 
 ## Known gaps / next phase
 
+* **`alembic upgrade head` fails on a fresh PostgreSQL database, at
+  migration 0005, before ever reaching migration 0006.** Discovered in
+  this milestone while integrating a real PostgreSQL + pgvector server
+  for the first time in this project's history (previously, migration
+  0005 had only been dialect-tested via SQLite and an offline `--sql`
+  dry run against PostgreSQL — neither can catch this). Root cause,
+  confirmed live: `0005`'s `batch_alter_table.add_column()` calls add two
+  new PostgreSQL enum-typed columns to the already-existing
+  `knowledge_chunks` table; on real PostgreSQL, Alembic's `add_column`
+  (batched or not) does not auto-create the enum type the column
+  references — only `op.create_table()` does that. Every earlier native
+  enum column was introduced via `create_table`, which is why this had
+  never surfaced before. The fix is a small, well-understood change
+  *inside* migration 0005 itself (creating the two enum types with
+  `sa.Enum(...).create(op.get_bind(), checkfirst=True)` before the
+  `add_column` calls that reference them) — deliberately **not** applied
+  by this milestone, per its explicit instruction not to modify
+  migrations 0001-0005. Migration 0006 (pgvector) was still verified for
+  real against a live local PostgreSQL 16 + pgvector 0.6.0 server, by
+  pre-creating those two enum types out-of-band before running `alembic
+  upgrade head` (not by editing 0005's file) — see
+  `migrations/versions/0006_semantic_embeddings.py`'s own docstring and
+  the Semantic Knowledge Engine milestone's final report for the exact
+  commands. **This blocks any fresh `docker-compose up` deployment
+  today** (see that file's `db`/`backend` service comments) and needs a
+  decision from whoever owns this codebase before the next real
+  deployment.
 * **No real authentication.** The only mechanism that exists (see
   [Identity architecture](#identity-architecture)) is a development-only
   header naming an existing user, gated by `DEV_MODE` (default off, and
@@ -1331,3 +1763,33 @@ future embedding layer would be built on top of.
   application-enforced, not database-enforced. A direct SQL write that
   bypasses the service layer could violate it; this is the one place in
   the knowledge foundation with that gap.
+* **`HashingEmbeddingProvider` is not a trained semantic model.** It is a
+  genuine, deterministic, dependency-free feature-hashing embedding — see
+  [Semantic Knowledge Architecture](#semantic-knowledge-architecture) —
+  chosen specifically so this milestone's tests and evaluation harness
+  never need network access or a downloaded model. `SentenceTransformerEmbeddingProvider`
+  is implemented as the real-model extension point but was not exercised
+  against an actual downloaded model in this environment. Before any
+  production use, a real embedding model should be evaluated and wired in
+  through that same provider abstraction — no `RetrievalService` or
+  `EmbeddingService` call site would need to change.
+* **No ANN vector index (IVFFlat/HNSW).** Deliberate for this milestone's
+  dataset size — see [Semantic Knowledge Architecture](#semantic-knowledge-architecture)'s
+  "Indexing decision" — but will need to be added and tuned once a real
+  deployment's chunk/embedding count grows past what an exact sequential
+  scan comfortably serves.
+* **Retrieval thresholds are calibrated to `HashingEmbeddingProvider`
+  specifically.** `RETRIEVAL_MIN_SIMILARITY`/`RETRIEVAL_MODERATE_SIMILARITY`/
+  `RETRIEVAL_HIGH_SIMILARITY` will need recalibrating against that
+  model's own score distribution if a different embedding provider is
+  ever configured — they are not universal constants.
+* **No background embedding workers.** `EmbeddingService`/`RetrievalService`
+  both run synchronously in the request, exactly like `IngestionService`
+  — see [Semantic Knowledge Architecture](#semantic-knowledge-architecture)'s
+  "Production architecture consideration" for the future
+  Queue -> Embedding Worker evolution this is deliberately shaped to
+  support without an API/schema break.
+* **No hybrid (keyword + vector) retrieval, reranking, RAG, or LLM
+  integration.** All explicitly out of scope for this milestone — see
+  [Semantic Knowledge Architecture](#semantic-knowledge-architecture)'s
+  "Future architecture" diagram.
