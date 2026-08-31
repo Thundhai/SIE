@@ -12,6 +12,37 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <script>
+      // Early protection against browser extension noise (MetaMask, Ethereum, Solana injectors)
+      (function() {
+        function shouldIgnore(msg) {
+          if (!msg) return false;
+          var str = String(msg).toLowerCase();
+          return str.indexOf('metamask') !== -1 ||
+                 str.indexOf('ethereum') !== -1 ||
+                 str.indexOf('failed to connect to metamask') !== -1 ||
+                 str.indexOf('chrome-extension://') !== -1 ||
+                 str.indexOf('moz-extension://') !== -1 ||
+                 str.indexOf('solana') !== -1 ||
+                 str.indexOf('evm') !== -1;
+        }
+        window.addEventListener('error', function(e) {
+          if (shouldIgnore(e.message) || shouldIgnore(e.filename) || (e.error && shouldIgnore(e.error.message))) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            return true;
+          }
+        }, true);
+        window.addEventListener('unhandledrejection', function(e) {
+          var reason = e.reason;
+          var msg = typeof reason === 'string' ? reason : (reason && (reason.message || reason.stack)) || '';
+          if (shouldIgnore(msg)) {
+            e.preventDefault();
+            e.stopImmediatePropagation();
+          }
+        }, true);
+      })();
+    </script>
   </head>
   <body class="bg-[#09090B] text-slate-100 font-sans antialiased selection:bg-blue-600 selection:text-white">
     <div id="root"></div>

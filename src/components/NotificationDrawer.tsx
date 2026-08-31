@@ -105,10 +105,10 @@ export const NotificationDrawer: React.FC<NotificationDrawerProps> = ({
             >
               <div className="flex items-start gap-2.5">
                 <div className="mt-0.5 shrink-0">
-                  {n.type === 'risk_alert' && <AlertTriangle className="w-4 h-4 text-red-400" />}
-                  {n.type === 'knowledge_update' && <BookCheck className="w-4 h-4 text-blue-400" />}
-                  {n.type === 'intervention_update' && <ShieldAlert className="w-4 h-4 text-amber-400" />}
-                  {n.type === 'data_anomaly' && <Sparkles className="w-4 h-4 text-purple-400" />}
+                  {(n.category === 'Risk Alert' || (n as any).type === 'risk_alert') && <AlertTriangle className="w-4 h-4 text-red-400" />}
+                  {(n.category === 'Knowledge Update' || (n as any).type === 'knowledge_update') && <BookCheck className="w-4 h-4 text-blue-400" />}
+                  {(n.category === 'Intervention' || (n as any).type === 'intervention_update') && <ShieldAlert className="w-4 h-4 text-amber-400" />}
+                  {(n.category === 'Data Stream' || (n as any).type === 'data_anomaly') && <Sparkles className="w-4 h-4 text-purple-400" />}
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between">

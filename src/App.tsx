@@ -31,6 +31,7 @@ import { InterventionCenterView } from './views/InterventionCenterView';
 import { OutcomeLearningView } from './views/OutcomeLearningView';
 import { AIAssistantView } from './views/AIAssistantView';
 import { APIIntegrationsView } from './views/APIIntegrationsView';
+import { CanonicalDataModelView } from './views/CanonicalDataModelView';
 import { GovernanceView } from './views/GovernanceView';
 import { SettingsView } from './views/SettingsView';
 
@@ -329,12 +330,25 @@ export function App() {
             <AIAssistantView
               onOpenEvidence={handleOpenEvidence}
               onNavigateToInterventions={() => setCurrentScreen('interventions')}
+              onNavigateToAnalysis={(riskId) => {
+                if (riskId) setSelectedRiskId(riskId);
+                setCurrentScreen('prediction-detail');
+              }}
+              onNavigateToChallenge={(riskId) => {
+                setCurrentScreen('intelligence-learning');
+              }}
+              currentSite={currentSite}
+              currentTimeRange={currentTimeRange}
               initialPrompt={assistantInitialPrompt}
             />
           )}
 
           {currentScreen === 'api-integrations' && (
-            <APIIntegrationsView />
+            <APIIntegrationsView onNavigateToCanonicalModel={() => setCurrentScreen('canonical-model')} />
+          )}
+
+          {currentScreen === 'canonical-model' && (
+            <CanonicalDataModelView />
           )}
 
           {currentScreen === 'governance' && (

@@ -14,7 +14,12 @@ import {
   Layers,
   BarChart2,
   Sliders,
-  ChevronDown
+  ChevronDown,
+  Info,
+  Database,
+  HelpCircle,
+  Activity,
+  ShieldCheck
 } from 'lucide-react';
 import { 
   ResponsiveContainer, 
@@ -26,8 +31,11 @@ import {
   CartesianGrid, 
   Legend 
 } from 'recharts';
-import { EmergingRisk } from '../types';
+import { EmergingRisk, LineageStageId } from '../types';
 import { HISTORICAL_COMPARISON_DATA } from '../mockData';
+import { PredictionMethodologyCard } from '../components/PredictionMethodologyCard';
+import { EvidenceLineageModal } from '../components/EvidenceLineageModal';
+import { getRiskMethodology } from '../utils/methodologyUtils';
 
 interface PredictionDetailViewProps {
   risk: EmergingRisk;
@@ -47,6 +55,15 @@ export const PredictionDetailView: React.FC<PredictionDetailViewProps> = ({
   onNavigateToInterventions
 }) => {
   const [activeTab, setActiveTab] = useState<'causal' | 'historical' | 'factors' | 'evidence'>('causal');
+  const [isLineageModalOpen, setIsLineageModalOpen] = useState(false);
+  const [selectedLineageStage, setSelectedLineageStage] = useState<LineageStageId>('prediction');
+
+  const methodology = getRiskMethodology(risk);
+
+  const handleOpenLineageStage = (stageId: LineageStageId) => {
+    setSelectedLineageStage(stageId);
+    setIsLineageModalOpen(true);
+  };
 
   return (
     <div className="space-y-6 animate-in fade-in duration-200">
@@ -65,6 +82,9 @@ export const PredictionDetailView: React.FC<PredictionDetailViewProps> = ({
               <span>Intelligence Center</span>
               <span>/</span>
               <span className="text-slate-300 font-semibold">Emerging Risk Analysis</span>
+              <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-amber-950 text-amber-300 border border-amber-800 font-bold">
+                DEMO
+              </span>
             </div>
             <h1 className="text-xl sm:text-2xl font-bold text-white tracking-tight mt-0.5">
               {risk.category} Analysis
@@ -72,25 +92,35 @@ export const PredictionDetailView: React.FC<PredictionDetailViewProps> = ({
           </div>
         </div>
 
-        {/* Switch Risk Dropdown */}
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-slate-400">Target Risk:</span>
-          <select
-            value={risk.id}
-            onChange={(e) => onSelectOtherRisk(e.target.value)}
-            className="bg-slate-900 border border-slate-700 text-slate-200 text-xs font-semibold rounded-lg px-3 py-1.5 focus:outline-none focus:border-cyan-500"
+        {/* Switch Risk Dropdown & Lineage Trigger */}
+        <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+          <button
+            onClick={() => handleOpenLineageStage('prediction')}
+            className="px-3 py-1.5 rounded-lg bg-blue-600/10 hover:bg-blue-600/20 border border-blue-500/30 text-blue-300 text-xs font-semibold transition-colors flex items-center gap-1.5"
           >
-            {allRisks.map((r) => (
-              <option key={r.id} value={r.id}>
-                {r.category} ({r.probability}% Prob)
-              </option>
-            ))}
-          </select>
+            <Layers className="w-3.5 h-3.5 text-blue-400" />
+            <span>Trace Lineage</span>
+          </button>
+
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-slate-400">Target Risk:</span>
+            <select
+              value={risk.id}
+              onChange={(e) => onSelectOtherRisk(e.target.value)}
+              className="bg-slate-900 border border-slate-700 text-slate-200 text-xs font-semibold rounded-lg px-3 py-1.5 focus:outline-none focus:border-cyan-500"
+            >
+              {allRisks.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.category} ({r.probability}% Prob)
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
       </div>
 
       {/* Hero Prediction Summary Card */}
-      <div className="p-6 rounded-xl bg-slate-900/90 border border-slate-800 shadow-xl relative overflow-hidden">
+      <div className="p-6 rounded-xl bg-slate-900/90 border border-slate-800 shadow-xl relative overflow-hidden space-y-4">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
           <div className="space-y-3 max-w-3xl">
             <div className="flex flex-wrap items-center gap-2.5">
@@ -101,6 +131,7 @@ export const PredictionDetailView: React.FC<PredictionDetailViewProps> = ({
               </span>
               <span className="text-xs text-slate-400 font-mono">ID: {risk.id}</span>
               <span className="text-xs text-slate-400 font-mono">• Location: {risk.location}</span>
+              <span className="text-xs text-blue-400 font-mono">• Horizon: {methodology.forecastPeriod}</span>
             </div>
 
             <h2 className="text-lg sm:text-xl font-bold text-white tracking-tight">
@@ -110,26 +141,36 @@ export const PredictionDetailView: React.FC<PredictionDetailViewProps> = ({
               {risk.summary}
             </p>
 
-            <div className="flex flex-wrap items-center gap-6 pt-1 text-xs">
-              <div>
-                <span className="text-slate-400 block text-[10px] uppercase">Probability</span>
-                <span className="text-2xl font-extrabold text-rose-400 font-mono">{risk.probability}%</span>
+            {/* Structured Probability vs Confidence and Data Quality Grid */}
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 pt-2">
+              <div className="p-3 rounded-lg bg-slate-950/70 border border-slate-800">
+                <span className="text-slate-400 block text-[10px] uppercase font-semibold">Probability</span>
+                <span className="text-2xl font-extrabold text-blue-400 font-mono">{risk.probability}%</span>
+                <span className="text-[10px] text-slate-400 block mt-0.5">Est. Likelihood</span>
               </div>
-              <div>
-                <span className="text-slate-400 block text-[10px] uppercase">Confidence</span>
+
+              <div className="p-3 rounded-lg bg-slate-950/70 border border-slate-800">
+                <span className="text-slate-400 block text-[10px] uppercase font-semibold">Confidence</span>
                 <span className="text-2xl font-extrabold text-emerald-400 font-mono">{risk.confidence}%</span>
+                <span className="text-[10px] text-emerald-400/90 block mt-0.5">Model Certainty</span>
               </div>
-              <div>
-                <span className="text-slate-400 block text-[10px] uppercase">Trajectory</span>
-                <span className="text-base font-bold text-slate-200 font-mono mt-1 block">
-                  {risk.trajectory} (+{risk.trendPercentage}%)
-                </span>
+
+              <div className="p-3 rounded-lg bg-slate-950/70 border border-slate-800">
+                <span className="text-slate-400 block text-[10px] uppercase font-semibold">Data Quality</span>
+                <span className="text-2xl font-extrabold text-white font-mono">{methodology.dataQualityScore}%</span>
+                <span className="text-[10px] text-slate-400 block mt-0.5">High Integrity</span>
               </div>
-              <div>
-                <span className="text-slate-400 block text-[10px] uppercase">Evidence Base</span>
-                <span className="text-xs font-mono text-cyan-300 mt-1.5 block">
-                  {risk.orgRecordsCount} Org Records • {risk.externalSourcesCount} Standards
-                </span>
+
+              <div className="p-3 rounded-lg bg-slate-950/70 border border-slate-800">
+                <span className="text-slate-400 block text-[10px] uppercase font-semibold">Evidence Strength</span>
+                <span className="text-lg font-extrabold text-purple-300 font-mono mt-1 block">{methodology.evidenceStrength}</span>
+                <span className="text-[10px] text-slate-400 block mt-0.5">{methodology.externalKnowledgeSources} Sources</span>
+              </div>
+
+              <div className="p-3 rounded-lg bg-slate-950/70 border border-slate-800 col-span-2 sm:col-span-1">
+                <span className="text-slate-400 block text-[10px] uppercase font-semibold">Hist. Coverage</span>
+                <span className="text-2xl font-extrabold text-cyan-400 font-mono">{methodology.historicalCoverage}%</span>
+                <span className="text-[10px] text-slate-400 block mt-0.5">90D Baseline</span>
               </div>
             </div>
           </div>
@@ -142,9 +183,30 @@ export const PredictionDetailView: React.FC<PredictionDetailViewProps> = ({
               <ShieldAlert className="w-4 h-4" />
               <span>Generate Safety Intervention</span>
             </button>
+            <button
+              onClick={() => handleOpenLineageStage('prediction')}
+              className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold border border-slate-700 transition-colors flex items-center justify-center gap-2"
+            >
+              <Activity className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Inspect Full Evidence Lineage</span>
+            </button>
           </div>
         </div>
+
+        {/* Interpretation Warning Banner */}
+        <div className="p-3.5 rounded-lg bg-amber-950/25 border border-amber-500/30 flex items-start gap-2.5 text-amber-200 text-xs">
+          <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+          <p className="leading-relaxed">
+            <strong>Interpretation Notice:</strong> Predictions are analytical risk indicators, not guarantees that an incident will occur. They should support—not replace—professional HSE judgement.
+          </p>
+        </div>
       </div>
+
+      {/* DEDICATED PREDICTION METHODOLOGY & EVIDENCE LINEAGE SECTION */}
+      <PredictionMethodologyCard
+        risk={risk}
+        onOpenLineageStage={handleOpenLineageStage}
+      />
 
       {/* SECTION 1: Why SIE Identified This Risk (Causal Factor Diagram) */}
       <div className="p-6 rounded-xl bg-slate-900/90 border border-slate-800 space-y-4">
@@ -156,16 +218,22 @@ export const PredictionDetailView: React.FC<PredictionDetailViewProps> = ({
             </h3>
             <p className="text-[11px] text-slate-400">Step-by-step causal escalation derived from multi-layer data synthesis</p>
           </div>
-          <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-800">
-            Automated Causal Graph
-          </span>
+          <button 
+            onClick={() => handleOpenLineageStage('analytical-method')}
+            className="text-[10px] font-mono px-2 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-800 hover:bg-cyan-900 transition-colors"
+          >
+            Automated Causal Graph • Inspect Algorithm
+          </button>
         </div>
 
         {/* Visual Causal Flow Diagram */}
         <div className="grid grid-cols-1 md:grid-cols-5 gap-3 pt-2">
           {risk.causalChain.map((node, index) => (
             <div key={node.step} className="relative flex flex-col">
-              <div className="p-4 rounded-lg bg-slate-950/80 border border-slate-800 hover:border-cyan-600/50 transition-all flex-1 flex flex-col justify-between group">
+              <div 
+                onClick={() => handleOpenLineageStage(index === 0 ? 'prediction' : index === 1 ? 'risk-factors' : index === 2 ? 'org-evidence' : index === 3 ? 'external-evidence' : 'recommendation')}
+                className="p-4 rounded-lg bg-slate-950/80 border border-slate-800 hover:border-cyan-600/50 cursor-pointer transition-all flex-1 flex flex-col justify-between group"
+              >
                 <div>
                   <div className="flex items-center justify-between text-[10px] font-mono text-slate-500 mb-1.5">
                     <span className="px-1.5 py-0.2 rounded bg-slate-900 text-cyan-400 border border-slate-800 font-bold">
@@ -181,6 +249,9 @@ export const PredictionDetailView: React.FC<PredictionDetailViewProps> = ({
                   <p className="text-[11px] text-slate-400 mt-1.5 leading-relaxed">
                     {node.description}
                   </p>
+                </div>
+                <div className="mt-2 text-[9px] font-mono text-cyan-400 group-hover:underline">
+                  Click to trace lineage &rarr;
                 </div>
               </div>
 
@@ -240,10 +311,18 @@ export const PredictionDetailView: React.FC<PredictionDetailViewProps> = ({
         {/* Contributing Factors (5 cols) */}
         <div className="lg:col-span-5 p-6 rounded-xl bg-slate-900/90 border border-slate-800 flex flex-col justify-between">
           <div>
-            <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
-              <Sliders className="w-4 h-4 text-cyan-400" />
-              <span>Ranked Contributing Factors</span>
-            </h3>
+            <div className="flex items-center justify-between mb-1">
+              <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
+                <Sliders className="w-4 h-4 text-cyan-400" />
+                <span>Ranked Contributing Factors</span>
+              </h3>
+              <button
+                onClick={() => handleOpenLineageStage('risk-factors')}
+                className="text-[10px] font-mono text-cyan-400 hover:underline"
+              >
+                Inspect Weights
+              </button>
+            </div>
             <p className="text-[11px] text-slate-400 mb-4">Calculated percentage impact on composite risk score</p>
 
             <div className="space-y-3">
@@ -277,47 +356,78 @@ export const PredictionDetailView: React.FC<PredictionDetailViewProps> = ({
 
       {/* SECTION 4: Organization Evidence */}
       <div className="p-6 rounded-xl bg-slate-900/90 border border-slate-800 space-y-4">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
           <div>
-            <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
-              <FileText className="w-4 h-4 text-cyan-400" />
-              <span>Organization Evidence ({risk.organizationEvidence.length} Key Records)</span>
-            </h3>
-            <p className="text-[11px] text-slate-400">Internal observations, near misses, and overdue audit findings driving this risk</p>
+            <div className="flex items-center gap-2">
+              <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
+                <FileText className="w-4 h-4 text-cyan-400" />
+                <span>Organization Evidence ({risk.organizationEvidence.length} Ingested Records)</span>
+              </h3>
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-950/80 text-amber-300 border border-amber-800 font-bold">
+                DEMO / SIMULATED
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-400">Internal operational telemetry, observations, near-misses, and permit records driving this risk</p>
           </div>
-          <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
-            Source: Safelytic Core Ingestion
-          </span>
+          <button
+            onClick={() => handleOpenLineageStage('org-evidence')}
+            className="text-[10px] font-mono px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors shrink-0"
+          >
+            Lineage Trace • Org Records
+          </button>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {risk.organizationEvidence.map((ev) => (
             <div
               key={ev.id}
               onClick={() => onOpenEvidence(ev)}
-              className="p-3.5 rounded-lg bg-slate-950/70 hover:bg-slate-800/60 border border-slate-800 hover:border-cyan-500/50 cursor-pointer transition-all flex flex-col justify-between group"
+              className="p-4 rounded-xl bg-slate-950/80 hover:bg-slate-850 border border-slate-800 hover:border-cyan-500/50 cursor-pointer transition-all flex flex-col justify-between group"
             >
               <div>
-                <div className="flex items-center justify-between text-[10px] font-mono text-slate-400">
-                  <span className="font-bold text-cyan-400">{ev.id}</span>
-                  <span className={`px-1.5 py-0.2 rounded ${
-                    ev.severity === 'High' ? 'bg-rose-950 text-rose-300 border border-rose-800' : 'bg-amber-950 text-amber-300 border border-amber-800'
+                <div className="flex items-center justify-between text-[10px] font-mono text-slate-400 border-b border-slate-800/80 pb-2">
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-bold text-cyan-400">{ev.id}</span>
+                    <span className="text-slate-500">•</span>
+                    <span className="text-slate-300">{ev.type}</span>
+                  </div>
+                  <span className={`px-2 py-0.5 rounded font-bold ${
+                    ev.severity === 'High' || ev.severity === 'Critical' 
+                      ? 'bg-rose-950 text-rose-300 border border-rose-800' 
+                      : 'bg-amber-950 text-amber-300 border border-amber-800'
                   }`}>
-                    {ev.severity}
+                    {ev.severity} Severity
                   </span>
                 </div>
-                <h4 className="text-xs font-semibold text-slate-100 mt-2 group-hover:text-cyan-300 transition-colors line-clamp-2">
+
+                <h4 className="text-xs font-bold text-slate-100 mt-2.5 group-hover:text-cyan-300 transition-colors line-clamp-1">
                   {ev.title}
                 </h4>
-                <p className="text-[11px] text-slate-400 mt-1 line-clamp-3 leading-relaxed">
+
+                <div className="grid grid-cols-2 gap-1.5 mt-2.5 text-[10px] font-mono text-slate-400 bg-slate-900/60 p-2 rounded-lg border border-slate-800/50">
+                  <div>
+                    <span className="text-slate-500 block text-[9px] uppercase">Site / Location</span>
+                    <span className="text-slate-300 truncate block">{ev.site || 'Lagos Operations'}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-500 block text-[9px] uppercase">Activity</span>
+                    <span className="text-slate-300 truncate block">{ev.activity || 'Lifting Operation'}</span>
+                  </div>
+                  <div className="col-span-2 pt-1 border-t border-slate-800/40 flex items-center justify-between">
+                    <span className="text-slate-500 text-[9px]">Source: {ev.sourceSystem || 'Intelex HSE'}</span>
+                    <span className="text-emerald-400 text-[9px] font-bold">{ev.status || 'Active'}</span>
+                  </div>
+                </div>
+
+                <p className="text-[11px] text-slate-300 mt-2 line-clamp-2 leading-relaxed">
                   {ev.details}
                 </p>
               </div>
 
-              <div className="mt-3 pt-2 border-t border-slate-800/80 flex items-center justify-between text-[10px] text-slate-500">
+              <div className="mt-3 pt-2.5 border-t border-slate-800/80 flex items-center justify-between text-[10px] text-slate-500 font-mono">
                 <span>{ev.date}</span>
-                <span className="font-mono text-cyan-400 flex items-center gap-1 group-hover:underline">
-                  <span>Inspect</span>
+                <span className="text-cyan-400 flex items-center gap-1 group-hover:underline">
+                  <span>Provenance Record</span>
                   <ExternalLink className="w-2.5 h-2.5" />
                 </span>
               </div>
@@ -328,17 +438,25 @@ export const PredictionDetailView: React.FC<PredictionDetailViewProps> = ({
 
       {/* SECTION 5: External Verified Evidence */}
       <div className="p-6 rounded-xl bg-slate-900/90 border border-slate-800 space-y-4">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
           <div>
-            <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-purple-400" />
-              <span>External Verified Knowledge Evidence ({risk.externalEvidence.length} Citations)</span>
-            </h3>
-            <p className="text-[11px] text-slate-400">Regulatory standards and research benchmarks grounding the predictive model (Demo / Simulated Sources)</p>
+            <div className="flex items-center gap-2">
+              <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-purple-400" />
+                <span>External Verified Knowledge Evidence ({risk.externalEvidence.length} Standards)</span>
+              </h3>
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-950/80 text-amber-300 border border-amber-800 font-bold">
+                DEMO / SIMULATED
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-400">International regulatory frameworks, approved codes of practice, and empirical benchmarks</p>
           </div>
-          <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-purple-950 text-purple-300 border border-purple-800">
-            External Standards Verified
-          </span>
+          <button
+            onClick={() => handleOpenLineageStage('external-evidence')}
+            className="text-[10px] font-mono px-2.5 py-1 rounded bg-purple-950 hover:bg-purple-900 text-purple-300 border border-purple-800 transition-colors shrink-0"
+          >
+            Lineage Trace • External Standards
+          </button>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -346,26 +464,42 @@ export const PredictionDetailView: React.FC<PredictionDetailViewProps> = ({
             <div
               key={ext.id}
               onClick={() => onOpenEvidence(ext)}
-              className="p-4 rounded-lg bg-slate-950/70 hover:bg-slate-800/60 border border-slate-800 hover:border-purple-500/50 cursor-pointer transition-all flex flex-col justify-between group"
+              className="p-4 rounded-xl bg-slate-950/80 hover:bg-slate-850 border border-slate-800 hover:border-purple-500/50 cursor-pointer transition-all flex flex-col justify-between group"
             >
               <div>
-                <div className="flex items-center justify-between text-[10px] font-mono text-slate-400">
-                  <span className="font-semibold text-purple-300">{ext.publisher}</span>
+                <div className="flex items-center justify-between text-[10px] font-mono text-slate-400 border-b border-slate-800/80 pb-2">
+                  <span className="font-bold text-purple-300">{ext.publisher}</span>
                   <span className="text-emerald-400 font-bold">{ext.reliability} Reliability</span>
                 </div>
-                <h4 className="text-xs font-bold text-slate-100 mt-2 group-hover:text-purple-300 transition-colors">
+
+                <h4 className="text-xs font-bold text-slate-100 mt-2.5 group-hover:text-purple-300 transition-colors line-clamp-2">
                   {ext.documentTitle}
                 </h4>
-                <div className="text-[10px] font-mono text-slate-500 mt-0.5">{ext.code} • {ext.publicationDate}</div>
-                <div className="p-2.5 rounded bg-slate-900/90 border border-slate-800 mt-2 text-[11px] text-slate-300 italic leading-relaxed">
+
+                <div className="grid grid-cols-2 gap-1.5 mt-2.5 text-[10px] font-mono text-slate-400 bg-slate-900/60 p-2 rounded-lg border border-slate-800/50">
+                  <div>
+                    <span className="text-slate-500 block text-[9px] uppercase">Code / Ref</span>
+                    <span className="text-cyan-300 truncate block">{ext.code}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-500 block text-[9px] uppercase">Jurisdiction</span>
+                    <span className="text-slate-300 truncate block">{ext.jurisdiction}</span>
+                  </div>
+                  <div className="col-span-2 pt-1 border-t border-slate-800/40 flex items-center justify-between">
+                    <span className="text-slate-500 text-[9px]">Topic: {ext.topic}</span>
+                    <span className="text-slate-400 text-[9px]">{ext.publicationDate}</span>
+                  </div>
+                </div>
+
+                <div className="p-2.5 rounded-lg bg-slate-900/90 border border-slate-800/80 mt-2.5 text-[11px] text-purple-100/90 italic leading-relaxed">
                   &ldquo;{ext.keyExcerpt}&rdquo;
                 </div>
               </div>
 
-              <div className="mt-3 pt-2 border-t border-slate-800/80 flex items-center justify-between text-[10px] text-slate-500">
-                <span>{ext.jurisdiction}</span>
-                <span className="text-purple-400 font-mono flex items-center gap-1 group-hover:underline">
-                  <span>View Rule Details</span>
+              <div className="mt-3 pt-2.5 border-t border-slate-800/80 flex items-center justify-between text-[10px] text-slate-500 font-mono">
+                <span>{ext.sourceReference || ext.code}</span>
+                <span className="text-purple-400 flex items-center gap-1 group-hover:underline">
+                  <span>Inspect Norm</span>
                   <ExternalLink className="w-2.5 h-2.5" />
                 </span>
               </div>
@@ -374,20 +508,107 @@ export const PredictionDetailView: React.FC<PredictionDetailViewProps> = ({
         </div>
       </div>
 
-      {/* SECTION 6: AI Reasoning */}
+      {/* SECTION 6: Analytical Evidence & Baseline Deviation */}
+      {risk.analyticalEvidence && (
+        <div className="p-6 rounded-xl bg-slate-900/90 border border-slate-800 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
+                  <Activity className="w-4 h-4 text-cyan-400" />
+                  <span>Analytical Evidence &amp; Statistical Baseline Deviation</span>
+                </h3>
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-950/80 text-amber-300 border border-amber-800 font-bold">
+                  DEMO / SIMULATED
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400">Quantitative trend metrics, historical baselines, and mathematical model techniques</p>
+            </div>
+            <button
+              onClick={() => onOpenEvidence(risk.analyticalEvidence)}
+              className="text-[10px] font-mono px-2.5 py-1 rounded bg-cyan-950 hover:bg-cyan-900 text-cyan-300 border border-cyan-800 transition-colors shrink-0"
+            >
+              Inspect Analytical Matrix
+            </button>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800">
+              <span className="text-slate-400 text-[10px] font-mono uppercase block">Calculated Trend</span>
+              <span className="text-rose-400 font-bold text-sm font-mono mt-1 block flex items-center gap-1">
+                <TrendingUp className="w-3.5 h-3.5" />
+                {risk.analyticalEvidence.trend}
+              </span>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800">
+              <span className="text-slate-400 text-[10px] font-mono uppercase block">Historical Baseline</span>
+              <span className="text-slate-200 font-semibold text-xs mt-1 block">
+                {risk.analyticalEvidence.baseline}
+              </span>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800">
+              <span className="text-slate-400 text-[10px] font-mono uppercase block">Current Observed Value</span>
+              <span className="text-cyan-300 font-bold text-xs mt-1 block">
+                {risk.analyticalEvidence.currentValue}
+              </span>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-slate-950/80 border border-slate-800">
+              <span className="text-slate-400 text-[10px] font-mono uppercase block">Statistical Deviation</span>
+              <span className="text-amber-300 font-bold text-xs mt-1 block font-mono">
+                {risk.analyticalEvidence.deviation}
+              </span>
+            </div>
+          </div>
+
+          <div className="p-3.5 rounded-xl bg-slate-950/60 border border-slate-800/80 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <span className="text-slate-400 font-mono text-[10px] uppercase">Historical Benchmark Pattern:</span>
+              <p className="text-slate-200 mt-0.5">{risk.analyticalEvidence.historicalComparison}</p>
+            </div>
+            <div className="text-right shrink-0">
+              <span className="text-[10px] font-mono text-cyan-400 block">{risk.analyticalEvidence.modelTechnique}</span>
+              <span className="text-[10px] font-mono text-emerald-400">{risk.analyticalEvidence.confidenceInterval}</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SECTION 7: AI Synthesis Reasoning */}
       <div className="p-6 rounded-xl bg-gradient-to-r from-slate-900 via-slate-900 to-cyan-950/40 border border-cyan-800/60 space-y-2.5">
-        <div className="flex items-center gap-2">
-          <Sparkles className="w-4 h-4 text-cyan-400" />
-          <h3 className="text-sm font-bold text-white">AI Synthesis Reasoning Explanation</h3>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Sparkles className="w-4 h-4 text-cyan-400" />
+            <h3 className="text-sm font-bold text-white">AI Synthesis Reasoning Explanation</h3>
+          </div>
+          <button
+            onClick={() => handleOpenLineageStage('analytical-method')}
+            className="text-[10px] font-mono text-cyan-300 hover:underline flex items-center gap-1"
+          >
+            <span>Model Formulation</span>
+            <ArrowRight className="w-3 h-3" />
+          </button>
         </div>
         <p className="text-xs sm:text-sm text-slate-200 leading-relaxed">
           {risk.aiReasoning}
         </p>
         <div className="pt-2 text-[11px] text-slate-400 font-mono flex items-center justify-between">
-          <span>Engine Model: Causal Synthesis Graph v4.6</span>
+          <span>Engine Model: {methodology.modelVersion}</span>
           <span className="text-cyan-400">Zero Black-Box Processing • Full Lineage Verifiable</span>
         </div>
       </div>
+
+      {/* Interactive Evidence Lineage Modal */}
+      <EvidenceLineageModal
+        isOpen={isLineageModalOpen}
+        onClose={() => setIsLineageModalOpen(false)}
+        risk={risk}
+        initialStageId={selectedLineageStage}
+        onNavigateToInterventions={onNavigateToInterventions}
+        onOpenEvidenceRecord={onOpenEvidence}
+      />
     </div>
   );
 };

@@ -20,7 +20,9 @@ import {
   Lock,
   BarChart2,
   Activity,
-  Sliders
+  Sliders,
+  Boxes,
+  GitBranch
 } from 'lucide-react';
 import { AppScreen } from '../types';
 
@@ -118,8 +120,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
         },
         {
           id: 'intelligence-learning',
-          label: 'Model Pipeline',
-          icon: Workflow
+          label: 'Intelligence Learning & Improvement',
+          icon: Workflow,
+          badge: '4 Mechanisms',
+          badgeColor: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20'
         }
       ]
     },
@@ -128,10 +132,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
       items: [
         {
           id: 'assistant',
-          label: 'AI Safety Assistant',
-          icon: Bot,
-          badge: 'Grounded',
-          badgeColor: 'bg-blue-500/10 text-blue-400 border-blue-500/20'
+          label: 'SIE Intelligence Assistant',
+          icon: Cpu,
+          badge: 'Engine',
+          badgeColor: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20'
         },
         {
           id: 'api-integrations',
@@ -139,6 +143,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
           icon: Network,
           badge: 'v1.4',
           badgeColor: 'bg-slate-800 text-slate-400 border-white/5'
+        },
+        {
+          id: 'canonical-model',
+          label: 'Canonical Safety Data Model',
+          icon: Boxes,
+          badge: 'Schema',
+          badgeColor: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20'
         },
         {
           id: 'governance',
