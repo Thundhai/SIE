@@ -1,0 +1,6 @@
+{
+  "name": "Safelytic Intelligence Engine",
+  "description": "Enterprise Safety Intelligence Platform (SIE) providing evidence-based predictive risk intelligence, closed-loop interventions, and verified knowledge synthesis for high-hazard industries.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
