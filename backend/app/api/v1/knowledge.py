@@ -18,18 +18,26 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
+from app.models.knowledge_chunk import KnowledgeChunk
 from app.models.knowledge_document import KnowledgeDocument
 from app.models.knowledge_document_version import KnowledgeDocumentVersion
 from app.models.knowledge_source import KnowledgeSource
-from app.schemas.knowledge_document import KnowledgeDocumentCreate, KnowledgeDocumentRead
+from app.schemas.knowledge_chunk import KnowledgeChunkRead
+from app.schemas.knowledge_document import (
+    KnowledgeDocumentCreate,
+    KnowledgeDocumentRead,
+)
 from app.schemas.knowledge_document_version import (
     KnowledgeDocumentVersionCreate,
     KnowledgeDocumentVersionRead,
 )
 from app.schemas.knowledge_source import KnowledgeSourceCreate, KnowledgeSourceRead
 from app.services.errors import KnowledgeNotFoundError, KnowledgeValidationError
+from app.services.knowledge_chunk_service import knowledge_chunk_service
 from app.services.knowledge_document_service import knowledge_document_service
-from app.services.knowledge_document_version_service import knowledge_document_version_service
+from app.services.knowledge_document_version_service import (
+    knowledge_document_version_service,
+)
 from app.services.knowledge_source_service import knowledge_source_service
 
 router = APIRouter(prefix="/knowledge", tags=["knowledge"])
@@ -159,4 +167,52 @@ def list_knowledge_document_versions(
 ) -> list[KnowledgeDocumentVersion]:
     return knowledge_document_version_service.list_for_document(
         db, document=document, skip=skip, limit=limit
+    )
+
+
+# --- Knowledge chunks (read-only) ------------------------------------------
+#
+# No chunk-*writing* endpoint exists anywhere in this API, by design — see
+# the milestone spec and app/services/chunking_service.py's docstring:
+# chunk generation is controlled by ingestion processing only. This one
+# read endpoint exists because a future citation/evidence UI needs a
+# stable way to fetch a specific version's chunks; it costs no new
+# authorization mechanism because it reuses the exact same tenant check
+# every other read route in this file already uses —
+# `get_knowledge_document_or_404` requires the caller to already supply
+# the document's own `organization_id` (or omit it for a GLOBAL document)
+# to resolve the document at all, so a chunk can never be reached via the
+# wrong organization. `get_for_document` below applies that same
+# containment one level further: a `version_id` that exists but doesn't
+# belong to *this* document 404s rather than leaking another document's
+# chunks.
+
+
+def get_knowledge_document_version_or_404(
+    version_id: uuid.UUID,
+    document: KnowledgeDocument = Depends(get_knowledge_document_or_404),
+    db: Session = Depends(get_db),
+) -> KnowledgeDocumentVersion:
+    version = knowledge_document_version_service.get_for_document(
+        db, document=document, version_id=version_id
+    )
+    if version is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Knowledge document version not found"
+        )
+    return version
+
+
+@router.get(
+    "/documents/{document_id}/versions/{version_id}/chunks",
+    response_model=list[KnowledgeChunkRead],
+)
+def list_knowledge_chunks(
+    version: KnowledgeDocumentVersion = Depends(get_knowledge_document_version_or_404),
+    db: Session = Depends(get_db),
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=1000, ge=1, le=5000),
+) -> list[KnowledgeChunk]:
+    return knowledge_chunk_service.list_for_version(
+        db, document_version=version, skip=skip, limit=limit
     )

@@ -91,5 +91,24 @@ class KnowledgeDocumentVersionService:
         )
         return list(db.execute(stmt).scalars().all())
 
+    def get_for_document(
+        self,
+        db: Session,
+        *,
+        document: KnowledgeDocument,
+        version_id: uuid.UUID,
+    ) -> KnowledgeDocumentVersion | None:
+        """Resolve one version, scoped to an already tenant-checked
+        document — same convention as `list_for_document`. Returns None
+        (never another document's version) if `version_id` doesn't belong
+        to `document`, so a caller can't reach one document version's
+        chunks by way of an id borrowed from a different, otherwise
+        inaccessible document."""
+        stmt = select(KnowledgeDocumentVersion).where(
+            KnowledgeDocumentVersion.id == version_id,
+            KnowledgeDocumentVersion.document_id == document.id,
+        )
+        return db.execute(stmt).scalar_one_or_none()
+
 
 knowledge_document_version_service = KnowledgeDocumentVersionService()

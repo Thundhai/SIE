@@ -46,6 +46,23 @@ def _heading_level(paragraph: Paragraph) -> int | None:
     return None
 
 
+def _list_type(paragraph: Paragraph) -> str | None:
+    """Whether this paragraph is a bulleted/numbered list item, detected
+    the same way `_heading_level` detects headings: by Word's own named
+    paragraph style, not by attempting to parse `numPr` numbering XML
+    (see the milestone's "do not attempt perfect structural
+    understanding" principle — this covers the common case of Word's
+    built-in List Bullet/List Number styles, applied here for section 9
+    of the milestone spec: preserving list semantics rather than letting
+    each bullet become an arbitrarily separated chunk)."""
+    style_name = (paragraph.style.name or "") if paragraph.style else ""
+    if style_name.startswith("List Bullet"):
+        return "bullet"
+    if style_name.startswith("List Number"):
+        return "numbered"
+    return None
+
+
 class DOCXAdapter:
     format_id = "docx"
     content_category = "document"
@@ -77,7 +94,12 @@ class DOCXAdapter:
                     blocks.append({"kind": "heading", "text": text, "level": level})
                 else:
                     blocks.append(
-                        {"kind": "paragraph", "text": text, "section_title": current_section}
+                        {
+                            "kind": "paragraph",
+                            "text": text,
+                            "section_title": current_section,
+                            "list_type": _list_type(item),
+                        }
                     )
             elif isinstance(item, Table):
                 rows = [[cell.text.strip() for cell in row.cells] for row in item.rows]
@@ -112,11 +134,15 @@ class DOCXAdapter:
                     )
                 )
             elif block["kind"] == "paragraph":
+                metadata = {}
+                if block["list_type"] is not None:
+                    metadata = {"is_list_item": True, "list_type": block["list_type"]}
                 contents.append(
                     NormalizedContent(
                         content_type=NormalizedContentType.TEXT,
                         text=block["text"],
                         section_title=block["section_title"],
+                        metadata=metadata,
                     )
                 )
             elif block["kind"] == "table":
