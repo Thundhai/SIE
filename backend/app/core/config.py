@@ -59,6 +59,65 @@ class Settings(BaseSettings):
     MAX_CHUNK_CHARACTERS: int = 1800
     OVERLAP_CHARACTERS: int = 150
 
+    # Semantic embeddings (see app/embeddings/ and the README's "Semantic
+    # Knowledge Architecture" section).
+    #
+    # EMBEDDING_DIMENSIONS is the single central source of truth for the
+    # pgvector column width — app/models/embedding.py's `Vector(...)`
+    # column and migrations/versions/0006_*.py both read this value
+    # rather than each hardcoding a number. A pgvector column's dimension
+    # is fixed at creation time, so changing this requires a new
+    # migration (and re-embedding every chunk under a new
+    # EMBEDDING_MODEL_VERSION — see EmbeddingService's module docstring;
+    # embeddings from different dimensions/models are never compared).
+    #
+    # EMBEDDING_PROVIDER selects the EmbeddingProvider implementation via
+    # app/embeddings/provider.py::get_embedding_provider() — a
+    # configuration-based boundary, not a hardcoded import of one
+    # provider. "hashing" (the default) is a deterministic, dependency-
+    # free, offline embedding — not a trained semantic model — chosen
+    # specifically so this milestone's tests and evaluation harness never
+    # need network access or a downloaded model (see that module's
+    # docstring for the full rationale and the documented real-model
+    # extension point).
+    EMBEDDING_PROVIDER: str = "hashing"
+    EMBEDDING_MODEL_NAME: str = "sie-hashing-embedder"
+    EMBEDDING_MODEL_VERSION: str = "v1"
+    EMBEDDING_DIMENSIONS: int = 256
+    # Do not embed INSUFFICIENT-quality or empty chunks unless a caller
+    # explicitly opts in (see app/embeddings/embedding_service.py) —
+    # this flag is that one central off-by-default switch, not scattered
+    # per-call-site booleans.
+    EMBED_INSUFFICIENT_QUALITY_CHUNKS: bool = False
+
+    # Retrieval (see app/retrieval/retrieval_service.py). Documented
+    # *initial* defaults calibrated against the deterministic hashing
+    # provider above, the same "not scientifically validated optimal
+    # values" spirit as the chunking settings — a different
+    # EmbeddingProvider produces a different similarity-score
+    # distribution and would need its own recalibration.
+    RETRIEVAL_DEFAULT_TOP_K: int = 5
+    RETRIEVAL_MAX_TOP_K: int = 50
+    # Below this cosine similarity, a result is not returned at all (see
+    # RetrievalService's NO_RELEVANT_EVIDENCE behavior). Calibrated
+    # empirically against HashingEmbeddingProvider: unrelated text
+    # consistently scores ~0.0, genuine topical matches score
+    # ~0.14-0.45 — see tests/test_embedding_provider.py.
+    RETRIEVAL_MIN_SIMILARITY: float = 0.12
+    # Relevance-label bucket boundaries above the minimum — see
+    # RetrievalService's HIGH/MODERATE/LOW labeling. Never called
+    # "confidence" — see the README.
+    RETRIEVAL_MODERATE_SIMILARITY: float = 0.20
+    RETRIEVAL_HIGH_SIMILARITY: float = 0.30
+    # Observability (see app/retrieval/retrieval_service.py). Off by
+    # default — a query string may contain an organization's sensitive
+    # operational detail ("the leak in tank 4 at the north site"), so it
+    # is never written to logs unless a deployment explicitly opts in for
+    # development/debugging. Query *length* and a query-content hash
+    # (not the query itself) are always logged, enough to correlate
+    # requests without exposing content.
+    LOG_RETRIEVAL_QUERY_TEXT: bool = False
+
     # Database
     # Either set DATABASE_URL directly, or set the POSTGRES_* components and
     # let it be assembled below.

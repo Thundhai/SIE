@@ -1,3 +1,6 @@
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+markers = [
+    "postgres: requires a real PostgreSQL + pgvector server (see tests/postgres_support.py); skipped automatically when none is reachable",
+]

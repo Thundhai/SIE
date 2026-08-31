@@ -8,6 +8,7 @@ in tests.
 from app.models.audit_log import AuditLog
 from app.models.base import Base
 from app.models.data_source import DataSource
+from app.models.embedding import KnowledgeChunkEmbedding
 from app.models.identity import Identity
 from app.models.ingested_file import IngestedFile
 from app.models.ingestion_job import IngestionJob
@@ -30,6 +31,7 @@ __all__ = [
     "KnowledgeDocument",
     "KnowledgeDocumentVersion",
     "KnowledgeChunk",
+    "KnowledgeChunkEmbedding",
     "OrganizationMembership",
     "Identity",
     "AuditLog",

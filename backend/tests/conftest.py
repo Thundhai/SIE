@@ -89,6 +89,43 @@ def client() -> Generator[TestClient, None, None]:
         yield test_client
 
 
+@pytest.fixture
+def pg_session() -> Generator[Session, None, None]:
+    """A real PostgreSQL + pgvector session — see tests/postgres_support.py
+    for why embedding/retrieval tests need one distinct from the SQLite
+    `db_session` above (pgvector's `<=>`/`.cosine_distance()` operators
+    only exist on PostgreSQL). Schema is dropped and freshly created for
+    this one test, both before (guarding against leftover data from a
+    previous run or an ad hoc session against the same database) and
+    after. Defined here, not in tests/postgres_support.py, so it's
+    available to any test by parameter name alone via pytest's normal
+    fixture discovery — no import, so no false "redefined name" shadowing
+    warning the way importing a fixture function directly would cause.
+    Every test using this fixture must be marked
+    `@postgres_support.requires_postgres` so it's skipped, not failed,
+    when no real server is reachable.
+    """
+    from sqlalchemy import create_engine, text
+
+    from app.models import Base
+    from tests.postgres_support import PG_TEST_DATABASE_URL
+
+    engine = create_engine(PG_TEST_DATABASE_URL)
+    with engine.begin() as conn:
+        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+    Base.metadata.drop_all(engine)
+    Base.metadata.create_all(engine)
+
+    pg_session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+    session = pg_session_factory()
+    try:
+        yield session
+    finally:
+        session.close()
+        Base.metadata.drop_all(engine)
+        engine.dispose()
+
+
 @pytest.fixture(autouse=True)
 def _ingestion_storage(tmp_path) -> Generator[None, None, None]:
     """Point the ingestion engine's StorageProvider at a fresh per-test

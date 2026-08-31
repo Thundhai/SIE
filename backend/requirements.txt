@@ -9,6 +9,12 @@ email-validator==2.2.0
 python-dotenv==1.0.1
 python-multipart==0.0.32
 
+# Semantic embeddings & retrieval (see app/embeddings/, app/retrieval/).
+# pgvector's SQLAlchemy integration (Vector column type) — the
+# PostgreSQL vector extension itself is enabled per-database by the
+# 0006 migration, not by this package.
+pgvector==0.5.0
+
 # Ingestion format adapters (see app/ingestion/adapters/)
 pypdf==6.16.2
 python-docx==1.2.0
