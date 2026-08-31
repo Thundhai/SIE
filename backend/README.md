@@ -7,7 +7,7 @@ consumer of the SIE API — but it is a consumer, not a dependency. Any
 authorized enterprise application connects the same way: through the
 versioned REST API under `/api/v1`.
 
-Four milestones are implemented so far:
+Five milestones are implemented so far:
 
 * **Foundation v0.1** — core tenancy models (Organization, Site, User,
   DataSource), a REST API, and infrastructure (FastAPI, PostgreSQL,
@@ -27,6 +27,16 @@ Four milestones are implemented so far:
   KnowledgeDocument/KnowledgeDocumentVersion/KnowledgeChunk rows, format
   by format rather than as one plain-text pipeline. See
   [Universal ingestion architecture](#universal-ingestion-architecture)
+  below.
+* **Knowledge Quality & Semantic Chunking Foundation v0.1** — turns
+  normalized, extracted content into well-structured, quality-assessed,
+  fully-attributed `KnowledgeChunk` rows: section-hierarchy detection,
+  structure-aware chunking (headings stay with their content, tables and
+  spreadsheet rows are never flattened into misleading prose), a
+  deterministic extraction-quality assessment kept strictly separate from
+  source authority and verification status, and a full
+  chunk-to-source provenance chain. See [Knowledge Quality & Semantic
+  Chunking Pipeline](#knowledge-quality--semantic-chunking-pipeline)
   below.
 
 The AI/LLM layer, RAG, embeddings, vector search, predictive models,
@@ -267,6 +277,7 @@ new migration on top.
 | GET    | `/api/v1/knowledge/documents/{document_id}`              | Get a knowledge document             |
 | POST   | `/api/v1/knowledge/documents/{document_id}/versions`     | Create a document version            |
 | GET    | `/api/v1/knowledge/documents/{document_id}/versions`     | List a document's versions           |
+| GET    | `/api/v1/knowledge/documents/{document_id}/versions/{version_id}/chunks` | List one version's chunks (read-only — see below) |
 | POST   | `/api/v1/organizations/{organization_id}/members`        | Add a member (`users:manage`)        |
 | GET    | `/api/v1/organizations/{organization_id}/members`        | List members (`users:read`)          |
 | GET    | `/api/v1/organizations/{organization_id}/members/{user_id}` | Get one member (`users:read`)     |
@@ -279,7 +290,12 @@ in practice (development-mode only, no real identity provider connected
 yet) and why the other routes above them still don't, and
 [Universal ingestion architecture](#universal-ingestion-architecture) for
 the ingestion endpoint's own authorization rules (global vs.
-organization knowledge).
+organization knowledge). There is deliberately no endpoint to *create* or
+modify chunks — see [Knowledge Quality & Semantic Chunking
+Pipeline](#knowledge-quality--semantic-chunking-pipeline) for why chunk
+generation is controlled by ingestion processing only, and for the
+tenant-scoping the one read endpoint reuses from its sibling knowledge
+read routes.
 
 ## Data model
 
@@ -753,7 +769,7 @@ rejects it with 415 today.
 
 ### Pipeline architecture
 
-    file bytes -> detect -> validate -> hash -> extract -> normalize -> chunk
+    file bytes -> detect -> validate -> hash -> extract -> normalize -> structure detection
 
 is `app/ingestion/pipeline.py` — pure, DB-independent, directly testable
 (`tests/test_ingestion_pipeline.py`) — called by
@@ -763,6 +779,14 @@ database and the caller's authorized tenant context. New processors don't
 require rewriting the pipeline: a new format is one adapter module plus
 one line in `app/ingestion/adapters/registry.py`'s `_DEFAULT_ADAPTERS`
 tuple.
+
+Chunking — turning that normalized, structure-detected content into
+`KnowledgeChunk` rows — happens one layer further up, in
+`app/services/chunking_service.py`, after a `KnowledgeDocumentVersion`
+already exists. See [Knowledge Quality & Semantic Chunking
+Pipeline](#knowledge-quality--semantic-chunking-pipeline) below for why
+that stage needs to live there rather than in this DB-independent module,
+and for everything downstream of normalization.
 
 ### Format adapter interface
 
@@ -791,6 +815,9 @@ NormalizedContent
 ├── row_number           nullable — CSV, XLSX, JSON record arrays, XML elements
 ├── slide_number         nullable — PPTX
 ├── section_title        nullable — DOCX, PDF (best-effort)
+├── section_path         nullable — the section heading breadcrumb (see the Knowledge
+│                        Quality pipeline below); populated by structure detection,
+│                        not by the adapters themselves
 ├── metadata             format-specific extras (columns/values, speaker notes, tables, ...)
 └── source_reference     human-readable locator, e.g. "Sheet: Incident Register, Row 124"
 ```
@@ -798,14 +825,12 @@ NormalizedContent
 This is not an attempt to make every format mean the same thing — a
 spreadsheet row and a PDF page are different things — it's a common
 *envelope* that preserves whichever location fields are meaningful for
-the format that produced it. A `ChunkingStrategy`
-(`app/ingestion/chunking.py`) turns a list of these into `KnowledgeChunk`
-rows: only a simple, deterministic paragraph/size-based
-`SimpleChunkingStrategy` is implemented (no semantic/embedding-aware
-chunking — out of scope, see below), but every location field is carried
-straight through into each chunk's `metadata`, split or not, so a chunk
-still says "page 47" or "Sheet: Incident Register, Row 124" no matter how
-it was cut.
+the format that produced it. What turns a list of these into
+`KnowledgeChunk` rows is the [Knowledge Quality & Semantic Chunking
+Pipeline](#knowledge-quality--semantic-chunking-pipeline) below — every
+location field on this envelope is carried through (directly, or into a
+chunk's `metadata`) all the way to the chunk, so a chunk still says "page
+47" or "Sheet: Incident Register, Row 124" no matter how it was cut.
 
 ### Storage architecture
 
@@ -837,6 +862,13 @@ is never returned by the API as a raw path — only as this opaque key.
 ### Provenance
 
     File -> Ingestion Job -> Document -> Document Version -> Normalized Content -> Chunk
+
+(See [Knowledge Quality & Semantic Chunking
+Pipeline](#knowledge-quality--semantic-chunking-pipeline) below for what
+sits between "Normalized Content" and "Chunk" — structure detection,
+Knowledge Units, and the chunking strategy itself — and for how each
+chunk carries this full chain back down to a concrete page/section/
+slide/row, not just a document-level reference.)
 
 `IngestedFile` and `IngestionJob` mirror the KnowledgeDocument/
 KnowledgeDocumentVersion current-state/history split already used
@@ -926,13 +958,268 @@ it calls `authorization_service.can()` directly rather than the
 path-based `require_permission` dependency used elsewhere — see
 `app/api/v1/ingestion.py`'s module docstring.
 
+## Knowledge Quality & Semantic Chunking Pipeline
+
+    Ingested File -> Ingestion Job -> Knowledge Document -> Document Version
+        -> Normalized Content -> Structure Detection -> Knowledge Units
+        -> Semantic Chunking -> Knowledge Chunks -> Provenance
+
+This is the stage between [Universal ingestion
+architecture](#universal-ingestion-architecture)'s normalized content and
+a citable `KnowledgeChunk` row. **It is explicitly not the embeddings /
+vector search / RAG layer** — no embedding is computed, no vector column
+exists, nothing here is aware that a future retrieval step will exist.
+The objective is narrower and structural: turn extracted content into
+well-structured, well-attributed, quality-assessed units suitable for
+that future layer to build on, without building it.
+
+### Why chunking needs the database, and why it isn't in `pipeline.py`
+
+`app/ingestion/pipeline.py` is deliberately pure and DB-independent (see
+above) — but a chunk needs a real `document_id`/`source_id`/
+`organization_id` and an idempotency check against an already-created
+`KnowledgeDocumentVersion`, neither of which exist yet at that layer.
+`app/services/chunking_service.py` is the one place `KnowledgeUnit`s are
+built and `StructureAwareChunkingStrategy` is invoked, called only from
+`app/services/ingestion_service.py` after the version row exists. It
+knows nothing about LLMs, embeddings, or vector databases — those
+concerns don't appear anywhere in this call chain.
+
+### Why `KnowledgeUnit` is in-memory, not a table
+
+`app/ingestion/knowledge_unit.py::KnowledgeUnit` is the milestone's
+"conceptual intermediate representation" between normalized content and a
+chunk — but it is a plain dataclass, never persisted. It has no
+independent lifecycle (nothing ever queries "the knowledge units for this
+version" as a stable resource the way it queries chunks or documents); a
+persisted version would duplicate most of `KnowledgeChunk`'s own columns
+for no benefit; and it's a natural continuation of a pattern already used
+one stage earlier (`NormalizedContent` itself is an in-memory Pydantic
+model, not a table). If a future debugging/QA view ever needs to inspect
+pre-chunking structure, `KnowledgeDocumentVersion.extracted_text` and the
+original stored file already retain enough to reconstruct it.
+
+### Why different content types need different chunking strategies
+
+A PDF/DOCX/TXT/RTF page is prose: paragraphs that can be packed together
+up to a target size, split at sentence boundaries only when one paragraph
+alone is too large, with a small amount of trailing-text overlap across a
+split so neither half loses context. A PPTX slide is conceptually
+discrete — "Slide 17" must always mean exactly slide 17's own chunk(s),
+never a blend of slide 16 and 17's text, even though both are short plain
+text — so slides are never merged across their boundary
+(`KnowledgeUnit.is_atomic`). A spreadsheet row (XLSX/CSV) is a structured
+record, not prose: `StructureAwareChunkingStrategy` never concatenates an
+entire sheet into one blob of text and chunks that blob — each row keeps
+its own `sheet_name`/`row_number`/`source_reference`, and if a single row
+is too large it splits on field boundaries (never mid-value) while every
+fragment still carries the same row identity
+(`row_part`/`row_part_count` in `chunk_metadata`). A table (e.g. a DOCX
+table) is preserved as a row-structured block — `"Equipment | Inspection
+Interval"`, not flattened into a sentence — and if its own extraction was
+incomplete, that is recorded as a quality warning rather than silently
+presented as complete. An image with no OCR result is still a real,
+citable chunk (empty content, `INSUFFICIENT` quality, `no_ocr_text_available`)
+— never a fabricated description of content nobody actually read. Only
+`StructureAwareChunkingStrategy` is implemented this milestone; future
+strategies named but intentionally not built: `SemanticChunkingStrategy`,
+`TableAwareChunkingStrategy`, `LegalDocumentChunkingStrategy`,
+`SafetyProcedureChunkingStrategy` — all would implement the same
+`ChunkingStrategy` interface (`app/ingestion/chunking.py`), so
+`chunking_service.py` never needs to change to add one.
+
+### Why spreadsheet rows never get prose-style overlap
+
+Overlap (repeating a small tail of one chunk's text at the start of the
+next) helps prose recover context lost at a mid-paragraph cut. Applying
+that to structured records would literally duplicate row data — two
+chunks would each claim to (partially) contain the same incident record,
+which is never correct. `StructureAwareChunkingStrategy` applies overlap
+only within a run of prose text units; structured-record and table
+splitting use exact field/row boundaries and zero overlap, always
+(`tests/test_chunking_structure.py::test_structured_records_are_never_duplicated_for_overlap`).
+
+### Section hierarchy detection
+
+`app/ingestion/structure.py::detect_structure` walks a document's
+normalized content maintaining a heading stack, and builds a
+`section_path` breadcrumb from it — the milestone's own example: a
+`"Fall Protection"` chunk under `"Working at Height"` gets
+`section_title="Fall Protection"`,
+`section_path=["Working at Height", "Fall Protection"]`. This only works
+where an adapter actually signals heading level (currently DOCX, via
+Word's built-in Heading styles); formats with only a weaker signal (a
+PDF's first line of a page, currently used as a low-confidence guess) get
+a single-element path and `structure_confidence: "low"`; formats with no
+heading signal at all (CSV, XLSX, images) get `structure_confidence:
+"none"`. **No format's structure is guessed beyond what its adapter can
+actually support** — a low-confidence guess is recorded as low-confidence
+metadata, never presented as a confident hierarchy.
+
+### Configurable chunk sizing
+
+`MIN_CHUNK_CHARACTERS` (200), `TARGET_CHUNK_CHARACTERS` (1000),
+`MAX_CHUNK_CHARACTERS` (1800), `OVERLAP_CHARACTERS` (150) —
+`app/core/config.py`, read through `ChunkingSettings.from_app_settings()`
+(`app/ingestion/chunking.py`). **These are documented initial defaults,
+not scientifically validated optimal values** — character-based, not
+token-based, since no tokenizer dependency is introduced by this
+milestone (a future embedding layer would introduce one matched to its
+own model). Priority order when packing content into a chunk: headings
+staying attached to the content they introduce > section boundaries >
+paragraph boundaries > list cohesion > tables/structured records as
+atomic blocks > only then a character-limit split — never blindly every
+N characters, and never mid-sentence unless a single unit alone exceeds
+the limit.
+
+### Deterministic, reproducible generation
+
+Same normalized content + same `ChunkingSettings` → the same chunk
+sequence, every time (`tests/test_chunking_structure.py::test_chunking_is_deterministic_for_the_same_input_and_settings`).
+Nothing in the strategy is random, time-dependent, or model-based.
+`app/services/chunking_service.py::generate_chunks` is additionally
+idempotent at the persistence layer: a `KnowledgeDocumentVersion` that
+already has chunks is returned as-is rather than re-chunked (reusing the
+Knowledge Foundation's existing `content_hash`-based version
+deduplication — reprocessing the same file never creates a duplicate
+version *or* duplicate chunks). This determinism is what makes future
+evidence reproducible: a citation captured today against a given version
+will still resolve to the same chunk text if that version is ever
+re-chunked (e.g. after a bug fix), since a version that already has
+chunks is never silently regenerated — a real change in chunking logic
+would need its own explicit re-chunking path, not implemented here.
+
+### Quality assessment — extraction/structure quality, not truth
+
+`app/ingestion/quality.py` computes a deterministic `QualityStatus`
+(`HIGH`/`MEDIUM`/`LOW`/`INSUFFICIENT`) from simple, explainable signals:
+text length, whether structural metadata (page/section/sheet/slide) was
+available, whether OCR was needed but never ran, whether extraction was
+only partial, whether a table's extraction was flagged incomplete, and
+whether content came back suspiciously empty. **This is an extraction/
+structure quality indicator — it says nothing about whether the
+underlying safety information is true, correct, or complete, and it is
+never called a "truth score" anywhere in this codebase.** Two distinct
+assessment functions exist on purpose: `assess_unit_quality` scores one
+piece of content standalone (useful in its own right — e.g. spotting
+which source pages extracted poorly); `assess_merged_quality` is what a
+final chunk's quality is actually computed from, re-running the same
+checks against the chunk's *real* final text once several units have
+been packed together, rather than blindly unioning each ingredient's own
+pre-merge assessment (which would otherwise mislabel a perfectly good
+combined chunk as low-quality just because one short fragment that went
+into it was).
+
+### Source authority, verification status, and extraction quality are three separate things
+
+The milestone's own worked example, and a hard rule throughout this
+codebase: **a highly authoritative, `VERIFIED` regulation can still have
+`LOW` extraction quality** if it was ingested from a scanned PDF with no
+text layer; a low-authority internal note can have `HIGH` extraction
+quality if it came from a clean DOCX. These are never combined into one
+score:
+
+* **Source authority** (`KnowledgeSource.authority_level`) — set by a
+  human when the source is registered; how authoritative the *publisher*
+  is, independent of how any particular file happened to parse.
+* **Verification status** (`KnowledgeSource.verification_status`) — SIE's
+  own governance workflow state. **Ingestion and chunking never touch
+  this field.** A newly ingested source is never auto-marked `VERIFIED`
+  just because it chunked successfully, and chunking a source that is
+  already `VERIFIED` never changes that status either
+  (`tests/test_chunking_quality_and_scope.py::test_ingestion_never_changes_source_verification_status`,
+  `::test_ingestion_never_marks_a_source_verified`).
+* **Extraction/structure quality** (`KnowledgeChunk.quality_status`, from
+  `app/ingestion/quality.py` above) — this milestone's own concern, and
+  the only one of the three chunking ever computes or writes.
+
+### Chunk shape, tenant scope, and provenance
+
+`KnowledgeChunk` (`app/models/knowledge_chunk.py`) carries: denormalized
+`document_id`/`source_id`/`organization_id` (same precedent as
+`KnowledgeDocument.organization_id` — copied at write time so a chunk can
+be tenant-filtered and looked up directly, without joining back through
+its version and document on every query — never an independent source of
+truth); `content_type`, `page_number`/`sheet_name`/`row_number`/
+`slide_number`, `section_title`/`section_path`, `source_reference`,
+`extraction_method`, and `quality_status` as real, indexable columns
+(promoted out of free-form JSON specifically so a future retrieval filter
+can query on them directly); and `chunk_metadata` (JSON) for
+`quality_reasons`, table/row split-part numbering, and a
+**point-in-time snapshot** of fields still owned elsewhere
+(`language` from the document, `jurisdiction`/`industry_sector`/
+`authority_level`/`verification_status` from the source,
+`publication_date`/`effective_date` from the version) — recorded once at
+chunk-creation time rather than copied as live columns, because copying
+them as real columns would mean every existing chunk going stale (or
+needing a bulk-update fan-out this milestone has no background-worker
+infrastructure to run) the moment a source's metadata changes later; the
+owning table's live value is always still queryable directly.
+`organization_id` follows the source's own GLOBAL/ORGANIZATION scope all
+the way down — a GLOBAL source's chunks always have `organization_id =
+NULL`, an ORGANIZATION source's chunks always carry that organization's
+id, and cross-organization access to another organization's chunks is
+structurally impossible via the one read endpoint (see below).
+
+Concrete `source_reference` examples per format, exactly as the milestone
+specifies: `"Page 1"` (PDF), a `section_path` breadcrumb (DOCX),
+`"Slide 1"` (PPTX), `"Sheet: Incident Register, Row 2"` (XLSX),
+`"Row 2"` (CSV) — see
+`tests/test_chunk_provenance_multiformat.py` for the full per-format
+assertions, and `app/services/knowledge_provenance_service.py::get_chunk_provenance`
+for how a chunk's id resolves the complete
+`Chunk -> Document Version -> Document -> Source` chain (extending
+unchanged to `Ingested File -> Ingestion Job` via
+`get_ingestion_provenance`, as already documented above). Versioning is
+untouched by this milestone: old chunks stay with their old
+`KnowledgeDocumentVersion`, a new version's chunks are new rows entirely,
+and nothing ever overwrites a historical chunk.
+
+### The one read endpoint, and why there's no write endpoint
+
+`GET /api/v1/knowledge/documents/{document_id}/versions/{version_id}/chunks`
+is the only chunk-related API route. There is no create/update/delete
+route for chunks anywhere: **chunk generation is controlled by ingestion
+processing only** (`chunking_service.generate_chunks`, called from
+`ingestion_service`), never by a direct client request. The read endpoint
+was added rather than kept service-only because it costs no new
+authorization mechanism: it reuses exactly the same tenant check every
+sibling knowledge read route in `app/api/v1/knowledge.py` already uses —
+`get_knowledge_document_or_404` requires the caller to already know the
+document's own `organization_id` (or omit it for a GLOBAL document) to
+resolve the document at all, so a chunk can never be reached via the
+wrong organization; `get_for_document` applies that same containment one
+level further, so a `version_id` that exists but doesn't belong to the
+resolved document 404s rather than leaking a different document's chunks
+(`tests/test_knowledge_chunks_api.py`).
+
+### Future compatibility, deliberately not built yet
+
+Every chunk carries the fields a future retrieval layer will need to
+filter by — organization/scope (`organization_id`), source
+(`source_id`), document/version (`document_id`/`document_version_id`),
+content type, page/section/sheet/slide/row, industry/jurisdiction
+(in the metadata snapshot), verification status (same), and date
+(`publication_date`/`effective_date`, same) — without any of that
+retrieval layer existing. **No embedding is computed. No vector column
+exists on `KnowledgeChunk` or anywhere else. No pgvector extension is
+enabled. No semantic/similarity search, no RAG, and no LLM integration
+exist in this codebase.** Attaching an embedding to a chunk later is
+additive — a new nullable column/table referencing `KnowledgeChunk.id` —
+not a redesign of anything built in this milestone.
+
 ## Configuration
 
 All configuration is environment-based (`app/core/config.py`, backed by
 Pydantic Settings and a local `.env` file — see `.env.example`). No
 secrets are committed; `.env` is git-ignored. `DEV_MODE` (default
 `false`) is the one identity-related setting — see
-[Identity architecture](#identity-architecture) above.
+[Identity architecture](#identity-architecture) above. `MIN_CHUNK_CHARACTERS`
+(200) / `TARGET_CHUNK_CHARACTERS` (1000) / `MAX_CHUNK_CHARACTERS` (1800) /
+`OVERLAP_CHARACTERS` (150) configure chunk sizing — documented initial
+defaults, not scientifically validated ones; see [Knowledge Quality &
+Semantic Chunking Pipeline](#knowledge-quality--semantic-chunking-pipeline)
+above.
 
 ## Deliberate scope boundaries (v0.1)
 
@@ -953,7 +1240,12 @@ invitations) — all of that is still true of this codebase. Similarly, see
 [Universal ingestion architecture](#universal-ingestion-architecture) for
 what the ingestion engine does and does not implement (real OCR
 execution, semantic chunking, and a JSON/XML schema-mapping layer are
-architected for but not built).
+architected for but not built), and [Knowledge Quality & Semantic
+Chunking Pipeline](#knowledge-quality--semantic-chunking-pipeline) for
+the explicit statement that embeddings, pgvector, vector search, and RAG
+are not implemented by this milestone either — only the structural
+groundwork (quality-assessed, well-attributed `KnowledgeChunk` rows) a
+future embedding layer would be built on top of.
 
 ## Known gaps / next phase
 
@@ -988,12 +1280,13 @@ architected for but not built).
 * **No structured logging, tracing, or rate limiting.**
 * **No CI pipeline** wired up in this repository yet to run `pytest`
   automatically on push.
-* **No chunk HTTP endpoints.** `KnowledgeChunkService.create_many` is now
-  called by `app/services/ingestion_service.py` on every successful
-  ingestion (see [Universal ingestion architecture](#universal-ingestion-architecture)),
-  but there is still no route to create, list, or inspect chunks
-  directly — only indirectly, via the ingestion response's `chunk_count`
-  and the existing knowledge read endpoints.
+* **Only one chunk HTTP endpoint, and it's read-only.**
+  `app/services/chunking_service.py` is called by
+  `app/services/ingestion_service.py` on every successful ingestion (see
+  [Knowledge Quality & Semantic Chunking
+  Pipeline](#knowledge-quality--semantic-chunking-pipeline)); the only
+  route is `GET .../versions/{version_id}/chunks` — there is no
+  create/update/delete route for chunks anywhere, by design.
 * **No OCR execution, table extraction, or transcription.** All
   architected for (`app/ingestion/ocr.py`, `PDFAdapter`'s explicit
   `table_extraction: "not_attempted"`, the "Audio/Video" row in the
@@ -1004,10 +1297,19 @@ architected for but not built).
   safety data a payload represents (an incident, an inspection, ...) and
   mapping it to canonical fields is future work, same as for CSV/XLSX
   rows.
-* **No semantic chunking.** `SimpleChunkingStrategy` is deterministic
-  paragraph/size-based splitting; a future `ChunkingStrategy`
-  implementation can replace it without changing the interface or any
-  call site.
+* **No semantic (embedding-aware) chunking, and no embeddings/vector
+  search/RAG at all.** `StructureAwareChunkingStrategy` is deterministic,
+  structure-based splitting — see [Knowledge Quality & Semantic Chunking
+  Pipeline](#knowledge-quality--semantic-chunking-pipeline). A future
+  `SemanticChunkingStrategy` (or `TableAwareChunkingStrategy`,
+  `LegalDocumentChunkingStrategy`, `SafetyProcedureChunkingStrategy`) can
+  be added as another `ChunkingStrategy` implementation without changing
+  the interface or any call site; none of that, nor any embedding
+  computation, vector column, or retrieval layer, exists yet.
+* **DOCX list-item detection covers Word's built-in styles only.**
+  `app/ingestion/adapters/docx_adapter.py` detects "List Bullet"/"List
+  Number" paragraph styles, not manually-formatted lists (a paragraph
+  that merely starts with a hyphen or "1)" without that style applied).
 * **No background ingestion workers.** `IngestionService.ingest()` runs
   synchronously in the request; `IngestionJob`'s state machine already
   models an async job's lifecycle for when that changes (see
