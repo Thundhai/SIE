@@ -7,7 +7,7 @@ consumer of the SIE API — but it is a consumer, not a dependency. Any
 authorized enterprise application connects the same way: through the
 versioned REST API under `/api/v1`.
 
-Three milestones are implemented so far:
+Four milestones are implemented so far:
 
 * **Foundation v0.1** — core tenancy models (Organization, Site, User,
   DataSource), a REST API, and infrastructure (FastAPI, PostgreSQL,
@@ -21,15 +21,23 @@ Three milestones are implemented so far:
   authenticate real users and machine clients against once a real
   identity provider is connected. See
   [Identity architecture](#identity-architecture) below.
+* **Universal Knowledge & Data Ingestion Engine v0.1** — turns an
+  uploaded file (PDF, DOCX, TXT, RTF, CSV, XLSX, PPTX, with an
+  architectural boundary for JSON/XML/images) into
+  KnowledgeDocument/KnowledgeDocumentVersion/KnowledgeChunk rows, format
+  by format rather than as one plain-text pipeline. See
+  [Universal ingestion architecture](#universal-ingestion-architecture)
+  below.
 
-The AI/LLM layer, RAG, embeddings, vector search, predictive models, and
-Safelytic integration are all out of scope so far and are stubbed out only
-as empty, documented package placeholders (`app/intelligence`,
-`app/ingestion`, `app/analytics`, `app/predictions`, `app/governance`) so
+The AI/LLM layer, RAG, embeddings, vector search, predictive models,
+OCR execution, transcription, and Safelytic integration are all out of
+scope so far and are stubbed out only as empty, documented package
+placeholders (`app/intelligence`, `app/analytics`, `app/predictions`,
+`app/governance`) or interface-only modules (`app/ingestion/ocr.py`) so
 later phases have a predictable home without a restructure. **No AI
 training, embeddings, RAG, or predictive analytics exist in this codebase
-yet** — the knowledge foundation below stores and structures content for
-that future work; it does not perform it.
+yet** — the knowledge foundation and ingestion engine below store and
+structure content for that future work; neither performs it.
 
 ## Architecture
 
@@ -40,25 +48,32 @@ backend/
       deps.py         Organization path-resolution dependency (pre-identity)
       deps_auth.py     Identity/authorization dependencies (see Identity architecture)
       v1/            Versioned routes (health, organizations, sites,
-                      data-sources, knowledge, memberships)
+                      data-sources, knowledge, memberships, ingestion)
     core/           Configuration (Pydantic Settings) and DB engine/session setup
     models/         SQLAlchemy 2.x ORM models (Organization, Site, User,
                      DataSource, KnowledgeSource, KnowledgeDocument,
                      KnowledgeDocumentVersion, KnowledgeChunk,
-                     OrganizationMembership, Identity, AuditLog)
+                     OrganizationMembership, Identity, AuditLog,
+                     IngestedFile, IngestionJob)
     schemas/        Pydantic v2 request/response schemas
     services/       Tenant-scoped repository/service layer, plus
                      permissions/authorization/tenant-context/identity/audit
-                     services (see Identity architecture)
+                     services (see Identity architecture) and
+                     ingestion_service.py (see Universal ingestion architecture)
+    ingestion/      The ingestion engine itself — detection, format
+                     adapters, storage, chunking, OCR interface (see
+                     Universal ingestion architecture below); no longer
+                     an empty placeholder as of this milestone
     intelligence/   Reserved for a future AI/LLM layer
-    ingestion/      Reserved for future data ingestion pipelines (crawling,
-                     document processing workers, chunk extraction)
     analytics/      Reserved for future analytics
     predictions/    Reserved for future predictive models
     governance/     Reserved for future governance/compliance features
     main.py         FastAPI app instance and router wiring
   migrations/       Alembic migration environment and versions
   tests/            pytest suite (API + service-layer tests, incl. tenant isolation)
+    fixtures/ingestion/  Small, synthetic PDF/DOCX/XLSX/CSV/PPTX/RTF/TXT
+                          files used by the ingestion tests — see that
+                          directory's own README.md
   requirements.txt
   Dockerfile
   docker-compose.yml
@@ -67,12 +82,13 @@ backend/
 ```
 
 Note: the empty `app/knowledge/` placeholder package from Foundation v0.1
-has been removed — the knowledge domain now lives in `app/models`,
+has been removed — the knowledge domain lives in `app/models`,
 `app/schemas`, `app/services`, and `app/api/v1/knowledge.py` alongside
 every other resource, matching how Site/DataSource are organized, rather
-than in its own package. The remaining placeholders (`app/intelligence`,
-`app/ingestion`, `app/analytics`, `app/predictions`, `app/governance`)
-are untouched.
+than in its own package. `app/ingestion/` was a similar empty placeholder
+through the first three milestones; this one is where it became real
+code. The remaining placeholders (`app/intelligence`, `app/analytics`,
+`app/predictions`, `app/governance`) are still untouched.
 
 **Request flow:** router (`app/api/v1/*`) → dependency resolves and
 validates the organization from the URL (`app/api/deps.py`) → service
@@ -195,6 +211,14 @@ behaves identically and the suite runs with no external services. This
 keeps the test suite fast and dependency-free while PostgreSQL remains the
 target production database, exercised through Alembic and Docker Compose.
 
+Ingestion tests use real small fixture files
+(`tests/fixtures/ingestion/`, PDF/DOCX/XLSX/CSV/PPTX/RTF/TXT — see that
+directory's own README.md for what each one is and how it was generated)
+rather than strings standing in for file content, and a per-test
+temporary directory (`tmp_path`, via an autouse fixture in
+`tests/conftest.py`) rather than the real `var/ingested_files` storage
+path.
+
 ## Database migrations
 
 Migrations are managed with Alembic (`migrations/`). The database URL is
@@ -213,15 +237,17 @@ alembic revision --autogenerate -m "describe the change"
 alembic downgrade -1
 ```
 
-Three migrations exist so far: `0001` (Foundation v0.1 — organizations,
+Four migrations exist so far: `0001` (Foundation v0.1 — organizations,
 sites, users, data_sources), `0002` (Knowledge Foundation v0.1 —
 knowledge_sources, knowledge_documents, knowledge_document_versions,
-knowledge_chunks), and `0003` (Identity & Access Foundation v0.1 —
+knowledge_chunks), `0003` (Identity & Access Foundation v0.1 —
 organization_memberships, identities, audit_logs, plus a compatibility
 change to the `users` table — see
-["Compatibility concerns"](#identity-architecture) below). Earlier
-migrations are never modified; new schema changes are always a new
-migration on top.
+["Compatibility concerns"](#identity-architecture) below), and `0004`
+(Universal Knowledge & Data Ingestion Engine v0.1 — ingested_files,
+ingestion_jobs; purely additive, no changes to any existing table).
+Earlier migrations are never modified; new schema changes are always a
+new migration on top.
 
 ## API endpoints
 
@@ -244,12 +270,16 @@ migration on top.
 | POST   | `/api/v1/organizations/{organization_id}/members`        | Add a member (`users:manage`)        |
 | GET    | `/api/v1/organizations/{organization_id}/members`        | List members (`users:read`)          |
 | GET    | `/api/v1/organizations/{organization_id}/members/{user_id}` | Get one member (`users:read`)     |
+| POST   | `/api/v1/knowledge/ingestion`                             | Upload and ingest a file (`knowledge:manage`) |
 
-The three membership endpoints are the one place in this codebase that
-requires authentication and a permission check today — see
-[Identity architecture](#identity-architecture) for what that means in
-practice (development-mode only, no real identity provider connected
-yet) and why the routes above them still don't.
+The membership endpoints and the ingestion endpoint are the routes in
+this codebase that require authentication and a permission check today —
+see [Identity architecture](#identity-architecture) for what that means
+in practice (development-mode only, no real identity provider connected
+yet) and why the other routes above them still don't, and
+[Universal ingestion architecture](#universal-ingestion-architecture) for
+the ingestion endpoint's own authorization rules (global vs.
+organization knowledge).
 
 ## Data model
 
@@ -262,14 +292,22 @@ yet) and why the routes above them still don't.
   unique), `name`, `status`, an optional `organization_id` (a convenience
   default organization, not an access grant), and an optional
   `platform_role`.
-* **DataSource** — a system SIE ingests from (ingestion itself is not
-  implemented yet). Adds `organization_id`, `source_type`, `last_sync_at`.
+* **DataSource** — a reference to an external system SIE may one day sync
+  with directly (an EHS platform, an ERP, an IoT feed — see the Identity
+  architecture's "machine clients" note). Adds `organization_id`,
+  `source_type`, `last_sync_at`. Distinct from — and not used by — the
+  file-upload ingestion engine below, which reads standalone files, not
+  external systems.
 * **KnowledgeSource, KnowledgeDocument, KnowledgeDocumentVersion,
   KnowledgeChunk** — the knowledge foundation; see
   [Knowledge architecture](#knowledge-architecture) below for the full
   field list and design.
 * **OrganizationMembership, Identity, AuditLog** — the identity & access
   foundation; see [Identity architecture](#identity-architecture) below.
+* **IngestedFile, IngestionJob** — the ingestion engine's own file
+  metadata and per-attempt job history; see
+  [Universal ingestion architecture](#universal-ingestion-architecture)
+  below.
 
 All primary keys are UUIDs generated application-side. All timestamps are
 timezone-aware and stored in UTC.
@@ -657,6 +695,237 @@ security requirements this milestone was built under, no audit call
 anywhere in this codebase logs a password, token, or secret — there
 aren't any in this schema to log.
 
+## Universal ingestion architecture
+
+    INPUT
+        -> File/type detection
+        -> Validation
+        -> Hashing
+        -> Source/document association
+        -> Format adapter
+        -> Content extraction
+        -> Structure detection
+        -> Normalization
+        -> Quality checks
+        -> Persistence
+        -> Provenance
+
+This is how a file uploaded to `POST /api/v1/knowledge/ingestion` becomes
+`KnowledgeDocument` / `KnowledgeDocumentVersion` / `KnowledgeChunk` rows.
+The core architectural principle: **different input formats are
+interpreted differently, not flattened into plain text.** A PDF's pages,
+a spreadsheet's rows and columns, and a presentation's slides and speaker
+notes are different kinds of structure, and this engine keeps them that
+way all the way down to the chunk, rather than reducing every format to
+an undifferentiated block of text.
+
+### Supported formats
+
+| Format        | Support in this milestone | Extraction approach                          | Structured data | Future |
+|---------------|---------------------------|-----------------------------------------------|------------------|--------|
+| PDF           | Yes (`PDFAdapter`)        | Text layer per page (`pypdf`); OCR not run     | No               | Table extraction, OCR for scanned pages |
+| DOCX          | Yes (`DOCXAdapter`)       | Document-order paragraphs/headings/tables (`python-docx`) | No   | — |
+| TXT           | Yes (`TXTAdapter`)        | Direct decode                                  | No               | — |
+| RTF           | Yes (`RTFAdapter`)        | `striprtf` (pure Python, no shell-out)         | No               | — |
+| CSV           | Yes (`CSVAdapter`)        | Delimiter/header sniffing, one record per row  | Yes              | — |
+| XLSX          | Yes (`XLSXAdapter`)       | One record per row per worksheet (`openpyxl`)  | Yes              | — |
+| PPTX          | Yes (`PPTXAdapter`)       | Title/text/notes/tables per slide (`python-pptx`) | Partial (tables) | — |
+| DOC           | No adapter (detected only) | —                                             | —                | Adapter |
+| ODT           | No adapter (detected only) | —                                             | —                | Adapter |
+| XLS           | No adapter (detected only) | —                                             | —                | Adapter |
+| ODS           | No adapter (detected only) | —                                             | —                | Adapter |
+| PPT           | No adapter (detected only) | —                                             | —                | Adapter |
+| ODP           | No adapter (detected only) | —                                             | —                | Adapter |
+| JSON          | Architecture + basic parsing (`JSONAdapter`) | Validate + split a top-level record array; no schema mapping | Yes | Schema identification, canonical mapping |
+| XML           | Architecture + basic parsing (`XMLAdapter`), via `defusedxml` for XXE/entity-expansion safety | Validate + one record per root child; no schema mapping | Yes | Schema identification, canonical mapping |
+| HTML          | Not implemented            | —                                             | —                | Controlled web-page ingestion (not unrestricted crawling) |
+| JPG/JPEG      | Detected, metadata only (`ImageAdapter`) | Dimensions/format via Pillow; no OCR | No               | OCR (`app/ingestion/ocr.py`) |
+| PNG           | Detected, metadata only (`ImageAdapter`) | Same as JPG                          | No               | OCR |
+| TIFF          | Detected, metadata only (`ImageAdapter`) | Same as JPG                          | No               | OCR |
+| EML / MSG     | Not implemented            | —                                             | —                | Adapter |
+| MP3/WAV/MP4/… | Not implemented            | —                                             | —                | Transcription |
+
+"Detected only" means `app/ingestion/detection.py` recognizes the
+extension/media type (so a future ingestion response could say "DOC
+recognized but not yet supported" rather than "unknown file"), but no
+`DocumentAdapter` is registered for it, so `POST /ingestion` still
+rejects it with 415 today.
+
+### Pipeline architecture
+
+    file bytes -> detect -> validate -> hash -> extract -> normalize -> chunk
+
+is `app/ingestion/pipeline.py` — pure, DB-independent, directly testable
+(`tests/test_ingestion_pipeline.py`) — called by
+`app/services/ingestion_service.py`, which supplies the remaining stages
+(source/document association, persistence, provenance) that need the
+database and the caller's authorized tenant context. New processors don't
+require rewriting the pipeline: a new format is one adapter module plus
+one line in `app/ingestion/adapters/registry.py`'s `_DEFAULT_ADAPTERS`
+tuple.
+
+### Format adapter interface
+
+Every adapter (`app/ingestion/adapters/*.py`) implements the same small
+interface (`DocumentAdapter` in `adapters/base.py`):
+
+    detect(media_type, extension) -> bool
+    validate(file_bytes, filename) -> list[str]        # warnings, or raises for a hard failure
+    extract(file_bytes) -> ExtractionResult             # format-specific parsing
+    normalize(extraction) -> list[NormalizedContent]     # translation into the common shape
+
+`validate`/`extract` are separate steps specifically so a format
+library's own parsing failures (a corrupt PDF, a malformed workbook) are
+caught and reported as a failed ingestion job rather than crashing the
+request — see "Failure handling" below.
+
+### Normalized content model
+
+```
+NormalizedContent
+├── content_type        (text | table | image | structured_record)
+├── text
+├── title                nullable
+├── page_number          nullable — PDF
+├── sheet_name           nullable — XLSX
+├── row_number           nullable — CSV, XLSX, JSON record arrays, XML elements
+├── slide_number         nullable — PPTX
+├── section_title        nullable — DOCX, PDF (best-effort)
+├── metadata             format-specific extras (columns/values, speaker notes, tables, ...)
+└── source_reference     human-readable locator, e.g. "Sheet: Incident Register, Row 124"
+```
+
+This is not an attempt to make every format mean the same thing — a
+spreadsheet row and a PDF page are different things — it's a common
+*envelope* that preserves whichever location fields are meaningful for
+the format that produced it. A `ChunkingStrategy`
+(`app/ingestion/chunking.py`) turns a list of these into `KnowledgeChunk`
+rows: only a simple, deterministic paragraph/size-based
+`SimpleChunkingStrategy` is implemented (no semantic/embedding-aware
+chunking — out of scope, see below), but every location field is carried
+straight through into each chunk's `metadata`, split or not, so a chunk
+still says "page 47" or "Sheet: Incident Register, Row 124" no matter how
+it was cut.
+
+### Storage architecture
+
+```
+StorageProvider
+├── save(content_hash, extension, data) -> storage_reference
+├── retrieve(storage_reference) -> bytes
+├── delete(storage_reference) -> None
+└── exists(storage_reference) -> bool
+```
+
+No uploaded file's bytes are ever stored in PostgreSQL — `IngestedFile`
+and `KnowledgeDocumentVersion` both only carry a `storage_reference`
+string. `LocalFilesystemStorageProvider`
+(`app/ingestion/storage.py`) is the only implementation in this
+milestone, explicitly for local development; a production S3/Azure
+Blob/GCS-backed implementation is future work that satisfies the same
+interface, swapped in at `get_storage_provider()` (the single call site
+every other module uses) without touching any ingestion logic. Storage
+keys are derived entirely from the content hash and a validated
+extension (`<hash[:2]>/<hash[2:4]>/<hash><ext>`) — never from the
+caller-supplied filename — which is what makes path traversal
+structurally impossible rather than merely filtered: there is no code
+path where an uploaded filename becomes part of a filesystem path.
+`retrieve`/`delete`/`exists` additionally reject any reference that
+doesn't match that exact shape, as defense in depth. `storage_reference`
+is never returned by the API as a raw path — only as this opaque key.
+
+### Provenance
+
+    File -> Ingestion Job -> Document -> Document Version -> Normalized Content -> Chunk
+
+`IngestedFile` and `IngestionJob` mirror the KnowledgeDocument/
+KnowledgeDocumentVersion current-state/history split already used
+elsewhere in this schema: a file's own status reflects its most recent
+job, while every job (one per ingestion attempt) is an immutable record —
+uploading the same content twice creates two files and two jobs, both
+individually traceable, even though (per the Knowledge Foundation's
+existing idempotency, reused unchanged here) they resolve to the same
+`KnowledgeDocumentVersion`. `IngestionJob` has no `document_version_id`
+column of its own (see that model's docstring) — `app/services/knowledge_provenance_service.py::get_ingestion_provenance`
+recovers it by joining the job's file's `content_hash` against
+`KnowledgeDocumentVersion.content_hash` within the job's own
+`document_id`, extending the same "no new event table" principle
+`get_chunk_provenance` (Knowledge Foundation) already used.
+
+### Failure handling ("fail safely")
+
+A file whose *type* isn't supported is rejected with 415 before anything
+is written to the database. A file whose type *is* supported but whose
+content is malformed (a corrupt PDF, an unparseable workbook) still
+creates a queryable `IngestedFile` and `IngestionJob` — the job's status
+is `FAILED`, `error_message` names what went wrong, and the API still
+returns 201 (the request was valid; the *content* couldn't be processed).
+Neither case ever "succeeds" silently: a PDF whose pages contain no
+extractable text is recorded as `ExtractionStatus.PARTIAL` with a warning
+naming exactly how many pages ("PDF text extraction completed with 3
+pages containing no extractable text"), not returned as if it worked
+cleanly. `extraction_method` (`TEXT_EXTRACTION` / `STRUCTURED_PARSE` /
+`OCR` / `NONE`) and `extraction_status` (`PENDING` / `SUCCEEDED` /
+`PARTIAL` / `FAILED`) together are what a future evidence-quality feature
+reads to know how much to trust a given chunk.
+
+### Future OCR
+
+```
+Input -> OCR detection -> OCR provider -> Extracted text -> Normalized content
+```
+
+`OCRProvider` (`app/ingestion/ocr.py`) is an interface with **no
+implementation** — no commercial OCR is wired up in this milestone, per
+spec. `ImageAdapter` (JPG/PNG/TIFF) validates real images and extracts
+genuine metadata (dimensions, format) via Pillow, but never produces
+text — recorded as `extraction_method = NONE` today; a PDF whose pages
+have no text layer is
+likewise not OCR'd, staying `TEXT_EXTRACTION` (the method that genuinely
+was attempted) with a warning instead. `is_ocr_available()` always
+returns False until a real provider is registered — nothing pretends
+otherwise.
+
+### Future background processing
+
+The ingestion service call (`IngestionService.ingest()`) is fully
+synchronous — no Redis/Celery/Kafka, per spec. Nothing about the
+architecture assumes that, though: `IngestionJob`'s state machine
+(`RECEIVED` → `VALIDATING` → `PROCESSING` → `COMPLETED`/`FAILED`/
+`CANCELLED`) already models an asynchronous job's lifecycle, so moving to
+a background worker later means the worker driving that same state
+machine over time instead of one function doing it inline — not a schema
+or API contract change.
+
+### Tenant isolation and authorization
+
+`POST /api/v1/knowledge/ingestion` reuses the Identity & Access
+Foundation's authorization exactly as built, with no new mechanism (see
+[Identity architecture](#identity-architecture)):
+
+* `organization_id` provided (organization knowledge) — the caller must
+  have an ACTIVE membership in that organization whose role grants
+  `knowledge:manage` (`authorization_service.can()`, unchanged).
+* `organization_id` omitted (global knowledge) — `can()` with no
+  organization only ever succeeds for a `PLATFORM_ADMIN`. Omitting the
+  field is explicitly *not* a lower-privilege path to global knowledge —
+  see the milestone's own instruction that this must not be possible.
+
+`organization_id` is never trusted as proof of ownership on its own —
+whether a request is even attempted against it depends on this
+authorization check succeeding first (in `app/api/v1/ingestion.py`,
+before `ingestion_service.ingest()` is even called), and once inside the
+service, an existing `document_id` is still re-resolved tenant-scoped
+(`knowledge_document_service.get(..., organization_id=...)`, returning
+`None` — surfaced as 404 — for a document in a different organization)
+and a new document's source/organization consistency still goes through
+the Knowledge Foundation's own unchanged check. This route does not have
+a `{organization_id}` URL segment the way the membership endpoints do (a
+file can target GLOBAL knowledge, which has no organization at all), so
+it calls `authorization_service.can()` directly rather than the
+path-based `require_permission` dependency used elsewhere — see
+`app/api/v1/ingestion.py`'s module docstring.
+
 ## Configuration
 
 All configuration is environment-based (`app/core/config.py`, backed by
@@ -670,15 +939,21 @@ secrets are committed; `.env` is git-ignored. `DEV_MODE` (default
 To keep each foundation phase clean and reviewable, the following are
 intentionally **not** included yet: real OIDC/OAuth2 token verification, a
 commercial identity provider dependency, machine-client authentication
-(API keys, OAuth client credentials), the AI/LLM layer, RAG, vector
-search, predictive models, Safelytic integration, Redis, and any
-microservice/Kubernetes topology. See
+(API keys, OAuth client credentials), the AI/LLM layer, RAG, embeddings,
+pgvector/semantic search, predictive models, machine learning, Safelytic
+integration, Redis, Celery, Kafka, Kubernetes, production (S3/Azure/GCS)
+object storage, commercial OCR, transcription, unrestricted web crawling,
+and automatic external-source trust. See
 [Identity architecture](#identity-architecture) for what *is* built
 towards authentication/authorization, and the "Deliberately does not
 implement" list the Identity & Access Foundation milestone itself set
 (no password auth, no stored passwords, no API keys, no OAuth client
 credentials, no SSO config UI, no MFA, no password reset, no email
-invitations) — all of that is still true of this codebase.
+invitations) — all of that is still true of this codebase. Similarly, see
+[Universal ingestion architecture](#universal-ingestion-architecture) for
+what the ingestion engine does and does not implement (real OCR
+execution, semantic chunking, and a JSON/XML schema-mapping layer are
+architected for but not built).
 
 ## Known gaps / next phase
 
@@ -713,10 +988,35 @@ invitations) — all of that is still true of this codebase.
 * **No structured logging, tracing, or rate limiting.**
 * **No CI pipeline** wired up in this repository yet to run `pytest`
   automatically on push.
-* **No chunk HTTP endpoints or ingestion worker yet.** `KnowledgeChunkService`
-  exists and is tested at the service layer, but nothing in `app/ingestion`
-  calls it yet — there is no document-processing step that produces chunks
-  from a version's `extracted_text`.
+* **No chunk HTTP endpoints.** `KnowledgeChunkService.create_many` is now
+  called by `app/services/ingestion_service.py` on every successful
+  ingestion (see [Universal ingestion architecture](#universal-ingestion-architecture)),
+  but there is still no route to create, list, or inspect chunks
+  directly — only indirectly, via the ingestion response's `chunk_count`
+  and the existing knowledge read endpoints.
+* **No OCR execution, table extraction, or transcription.** All
+  architected for (`app/ingestion/ocr.py`, `PDFAdapter`'s explicit
+  `table_extraction: "not_attempted"`, the "Audio/Video" row in the
+  format matrix) but none implemented — see
+  [Universal ingestion architecture](#universal-ingestion-architecture).
+* **No JSON/XML schema mapping.** `JSONAdapter`/`XMLAdapter` validate and
+  do basic, schema-agnostic parsing only; identifying *what kind* of
+  safety data a payload represents (an incident, an inspection, ...) and
+  mapping it to canonical fields is future work, same as for CSV/XLSX
+  rows.
+* **No semantic chunking.** `SimpleChunkingStrategy` is deterministic
+  paragraph/size-based splitting; a future `ChunkingStrategy`
+  implementation can replace it without changing the interface or any
+  call site.
+* **No background ingestion workers.** `IngestionService.ingest()` runs
+  synchronously in the request; `IngestionJob`'s state machine already
+  models an async job's lifecycle for when that changes (see
+  [Universal ingestion architecture](#universal-ingestion-architecture)).
+* **`app/ingestion/adapters/registry.py` returns exactly one adapter per
+  detected type**, first-match — there's no ranking or fallback if a
+  file matches more than one adapter's `detect()` (not currently
+  possible with the registered set, but worth noting as the format list
+  grows).
 * **No `KnowledgeSourceUpdate`/verification-workflow transition endpoint.**
   `verification_status` can only be set at creation (defaults to PENDING);
   moving a source through UNDER_REVIEW → VERIFIED etc. isn't exposed yet.

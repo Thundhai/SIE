@@ -9,6 +9,8 @@ from app.models.audit_log import AuditLog
 from app.models.base import Base
 from app.models.data_source import DataSource
 from app.models.identity import Identity
+from app.models.ingested_file import IngestedFile
+from app.models.ingestion_job import IngestionJob
 from app.models.knowledge_chunk import KnowledgeChunk
 from app.models.knowledge_document import KnowledgeDocument
 from app.models.knowledge_document_version import KnowledgeDocumentVersion
@@ -31,4 +33,6 @@ __all__ = [
     "OrganizationMembership",
     "Identity",
     "AuditLog",
+    "IngestedFile",
+    "IngestionJob",
 ]

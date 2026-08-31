@@ -36,6 +36,18 @@ class Settings(BaseSettings):
     # see the README's "Identity architecture" section.
     DEV_MODE: bool = False
 
+    # Ingestion (see app/ingestion/storage.py, app/ingestion/pipeline.py)
+    #
+    # Local-filesystem StorageProvider root. Development-only, per the
+    # milestone spec — a production deployment swaps
+    # get_storage_provider() for an object-storage-backed implementation
+    # rather than pointing this at a "real" path.
+    INGESTION_STORAGE_DIR: str = "var/ingested_files"
+    # Hard cap on one uploaded file's size, enforced before any parsing
+    # is attempted. 25 MiB is a reasonable default for the document/
+    # spreadsheet/presentation formats this milestone supports.
+    MAX_UPLOAD_SIZE_BYTES: int = 25 * 1024 * 1024
+
     # Database
     # Either set DATABASE_URL directly, or set the POSTGRES_* components and
     # let it be assembled below.

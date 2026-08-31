@@ -5,3 +5,7 @@ __pycache__/
 .env
 *.db
 *.sqlite3
+
+# Local filesystem StorageProvider root (app/ingestion/storage.py) —
+# uploaded file bytes, never committed.
+/var/

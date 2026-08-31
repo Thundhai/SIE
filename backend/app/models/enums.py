@@ -61,3 +61,50 @@ class MembershipStatus(str, Enum):
     SUSPENDED = "SUSPENDED"
     INVITED = "INVITED"
     REVOKED = "REVOKED"
+
+
+class IngestionJobStatus(str, Enum):
+    """Lifecycle state of one IngestionJob — one attempt to ingest one
+    file. Not to be confused with `IngestionStatus` above, which tracks a
+    *KnowledgeDocumentVersion's* content-processing state; the two exist
+    at different granularities and were named independently before this
+    milestone introduced jobs. `IngestedFile.ingestion_status` (see
+    app/models/ingested_file.py) reuses this same enum: the file's field
+    mirrors its most recent job's status (a "current state" view), while
+    each IngestionJob row is an immutable record of one attempt — the
+    same current-state/immutable-history split already used between
+    KnowledgeDocument.status and KnowledgeDocumentVersion.
+    """
+
+    RECEIVED = "RECEIVED"
+    VALIDATING = "VALIDATING"
+    PROCESSING = "PROCESSING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+
+
+class ExtractionStatus(str, Enum):
+    """Outcome of *content extraction* specifically — distinct from the
+    job's overall pipeline status. A job can COMPLETE while its
+    extraction was only PARTIAL (e.g. a PDF with some unreadable pages) —
+    see the ingestion engine's "fail safely, never silently pretend
+    extraction succeeded" quality principle."""
+
+    PENDING = "PENDING"
+    SUCCEEDED = "SUCCEEDED"
+    PARTIAL = "PARTIAL"
+    FAILED = "FAILED"
+
+
+class ExtractionMethod(str, Enum):
+    """How a file's content was (or would be) extracted. Recorded per
+    file for provenance and evidence-quality purposes — an OCR-derived
+    chunk is weaker evidence than one extracted directly from a digital
+    document's text layer, and callers evaluating evidence later need to
+    know which happened."""
+
+    TEXT_EXTRACTION = "TEXT_EXTRACTION"
+    STRUCTURED_PARSE = "STRUCTURED_PARSE"
+    OCR = "OCR"
+    NONE = "NONE"

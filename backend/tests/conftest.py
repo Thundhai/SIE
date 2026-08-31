@@ -9,6 +9,7 @@ target production database, exercised via Alembic + docker-compose.
 """
 
 from collections.abc import Generator
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -35,6 +36,16 @@ def dev_auth_headers(user_id) -> dict[str, str]:
     See app/api/deps_auth.py — this names an existing user id; it cannot
     assert a role, permission, or organization directly."""
     return {DEV_USER_HEADER: str(user_id)}
+
+
+# Small, non-confidential fixture files for the ingestion adapters (PDF,
+# DOCX, XLSX, CSV, PPTX, RTF, TXT) — see tests/fixtures/ingestion/README.md
+# for how they were generated.
+FIXTURES_DIR = Path(__file__).parent / "fixtures" / "ingestion"
+
+
+def load_fixture(name: str) -> bytes:
+    return (FIXTURES_DIR / name).read_bytes()
 
 
 engine = create_engine(
@@ -76,3 +87,18 @@ app.dependency_overrides[get_db] = _override_get_db
 def client() -> Generator[TestClient, None, None]:
     with TestClient(app) as test_client:
         yield test_client
+
+
+@pytest.fixture(autouse=True)
+def _ingestion_storage(tmp_path) -> Generator[None, None, None]:
+    """Point the ingestion engine's StorageProvider at a fresh per-test
+    temp directory rather than the real `var/ingested_files` — see
+    app/ingestion/storage.py. Autouse so no test forgets it and
+    accidentally writes into the repo working tree."""
+    from app.ingestion.storage import LocalFilesystemStorageProvider
+    from app.services.ingestion_service import ingestion_service
+
+    previous = ingestion_service._storage
+    ingestion_service._storage = LocalFilesystemStorageProvider(tmp_path / "ingested_files")
+    yield
+    ingestion_service._storage = previous
