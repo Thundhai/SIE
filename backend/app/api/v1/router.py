@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from app.api.v1 import (
     api_clients,
+    data_ingestion,
     data_sources,
     ingestion,
     intelligence,
@@ -22,6 +23,7 @@ api_router.include_router(data_sources.router)
 api_router.include_router(knowledge.router)
 api_router.include_router(memberships.router)
 api_router.include_router(ingestion.router)
+api_router.include_router(data_ingestion.router)
 api_router.include_router(retrieval.router)
 api_router.include_router(rag.router)
 api_router.include_router(intelligence.router)

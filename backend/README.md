@@ -415,8 +415,10 @@ schema changes are always a new migration on top.
 | GET    | `/api/v1/organizations/{organization_id}`                | Get an organization                  |
 | POST   | `/api/v1/organizations/{organization_id}/sites`          | Create a site under an organization  |
 | GET    | `/api/v1/organizations/{organization_id}/sites`          | List sites for an organization       |
-| POST   | `/api/v1/organizations/{organization_id}/data-sources`   | Create a data source                 |
-| GET    | `/api/v1/organizations/{organization_id}/data-sources`   | List data sources for an organization|
+| POST   | `/api/v1/organizations/{organization_id}/data-sources`   | Register an ingestion source — **human OR machine caller**; `safety_data:write` (Enterprise Data Ingestion v0.1) |
+| GET    | `/api/v1/organizations/{organization_id}/data-sources`   | List an organization's ingestion sources — **human OR machine caller**; `safety_data:read` |
+| GET    | `/api/v1/organizations/{organization_id}/data-sources/{source_id}` | Get one ingestion source — **human OR machine caller**; `safety_data:read` |
+| PATCH  | `/api/v1/organizations/{organization_id}/data-sources/{source_id}/status` | Toggle a source active/inactive — **human OR machine caller**; `safety_data:write` |
 | POST   | `/api/v1/knowledge/sources`                              | Create a knowledge source (GLOBAL or ORGANIZATION) — authenticated; `knowledge:manage`, platform-admin-only for GLOBAL |
 | GET    | `/api/v1/knowledge/sources`                              | List knowledge sources (GLOBAL, or one organization's — see below) — authenticated; `knowledge:read` for an organization |
 | GET    | `/api/v1/knowledge/sources/{source_id}`                  | Get a knowledge source — authenticated; `knowledge:read` for an organization-scoped source |
@@ -441,6 +443,9 @@ schema changes are always a new migration on top.
 | GET    | `/api/v1/organizations/{organization_id}/api-clients`     | List an organization's machine clients (`users:manage`, never the secret) |
 | POST   | `/api/v1/organizations/{organization_id}/api-clients/{id}/rotate` | Rotate a machine client's secret (`users:manage`) — org/scopes/identity survive; old secret dies immediately |
 | POST   | `/api/v1/organizations/{organization_id}/api-clients/{id}/revoke` | Revoke a machine client (`users:manage`) |
+| POST   | `/api/v1/data/ingestion`                                   | Submit structured enterprise operational data, batched (**machine-client authenticated**, `safety_data:write`); `Idempotency-Key` supported (Enterprise Data Ingestion v0.1) |
+| GET    | `/api/v1/data/ingestion/batches`                           | List an organization's ingestion batches — **human OR machine caller**; `safety_data:read` |
+| GET    | `/api/v1/data/ingestion/batches/{batch_id}`                | One batch's full status and per-record results — **human OR machine caller**; `safety_data:read` |
 | POST   | `/api/v1/intelligence/predictions`                         | Generate/refresh a prediction for one site — **human OR machine caller**; `prediction:read`; server-computed only, see below; accepts `Idempotency-Key` |
 | GET    | `/api/v1/intelligence/predictions/{entity_id}`              | The latest recorded prediction for one site — **human OR machine caller**; `prediction:read` |
 | GET    | `/api/v1/intelligence/predictions/{entity_id}/history`      | Paginated prediction history, newest first, wrapped in the standard response envelope — **human OR machine caller**; `prediction:read` (Intelligence Platform Integration v0.1) |
@@ -508,12 +513,22 @@ read routes.
   unique), `name`, `status`, an optional `organization_id` (a convenience
   default organization, not an access grant), and an optional
   `platform_role`.
-* **DataSource** — a reference to an external system SIE may one day sync
-  with directly (an EHS platform, an ERP, an IoT feed — see the Identity
-  architecture's "machine clients" note). Adds `organization_id`,
-  `source_type`, `last_sync_at`. Distinct from — and not used by — the
-  file-upload ingestion engine below, which reads standalone files, not
-  external systems.
+* **DataSource** — a registered external system SIE ingests structured
+  operational data from (an EHS platform, an ERP, an IoT feed) — see
+  [Enterprise Data Ingestion & Validation Foundation
+  Architecture](#enterprise-data-ingestion--validation-foundation-architecture)
+  below, which reuses this model as the "ingestion source" concept. Adds
+  `organization_id`, `source_type`, `last_sync_at`,
+  `system_identifier`, `schema_version`, `config_metadata`,
+  `api_client_id`. Distinct from — and not used by — the file-upload
+  ingestion engine below, which reads standalone files, not external
+  systems.
+* **EnterpriseIngestionBatch, EnterpriseIngestionRecord** — one row per
+  submission and one row per input record through
+  `POST /api/v1/data/ingestion`, for traceability; see [Enterprise Data
+  Ingestion & Validation Foundation
+  Architecture](#enterprise-data-ingestion--validation-foundation-architecture)
+  below for the full design.
 * **KnowledgeSource, KnowledgeDocument, KnowledgeDocumentVersion,
   KnowledgeChunk** — the knowledge foundation; see
   [Knowledge architecture](#knowledge-architecture) below for the full
@@ -3465,6 +3480,177 @@ later without breaking `/api/v1/`, but none is built now). See
 ["Known gaps / next phase"](#known-gaps--next-phase) for this
 milestone's own genuine, as-built limitations.
 
+## Enterprise Data Ingestion & Validation Foundation Architecture
+
+    external system -> POST /api/v1/data/ingestion  (machine-client, safety_data:write)
+        -> DataSource ownership check (tenant-verified, never trusted)
+        -> EnterpriseIngestionService (new orchestration layer)
+        -> SafetyEventIngestionService.ingest_event()  (UNCHANGED per-record pipeline)
+             validate -> normalize -> version-aware upsert -> SafetyEvent row
+        -> EnterpriseIngestionBatch + EnterpriseIngestionRecord  (new tracking layer)
+        -> existing Intelligence Layer (unchanged, consumes SafetyEvent rows as always)
+
+This is the Enterprise Data Ingestion & Validation Foundation v0.1
+milestone. Its purpose is to make SIE capable of receiving, validating,
+normalizing, quality-classifying, and safely storing real organizational
+operational/safety data from external systems — HSE/EHS platforms, ERP
+systems, HR/training systems, permit-to-work systems, inspection
+systems, incident management, CMMS/maintenance, construction/project
+systems, manufacturing systems, IoT/telemetry, or a plain CSV/Excel
+export turned into JSON by the caller's own pipeline. **SIE is not built
+for any one named application** — see
+[`docs/INTEGRATION_GUIDE.md`](docs/INTEGRATION_GUIDE.md)'s own §16 for a
+worked example using a generic manufacturer, not Safelytic.
+
+**The governing architectural rule this milestone was held to: build on
+the existing `safety_events` architecture, never replace it.** Every
+validation rule (`app/intelligence/validation.py`), normalization
+function (`app/intelligence/normalization.py`), and the
+idempotent-upsert pipeline (`app/intelligence/ingestion_service.py`) is
+the exact same code the pre-existing `POST /intelligence/events`
+endpoint already used — extended additively (see below), never
+duplicated. Tenant isolation, machine-client authentication, scopes,
+data-quality states, temporal/as-of handling, provenance, audit logging,
+and the enterprise API conventions (request IDs, idempotency, rate
+limiting, structured errors) are all the exact mechanisms prior
+milestones already built — this milestone adds no second version of any
+of them.
+
+### What already existed and was reused, not duplicated
+
+Inspection before writing any code found that `DataSource`
+(`app/models/data_source.py`) — introduced in an early foundation
+milestone, tenant-scoped, with `name`/`source_type`/`status` — was
+already the exact concept this milestone's spec calls "ingestion
+source." It was extended in place (four new columns: `system_identifier`,
+`schema_version`, `config_metadata`, `api_client_id`) rather than
+duplicated into a second, parallel `IngestionSource` table. The same
+inspection found `DataSource`'s two existing HTTP routes had **no
+authentication or authorization check at all** — a second zero-auth gap
+in the same shape as the one closed in `knowledge.py` last milestone —
+closed here the same way, with `RequestContext`/`authorize_context()`.
+
+`SafetyEvent`'s idempotency key
+(`UniqueConstraint(organization_id, source_system, source_record_id)`),
+content-hash-based no-op detection, and per-record `db.begin_nested()`
+savepoint batching (see that model's and
+`SafetyEventIngestionService`'s own docstrings) are all reused
+completely unchanged. `app.intelligence.enums.DataQualityStatus`
+(`VALID`/`PARTIAL`/`QUARANTINED`) is reused as-is for every record this
+milestone's endpoint classifies — no second quality-state vocabulary was
+introduced.
+
+### The generic enterprise ingestion contract
+
+`app/schemas/data_ingestion.py::EnterpriseIngestionRecordCreate` is a
+superset of the pre-existing `SafetyEventCreate` shape, adding the
+fields the milestone's own generic contract calls for and the older
+shape didn't have: `source_record_version` (the source system's own
+revision marker), `correlation_id` (an optional link to a related
+record or transaction), and `source_schema_version` (the payload-shape
+version that specific record was sent under). All three flow all the
+way down to new, additive, nullable columns on `SafetyEvent` itself
+(plus a fourth, `ingestion_source_id`, linking to the registered
+`DataSource`) — see [`docs/INTEGRATION_GUIDE.md` §16](docs/INTEGRATION_GUIDE.md)
+for the full field-by-field contract and a worked example. No external
+system is forced into a rigid, one-size-fits-all schema before
+ingestion — every field but the four identity fields
+(`event_type`/`event_time`/`source_system`/`source_record_id`) is
+optional, and the original payload is always preserved (`source_value`
+on the canonical event, or `payload` on the tracking record for the one
+outcome — a validation rejection — where no canonical event exists to
+hold it).
+
+### Ingestion batch and record tracking
+
+`EnterpriseIngestionBatch`/`EnterpriseIngestionRecord`
+(`app/models/enterprise_ingestion_batch.py`,
+`app/models/enterprise_ingestion_record.py`) are new, additive tables —
+one row per submission and one row per input record, giving `GET
+/api/v1/data/ingestion/batches[/{batch_id}]` something durable to read.
+`EnterpriseIngestionBatch.id` is deliberately minted as the *same* UUID
+value the pre-existing `SafetyEvent.ingestion_batch_id` column already
+stamps on every row it writes — the two are trivially joinable with no
+schema change to `SafetyEvent`, and no second batch-identity scheme was
+introduced. Payload storage is deliberately not duplicated: a record
+that produced or updated a canonical event has its payload on that
+event already (`SafetyEvent.source_value`); only a validation-rejected
+record — the one case with no canonical event to hold it — gets its own
+JSONB copy on the tracking row itself. This is the existing
+"structured JSON in a JSONB column" pattern already used throughout this
+codebase, not a new filesystem/object-storage abstraction — the
+milestone's caveat about avoiding "coupling the domain model to local
+filesystem storage" applies to large binary files (see
+[Universal ingestion architecture](#universal-ingestion-architecture)'s
+own `StorageProvider`), not small structured records.
+
+`app/intelligence/enterprise_ingestion.py::EnterpriseIngestionService`
+is a thin orchestration wrapper — the same "business logic lives one
+layer down" shape `app/api/v1/predictions.py` already uses around
+`app/predictions/predictor.py` — around the *unchanged*
+`SafetyEventIngestionService.ingest_event()` call. **The pre-existing
+`POST /intelligence/events`/`/events/batch` endpoints are deliberately
+left completely untouched** by this new tracking layer: both paths
+write into the exact same canonical `safety_events` table the existing
+intelligence layer already consumes; the new endpoint is the
+fuller-featured one, not a replacement.
+
+### Source-record versioning — the safest minimal foundation
+
+Real enterprise systems resend and update records. `_version_ordering()`
+(`app/intelligence/ingestion_service.py`) extends the existing upsert
+logic additively — only active when a record actually supplies
+`source_record_version` — with the deliberately narrow, documented
+boundary the milestone's own escape hatch allows: strict newer/older
+ordering applies **only** when both the stored and incoming version
+values parse as plain integers, by far the most common real-world
+convention. Two new `IngestionOutcome` values
+(`SKIPPED_STALE_VERSION`, `REJECTED_VERSION_CONFLICT`) make the two new
+cases explicit and auditable: an older, late-arriving version is
+refused (never regressing the canonical timeline over a newer one
+already applied), and the same declared version describing different
+content is refused outright (SIE never guesses which is authoritative).
+A non-numeric version scheme falls back to exactly today's pre-existing
+behavior (content-hash-based, last write wins) — an explicitly
+documented limitation, not a silent gap; see
+[`docs/INTEGRATION_GUIDE.md` §16](docs/INTEGRATION_GUIDE.md) for the
+full decision table.
+
+### Tenant isolation
+
+Exactly the existing rule, applied with no exceptions to every new
+route: the organization for a write is always the authenticated
+machine credential's own, pinned organization (`MachineClientContext.organization_id`)
+— there is no field anywhere in the request body a client could use to
+name a different one. A `source_id` supplied on a submission is
+verified to belong to that same organization before use (404, never
+403, for a source that doesn't exist or belongs to someone else — never
+revealing which). Every read (`GET .../batches*`) requires an explicit,
+authorized `organization_id` query parameter via the existing
+`app.api.deps_context.require_context_permission()` — there is no
+GLOBAL-shaped variant of an ingestion batch or source at all, so the
+class of authorization bug fixed earlier this phase (a machine client
+bypassing scope on a GLOBAL-shaped request) has no equivalent surface to
+reappear on here. Comprehensive cross-tenant tests
+(`tests/test_data_ingestion_api.py`, `tests/test_data_sources.py`) prove
+organization A can never submit for, read, or reference organization
+B's sources, batches, or canonical events.
+
+### What this milestone deliberately does not add
+
+No autonomous agents, no autonomous interventions, no worker-level risk
+scoring, no automated safety decisions, no advanced/deep-learning
+normalization, no LLM-based normalization (every transformation in
+`app/intelligence/normalization.py` remains deterministic and testable),
+no web crawling, no external intelligence feeds, no event-streaming
+infrastructure, no Redis queues, no distributed workers, no automatic
+model retraining or deployment. Processing is synchronous by design —
+`EnterpriseIngestionBatch.status`'s `RECEIVED` value is the explicit
+seam a future asynchronous implementation would use, not a state any
+caller can currently observe. See
+["Known gaps / next phase"](#known-gaps--next-phase) for this
+milestone's own genuine, as-built limitations.
+
 ## Configuration
 
 All configuration is environment-based (`app/core/config.py`, backed by
@@ -3574,7 +3760,18 @@ Architecture](#intelligence-platform-integration--enterprise-api-architecture)
 for the full design and that section's own "What this milestone
 deliberately does not add" for what remains genuinely out of scope
 (Redis-backed rate limiting, a real event bus, multi-language SDKs, and
-`/api/v2/` in particular).
+`/api/v2/` in particular). **As of Enterprise Data Ingestion &
+Validation Foundation v0.1, structured operational data from external
+systems can be received, validated, normalized, quality-classified,
+deduplicated, source-record-versioned, and safely stored with full
+batch/record traceability** — see [Enterprise Data Ingestion &
+Validation Foundation
+Architecture](#enterprise-data-ingestion--validation-foundation-architecture)
+for the full design and that section's own "What this milestone
+deliberately does not add" for what remains genuinely out of scope
+(async/background processing, CSV/XLSX/webhook/database/event-stream
+connectors, and non-numeric source-record-version ordering in
+particular).
 
 ## Known gaps / next phase
 
@@ -3901,3 +4098,31 @@ deliberately does not add" for what remains genuinely out of scope
     without breaking existing consumers, but nothing about v2 was
     designed or built — premature for a v0.1 platform with no external
     consumers yet.
+* **Enterprise Data Ingestion & Validation Foundation v0.1's own genuine
+  limitations:**
+  * **Source-record-version ordering only protects plain-integer version
+    schemes.** A non-numeric scheme (a semantic version, a date-stamped
+    revision marker used as a version, ...) falls back to today's
+    simpler, pre-existing behavior (content-hash-based, last write
+    wins) — no ordering protection at all for that scheme. See
+    `app/intelligence/ingestion_service.py::_version_ordering()`'s own
+    docstring for the full, explicit reasoning.
+  * **Processing is synchronous.** A large batch is processed inline,
+    within the request, up to the existing 1000-record cap — there is
+    no background/async processing. `EnterpriseIngestionBatch.status`'s
+    `RECEIVED` value is the seam a future asynchronous implementation
+    would use; no caller can currently observe that state.
+  * **Only the JSON API path is implemented.** CSV/XLSX upload, a
+    webhook receiver, a database connector, and an event-stream consumer
+    are all documented future extension points (see
+    `docs/INTEGRATION_GUIDE.md` §16) — the generic contract underneath
+    them is built; the connectors themselves are not.
+  * **No update endpoint for an ingestion source beyond its
+    active/inactive status.** `PATCH .../data-sources/{id}/status` is
+    the one mutation this milestone built; renaming a source or changing
+    its `system_identifier`/`schema_version`/`config_metadata` after
+    creation is not yet possible via the API.
+  * **A rejected record's payload is retained only on its own tracking
+    row**, not archived anywhere else — if that row is ever deleted, the
+    original content is gone; SIE does not currently prune these rows,
+    so this is a future-maintenance consideration, not an immediate gap.

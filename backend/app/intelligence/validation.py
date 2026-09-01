@@ -198,5 +198,12 @@ def validate_and_normalize(
         source_system=source_system,
         source_record_id=source_record_id,
         source_value=raw.as_source_value(),
+        # Pass-through, deliberately unvalidated -- see
+        # app/models/safety_event.py's own docstring for why these are
+        # opaque provenance fields, not values SIE interprets or enforces
+        # a format on.
+        source_record_version=(raw.source_record_version or "").strip() or None,
+        correlation_id=(raw.correlation_id or "").strip() or None,
+        source_schema_version=(raw.source_schema_version or "").strip() or None,
     )
     return ValidationResult(status=status, issues=issues), normalized

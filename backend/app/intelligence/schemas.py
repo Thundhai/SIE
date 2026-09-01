@@ -47,6 +47,14 @@ class RawSafetyEventPayload:
     source_system: str | None = None
     source_record_id: str | None = None
 
+    # --- Enterprise Data Ingestion & Validation Foundation v0.1 additions ---
+    # see app/models/safety_event.py's own docstring for what each means.
+    # All optional and additive -- every existing caller that never sets
+    # them gets exactly today's behavior.
+    source_record_version: str | None = None
+    correlation_id: str | None = None
+    source_schema_version: str | None = None
+
     def as_source_value(self) -> dict[str, Any]:
         """The exact payload as received, for `SafetyEvent.source_value`
         — milestone item 14's "keep source_value / normalized_value"
@@ -72,6 +80,9 @@ class RawSafetyEventPayload:
             "attributes": self.attributes,
             "source_system": self.source_system,
             "source_record_id": self.source_record_id,
+            "source_record_version": self.source_record_version,
+            "correlation_id": self.correlation_id,
+            "source_schema_version": self.source_schema_version,
         }
 
 
@@ -126,3 +137,6 @@ class NormalizedSafetyEvent:
     source_system: str
     source_record_id: str
     source_value: dict[str, Any]
+    source_record_version: str | None = None
+    correlation_id: str | None = None
+    source_schema_version: str | None = None

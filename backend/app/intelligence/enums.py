@@ -75,6 +75,16 @@ class IngestionOutcome(str, Enum):
     UPDATED = "UPDATED"
     SKIPPED_IDEMPOTENT = "SKIPPED_IDEMPOTENT"
     REJECTED_INVALID = "REJECTED_INVALID"
+    # Enterprise Data Ingestion & Validation Foundation v0.1, item 8's
+    # source-record-versioning cases -- both only ever produced when the
+    # incoming record and the existing stored row both carry an
+    # integer-parseable source_record_version (see
+    # app/intelligence/ingestion_service.py::_version_ordering()); a
+    # non-versioned or non-numeric-versioned resend can never produce
+    # either of these, and continues to behave exactly as before this
+    # milestone (UPDATED/SKIPPED_IDEMPOTENT only).
+    SKIPPED_STALE_VERSION = "SKIPPED_STALE_VERSION"
+    REJECTED_VERSION_CONFLICT = "REJECTED_VERSION_CONFLICT"
 
 
 class DataSufficiency(str, Enum):

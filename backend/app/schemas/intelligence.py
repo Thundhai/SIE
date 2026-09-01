@@ -14,7 +14,6 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-
 # --- Ingestion --------------------------------------------------------------------
 
 
@@ -44,6 +43,13 @@ class SafetyEventCreate(BaseModel):
     attributes: dict[str, Any] = Field(default_factory=dict)
     source_system: str | None = None
     source_record_id: str | None = None
+    # Enterprise Data Ingestion & Validation Foundation v0.1 additions --
+    # optional on this legacy endpoint too (see app/models/safety_event.py's
+    # own docstring); the primary, documented entry point for enterprise
+    # integrations is POST /api/v1/data/ingestion (app/api/v1/data_ingestion.py).
+    source_record_version: str | None = None
+    correlation_id: str | None = None
+    source_schema_version: str | None = None
 
 
 class SafetyEventBatchCreate(BaseModel):

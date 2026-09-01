@@ -33,7 +33,13 @@ OPENAPI_TAGS = [
     {"name": "health", "description": "Liveness and readiness — no authentication required."},
     {"name": "organizations", "description": "Tenant (organization) administration."},
     {"name": "sites", "description": "Sites belonging to an organization."},
-    {"name": "data-sources", "description": "Registered data sources for an organization."},
+    {
+        "name": "data-sources",
+        "description": (
+            "Registered ingestion sources for an organization (human or machine, "
+            "`safety_data:read`/`safety_data:write`)."
+        ),
+    },
     {
         "name": "knowledge",
         "description": "Knowledge sources, documents, versions, and chunks (GLOBAL or ORGANIZATION-scoped).",
@@ -66,6 +72,14 @@ OPENAPI_TAGS = [
     {
         "name": "api-clients",
         "description": "Machine-client (API key) credential management — administrative, human-authenticated only.",
+    },
+    {
+        "name": "enterprise-ingestion",
+        "description": (
+            "Enterprise structured-data ingestion (JSON, batched, machine-client authenticated, "
+            "`safety_data:write`) with full source/batch/record traceability; batch status is "
+            "readable by human or machine (`safety_data:read`)."
+        ),
     },
 ]
 

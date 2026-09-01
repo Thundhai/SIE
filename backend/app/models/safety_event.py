@@ -73,7 +73,13 @@ from sqlalchemy import DateTime, ForeignKey, String, Text, UniqueConstraint, Uui
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models.base import Base, OrganizationScopedMixin, TimestampMixin, UUIDPrimaryKeyMixin, utcnow
+from app.models.base import (
+    Base,
+    OrganizationScopedMixin,
+    TimestampMixin,
+    UUIDPrimaryKeyMixin,
+    utcnow,
+)
 
 _JSONType = GenericJSON().with_variant(JSONB(), "postgresql")
 
@@ -138,6 +144,40 @@ class SafetyEvent(UUIDPrimaryKeyMixin, OrganizationScopedMixin, TimestampMixin, 
     normalization_version: Mapped[str] = mapped_column(String(20), nullable=False)
     schema_version: Mapped[str] = mapped_column(String(20), nullable=False)
     ingestion_batch_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False, index=True)
+
+    # --- Enterprise Data Ingestion & Validation Foundation v0.1 additions -----
+    # (item 2's generic contract, item 8's source-record versioning, item 9's
+    # provenance chain) -- every one of these is optional and additive; every
+    # pre-existing caller that never sets them behaves exactly as before.
+    #
+    # source_record_version: the external system's own version/revision
+    # marker for this specific record (e.g. "1", "2", "2024-06-01T00:00:00Z")
+    # -- opaque to SIE beyond the narrow, documented ordering comparison
+    # `app/intelligence/ingestion_service.py::_version_ordering()` performs
+    # (only when both the stored and incoming values parse as integers; see
+    # that function's own docstring for the explicitly-documented limitation
+    # of this "safest minimal foundation").
+    source_record_version: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # correlation_id: an optional caller-supplied identifier linking this
+    # record to a related record or upstream transaction (e.g. a permit and
+    # the incident it's associated with) -- never interpreted or validated
+    # by SIE itself, purely a pass-through provenance field.
+    correlation_id: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    # source_schema_version: the *external system's own* payload-shape
+    # version, as it declared it on this record -- distinct from
+    # schema_version above (SIE's own canonical schema) and from
+    # DataSource.schema_version (that source's current/expected version;
+    # this column is what one specific record actually said).
+    source_schema_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # ingestion_source_id: which registered DataSource this record is
+    # attributed to, if any -- ON DELETE SET NULL because a canonical event
+    # must never be deleted merely because the source describing where it
+    # came from was later removed (milestone item 9: "do not create orphan
+    # events" cuts the other way here -- the event survives, only the
+    # attribution link is cleared).
+    ingestion_source_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("data_sources.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
     # --- Data quality (milestone items 12-13) ---------------------------------
     data_quality_status: Mapped[str] = mapped_column(String(20), nullable=False, index=True)

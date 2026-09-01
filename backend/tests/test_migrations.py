@@ -50,7 +50,7 @@ def test_fresh_postgres_database_migrates_through_head_with_no_manual_interventi
 ):
     """The core regression test: starting from a completely empty
     PostgreSQL schema, `alembic upgrade head` must succeed end to end
-    through 0001 -> ... -> 0010 with no manual intervention (no
+    through 0001 -> ... -> 0011 with no manual intervention (no
     pre-created enum types, no pre-enabled pgvector extension —
     migration 0006 enables that itself)."""
     engine = _fresh_schema_engine()
@@ -65,7 +65,7 @@ def test_fresh_postgres_database_migrates_through_head_with_no_manual_interventi
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0010"
+            assert version == "0011"
 
             enum_types = {
                 row[0]
@@ -102,6 +102,36 @@ def test_fresh_postgres_database_migrates_through_head_with_no_manual_interventi
             assert "model_review_flags" in tables
             assert "prediction_outcomes" in tables
             assert "idempotency_keys" in tables
+            assert "enterprise_ingestion_batches" in tables
+            assert "enterprise_ingestion_records" in tables
+
+            data_source_columns = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = 'data_sources'"
+                    )
+                ).all()
+            }
+            assert "system_identifier" in data_source_columns
+            assert "schema_version" in data_source_columns
+            assert "config_metadata" in data_source_columns
+            assert "api_client_id" in data_source_columns
+
+            safety_event_columns = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = 'safety_events'"
+                    )
+                ).all()
+            }
+            assert "source_record_version" in safety_event_columns
+            assert "correlation_id" in safety_event_columns
+            assert "source_schema_version" in safety_event_columns
+            assert "ingestion_source_id" in safety_event_columns
 
             api_client_columns = {
                 row[0]
@@ -202,7 +232,7 @@ def test_downgrade_then_reupgrade_round_trips_cleanly(monkeypatch):
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0010"
+            assert version == "0011"
     finally:
         engine.dispose()
 
@@ -244,7 +274,7 @@ def test_intelligence_migration_downgrade_then_reupgrade_round_trips_cleanly(mon
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0010"
+            assert version == "0011"
 
             tables = {
                 row[0]
@@ -300,7 +330,7 @@ def test_predictive_modeling_migration_downgrade_then_reupgrade_round_trips_clea
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0010"
+            assert version == "0011"
 
             tables = {
                 row[0]
@@ -371,7 +401,7 @@ def test_governance_migration_downgrade_then_reupgrade_round_trips_cleanly(monke
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0010"
+            assert version == "0011"
 
             tables = {
                 row[0]
@@ -460,7 +490,7 @@ def test_enterprise_api_migration_downgrade_then_reupgrade_round_trips_cleanly(m
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0010"
+            assert version == "0011"
 
             tables = {
                 row[0]
@@ -494,5 +524,116 @@ def test_enterprise_api_migration_downgrade_then_reupgrade_round_trips_cleanly(m
                 ).all()
             }
             assert "request_id" in audit_log_columns
+    finally:
+        engine.dispose()
+
+
+@requires_postgres
+def test_data_ingestion_migration_downgrade_then_reupgrade_round_trips_cleanly(monkeypatch):
+    """0011's own downgrade/re-upgrade round trip, isolated from the
+    others above: `enterprise_ingestion_batches`/`enterprise_ingestion_records`
+    must both disappear on downgrade to 0010, and
+    `data_sources.system_identifier`/`schema_version`/`config_metadata`/
+    `api_client_id` and `safety_events.source_record_version`/
+    `correlation_id`/`source_schema_version`/`ingestion_source_id` must
+    all disappear too — and all must reappear correctly on re-upgrade,
+    with nothing 0010 or earlier disturbed either way."""
+    engine = _fresh_schema_engine()
+    try:
+        monkeypatch.setattr("app.core.config.settings.DATABASE_URL", PG_TEST_DATABASE_URL)
+        config = _alembic_config()
+
+        command.upgrade(config, "head")
+        command.downgrade(config, "0010")
+
+        with engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version == "0010"
+
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT table_name FROM information_schema.tables "
+                        "WHERE table_schema = 'public'"
+                    )
+                ).all()
+            }
+            assert "enterprise_ingestion_batches" not in tables
+            assert "enterprise_ingestion_records" not in tables
+            # Untouched by 0011's downgrade.
+            assert "idempotency_keys" in tables
+            assert "data_sources" in tables
+            assert "safety_events" in tables
+
+            data_source_columns = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = 'data_sources'"
+                    )
+                ).all()
+            }
+            assert "system_identifier" not in data_source_columns
+            assert "schema_version" not in data_source_columns
+            assert "config_metadata" not in data_source_columns
+            assert "api_client_id" not in data_source_columns
+
+            safety_event_columns = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = 'safety_events'"
+                    )
+                ).all()
+            }
+            assert "source_record_version" not in safety_event_columns
+            assert "correlation_id" not in safety_event_columns
+            assert "source_schema_version" not in safety_event_columns
+            assert "ingestion_source_id" not in safety_event_columns
+
+        command.upgrade(config, "head")
+
+        with engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version == "0011"
+
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT table_name FROM information_schema.tables "
+                        "WHERE table_schema = 'public'"
+                    )
+                ).all()
+            }
+            assert "enterprise_ingestion_batches" in tables
+            assert "enterprise_ingestion_records" in tables
+
+            data_source_columns = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = 'data_sources'"
+                    )
+                ).all()
+            }
+            assert "system_identifier" in data_source_columns
+            assert "api_client_id" in data_source_columns
+
+            safety_event_columns = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = 'safety_events'"
+                    )
+                ).all()
+            }
+            assert "source_record_version" in safety_event_columns
+            assert "ingestion_source_id" in safety_event_columns
     finally:
         engine.dispose()

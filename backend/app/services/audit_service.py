@@ -65,6 +65,15 @@ class AuditAction:
     API_AUTHENTICATED = "API_AUTHENTICATED"
     API_ACCESS_DENIED = "API_ACCESS_DENIED"
     KNOWLEDGE_QUERY = "KNOWLEDGE_QUERY"
+    # Enterprise Data Ingestion & Validation Foundation v0.1 (milestone
+    # item 17's own list). Per-record/per-batch canonical-event outcomes
+    # are already covered by the existing, more specific
+    # SAFETY_EVENT_INGESTED/SAFETY_EVENT_BATCH_INGESTED actions above --
+    # reused, not duplicated, for the underlying safety_events write path
+    # (see app/intelligence/enterprise_ingestion.py's own docstring).
+    INGESTION_SOURCE_CREATED = "INGESTION_SOURCE_CREATED"
+    INGESTION_SOURCE_STATUS_CHANGED = "INGESTION_SOURCE_STATUS_CHANGED"
+    ENTERPRISE_INGESTION_BATCH_COMPLETED = "ENTERPRISE_INGESTION_BATCH_COMPLETED"
 
 
 class AuditService:

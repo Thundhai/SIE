@@ -94,6 +94,9 @@ def _to_raw_payload(body: SafetyEventCreate) -> RawSafetyEventPayload:
         attributes=body.attributes,
         source_system=body.source_system,
         source_record_id=body.source_record_id,
+        source_record_version=body.source_record_version,
+        correlation_id=body.correlation_id,
+        source_schema_version=body.source_schema_version,
     )
 
 

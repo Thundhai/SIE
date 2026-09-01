@@ -11,6 +11,8 @@ from app.models.base import Base
 from app.models.data_source import DataSource
 from app.models.dataset_version import DatasetVersion
 from app.models.embedding import KnowledgeChunkEmbedding
+from app.models.enterprise_ingestion_batch import EnterpriseIngestionBatch
+from app.models.enterprise_ingestion_record import EnterpriseIngestionRecord
 from app.models.feature_snapshot import FeatureSnapshot
 from app.models.idempotency_key import IdempotencyKey
 from app.models.identity import Identity
@@ -37,6 +39,8 @@ __all__ = [
     "Base",
     "DataSource",
     "DatasetVersion",
+    "EnterpriseIngestionBatch",
+    "EnterpriseIngestionRecord",
     "FeatureSnapshot",
     "IdempotencyKey",
     "Identity",

@@ -147,6 +147,13 @@ string, say) is still accepted and flagged, never a hard `422` — only a
 genuinely malformed request (missing `event_type`, unparseable
 `event_time`) is rejected outright.
 
+**This is the lightweight path.** For structured enterprise operational
+data with a registered source, source-record versioning, and full
+batch/record traceability, see [§16, the Enterprise Data Ingestion
+API](#16-enterprise-data-ingestion-api-structured-operational-data) —
+both paths write into the same canonical event store and are equally
+valid; §16 is simply the fuller-featured one.
+
 For bulk loads, `POST /intelligence/events/batch` takes `{"events":
 [...]}`, up to 1000 events per call, with a per-record result:
 
@@ -466,3 +473,259 @@ response is advisory information for a human decision-maker in *your*
 system — building an automated action on top of a SIE response is your
 integration's own choice and responsibility, never something SIE
 initiates.
+
+## 16. Enterprise Data Ingestion API (structured operational data)
+
+Enterprise Data Ingestion & Validation Foundation v0.1 adds a
+fuller-featured, source-tracked entry point for structured operational
+data — HSE/EHS platforms, ERP systems, HR/training systems,
+permit-to-work systems, inspection systems, incident management,
+CMMS/maintenance, construction/project systems, manufacturing systems,
+IoT/telemetry, or a plain CSV/Excel export turned into JSON by your own
+pipeline. **This is not built for any one named application** — the
+examples below use a generic manufacturing company, not Safelytic (see
+§13/§14 for why SIE is application-independent by design).
+
+    external system -> Authorization: Bearer <client_id>:<secret>
+        -> POST /api/v1/data/ingestion
+        -> validation -> normalization -> data-quality classification
+        -> duplicate/version-conflict handling -> canonical safety_events
+        -> [same intelligence engine every other ingestion path feeds]
+
+### Registering an ingestion source (optional, but recommended)
+
+An "ingestion source" is a registered record of *which* external system
+is sending data — useful for auditability, and required if you want
+`source_record_version` conflict/staleness protection to mean something
+tenant-wide. Register one per real integration:
+
+```
+POST /api/v1/organizations/{organization_id}/data-sources
+Authorization: Bearer <client_id>:<secret>   (or a human admin's session)
+Content-Type: application/json
+
+{
+  "name": "Acme Manufacturing — SAP EHS Module",
+  "source_type": "erp",
+  "system_identifier": "sap-prod-us1",
+  "schema_version": "v3",
+  "config_metadata": {"timezone": "America/Chicago"}
+}
+```
+
+The returned `id` is what you pass as `source_id` on each ingestion
+call. This step is optional — omitting `source_id` still ingests data
+normally, just without a registered-source association on the resulting
+events.
+
+### Submitting data
+
+```
+POST /api/v1/data/ingestion
+Authorization: Bearer <client_id>:<secret>
+Content-Type: application/json
+Idempotency-Key: <optional, for safe retry of the whole submission>
+
+{
+  "source_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "records": [
+    {
+      "event_type": "INCIDENT",
+      "event_subtype": "SLIP_TRIP_FALL",
+      "event_time": "2026-08-14T09:12:00Z",
+      "site_id": "6e6c9f2a-1234-4a3b-9abc-1234567890ab",
+      "severity": "MEDIUM",
+      "description": "Worker slipped on wet floor near loading dock.",
+      "attributes": {"body_part": "ankle", "days_away_from_work": 2},
+      "source_system": "sap-prod-us1",
+      "source_record_id": "INC-20260814-0042",
+      "source_record_version": "1",
+      "correlation_id": "WORKORDER-88213",
+      "source_schema_version": "v3"
+    }
+  ]
+}
+```
+
+Every field but the four identity fields (`event_type`, `event_time`,
+`source_system`, `source_record_id`) is optional — a merely
+*questionable* value is still accepted and flagged (see "Validation
+states" below), never a hard `422`. Batches accept up to 1000 records
+per call. The response reports exactly what happened:
+
+```json
+{
+  "batch_id": "b1f8e3a0-...",
+  "source_id": "3fa85f64-...",
+  "status": "COMPLETED",
+  "received_at": "2026-08-14T09:12:05Z",
+  "total_records": 1,
+  "accepted_records": 1,
+  "partial_records": 0,
+  "quarantined_records": 0,
+  "rejected_records": 0,
+  "duplicate_records": 0,
+  "error_summary": null,
+  "records": [
+    {
+      "outcome": "CREATED",
+      "canonical_event_id": "9c3a...",
+      "quality_state": "VALID",
+      "issues": [],
+      "duplicate_in_batch": false,
+      "external_record_id": "INC-20260814-0042",
+      "source_record_version": "1",
+      "content_hash": "a94f..."
+    }
+  ]
+}
+```
+
+Check on a batch later with `GET /api/v1/data/ingestion/batches/{batch_id}`
+or list your organization's recent batches with `GET
+/api/v1/data/ingestion/batches`.
+
+### Validation states
+
+Every record ends up in one of four states — the same
+`DataQualityStatus` vocabulary the rest of SIE already uses, not a
+second one invented for this endpoint:
+
+| State | Meaning | Is a canonical event created? |
+|---|---|---|
+| `VALID` | Satisfies every canonical constraint. | Yes. |
+| `PARTIAL` | Usable, but has a non-critical issue (e.g. an unrecognized severity string). | Yes. |
+| `QUARANTINED` | Stored, but excluded from every analytics/feature/signal calculation until reviewed (e.g. missing/unparseable `event_time`). | Yes. |
+| *(rejected)* | Missing an identity field (`event_type`, `source_system`, `source_record_id`) or a value too long to store. | **No** — `outcome: "REJECTED_INVALID"`, `canonical_event_id: null`. |
+
+An inspection record and an incident record are not held to identical
+requirements beyond those four shared identity fields — a domain-specific
+field that's missing (say, an inspection's checklist score) is not, by
+itself, a validation failure; it's just an absent `attributes` key.
+"Structurally valid" and "partially complete" are the honest words used
+throughout — nothing here claims a `VALID` record is *factually
+correct*, only that it satisfies SIE's own structural checks.
+
+### Duplicate and source-record-version semantics
+
+Identity is `(source_system, source_record_id)` within your
+organization — resending the same pair is always looked at against
+whatever is already stored:
+
+| Scenario | Outcome |
+|---|---|
+| Exact replay (identical content) | `SKIPPED_IDEMPOTENT` — no-op, no new row, no duplicate. |
+| Same `source_record_version`, same content | `SKIPPED_IDEMPOTENT`. |
+| Same `source_record_version`, **different** content | `REJECTED_VERSION_CONFLICT` — refused, not guessed; the stored row is untouched. |
+| **Newer** integer `source_record_version` | `UPDATED` — applied in place. |
+| **Older** integer `source_record_version` (late arrival) | `SKIPPED_STALE_VERSION` — refused; the newer stored row is untouched. |
+| Different `source_record_id`s, identical payload content | Two distinct events — never collapsed into one. |
+
+**Documented limitation.** Strict newer/older ordering only applies when
+**both** the stored and incoming `source_record_version` values parse as
+plain integers — by far the most common real-world convention. A
+non-numeric scheme (a semantic version, an ISO timestamp used as a
+version marker, ...) falls back to today's simpler behavior: different
+content always overwrites in place, last write wins, with no ordering
+protection. If your system versions records non-numerically and you need
+ordering protection, use a plain incrementing integer as
+`source_record_version` today, or contact SIE about extending this in a
+future milestone.
+
+### Provenance
+
+Every canonical event created through this endpoint traces back to: the
+organization, the ingestion source (if `source_id` was given), the
+batch (`GET .../batches/{batch_id}`), the external record id and
+version you supplied, the ingestion timestamp, a content hash, and
+whether/how it was normalized — nothing is an untraceable "orphan" row.
+`GET /api/v1/intelligence/predictions/...`, analytics, and RAG responses
+elsewhere in this API all carry their own provenance chains back to the
+`safety_events` this endpoint writes (see §8).
+
+### Authentication and permissions
+
+Machine-client only (§1) — this is system-to-system integration, not a
+human dashboard action. Scopes, from the existing vocabulary (§2), no
+new ones invented for this endpoint:
+
+| Action | Scope |
+|---|---|
+| `POST /data/ingestion` (submit data) | `safety_data:write` |
+| `GET /data/ingestion/batches[/{id}]` (batch status) | `safety_data:read` (human or machine) |
+| `POST/GET/PATCH .../data-sources*` (register/manage a source) | `safety_data:write` (write) / `safety_data:read` (read) |
+
+### Tenant isolation
+
+Exactly §3's rule, with no exceptions: the organization for a write is
+always the authenticated credential's own, pinned organization — there
+is no field anywhere in the request body that names a different one. A
+`source_id` you supply is verified to belong to that same organization
+first (a source belonging to someone else 404s, never revealing it
+exists). Every read requires an explicit, authorized `organization_id`
+query parameter — there is no GLOBAL-shaped variant of an ingestion
+batch at all, so the class of authorization bug closed in an earlier
+milestone (a machine client bypassing scope on a GLOBAL-shaped request)
+has no equivalent surface here to reappear on.
+
+### Current limitations
+
+* Source-record-version ordering only protects plain-integer version
+  schemes (see above).
+* Processing is synchronous — a very large batch is processed inline,
+  within the request; there is no background/async processing yet
+  (the `EnterpriseIngestionBatch.status` field's `RECEIVED` value is the
+  seam a future asynchronous implementation would use).
+* Structured JSON is the only wire format implemented. CSV/XLSX, a
+  webhook receiver, a database connector, and an event-stream consumer
+  are all documented future extension points (below), not built.
+* A rejected record's raw payload is retained on its
+  `EnterpriseIngestionRecord` row for traceability (the one case with no
+  canonical event to hold it); a `QUARANTINED`/`PARTIAL`/`VALID`
+  record's payload lives on its canonical event instead, never
+  duplicated.
+
+### Future connector extension points
+
+The generic contract (`event_type`/`event_time`/`source_system`/
+`source_record_id`/...) is deliberately format-agnostic — a future
+milestone can add, without changing this contract or the validation/
+normalization/upsert pipeline underneath it:
+
+* **CSV/XLSX upload** — a thin adapter that maps spreadsheet columns
+  onto the same `EnterpriseIngestionRecordCreate` shape before handing
+  off to the exact same pipeline this endpoint already uses.
+* **Webhooks** — an inbound receiver that authenticates a source
+  system's own webhook signature and translates its payload the same
+  way.
+* **Database connectors** — a scheduled/triggered puller for a source
+  system's own database or export table.
+* **Event streams** — a consumer for a message bus (Kafka or similar),
+  explicitly out of scope for this milestone (no message broker was
+  introduced to support it).
+
+### A generic example — Northbridge Manufacturing (not Safelytic)
+
+```
+Northbridge Manufacturing operates three plants and already runs a CMMS
+(maintenance) system and a separate incident-reporting tool, neither of
+which has ever heard of Safelytic.
+
+1. Northbridge's IT team provisions one SIE machine-client credential
+   per system (safety_data:write, safety_data:read) and registers two
+   ingestion sources: "CMMS — Plant Floor" and "Incident Reporting Tool".
+2. Their CMMS nightly job POSTs equipment-failure and maintenance
+   records to /api/v1/data/ingestion, tagged event_type: "EQUIPMENT",
+   source_system: their CMMS's own hostname, with an incrementing
+   source_record_version whenever a work order is updated.
+3. Their incident tool POSTs incidents/near-misses in real time as they
+   are logged, each with a stable source_record_id it already has.
+4. A Northbridge safety analyst calls GET /intelligence/analytics/signals
+   and GET /intelligence/predictions/{site_id} from their own internal
+   reporting tool -- built entirely in-house, never touching SIE's own
+   source code.
+```
+
+Nothing above is Safelytic-specific, and nothing in SIE's own source
+code contains a Northbridge-specific branch either — the same guarantee
+§13/§14 already demonstrate, extended to this endpoint.
