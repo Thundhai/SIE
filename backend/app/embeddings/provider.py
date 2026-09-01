@@ -39,11 +39,23 @@ this environment; do not present it as validated.
 Never a commercial AI provider hardcoded here or anywhere in the domain
 layer — `EMBEDDING_PROVIDER` is an app setting (`app/core/config.py`),
 resolved once, at the edge.
+
+**Guardrail against shipping the test provider by accident.**
+`EMBEDDING_PROVIDER` defaults to `"hashing"` — unlike `DEV_MODE`, whose
+unsafe value is *not* the default, the test/CI-safe default here is also
+the value that must never quietly end up serving real production
+traffic. `build_embedding_provider()` therefore logs a loud `WARNING`
+(not a hard failure — see that function's own comment for why) whenever
+it resolves to `"hashing"` while `settings.APP_ENV` is `"production"`/
+`"prod"`, naming exactly what to do instead
+(`EMBEDDING_PROVIDER=sentence_transformers`, or another real model wired
+through this same abstraction).
 """
 
 from __future__ import annotations
 
 import hashlib
+import logging
 import math
 import re
 from functools import lru_cache
@@ -51,7 +63,18 @@ from typing import Protocol, runtime_checkable
 
 from app.core.config import settings
 
+logger = logging.getLogger(__name__)
+
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+# APP_ENV values treated as "this is a real deployment", for the
+# production-hashing-provider warning below. Unlike DEV_MODE (an
+# auth-safety setting that fails *closed* by defaulting to the safe
+# value), EMBEDDING_PROVIDER's safe-for-tests default ("hashing") is
+# also the value that must never be *silently* carried into a real
+# deployment — so this is the one place APP_ENV is actually read for
+# behavior, not just recorded.
+_PRODUCTION_APP_ENVS = frozenset({"production", "prod"})
 
 # A small, generic stopword list. Two tiers, both domain-agnostic (not
 # tuned to any particular topic's vocabulary): standard English function
@@ -218,6 +241,27 @@ def build_embedding_provider(
     (which is cached) so tests can build an uncached, differently-configured
     instance without disturbing the process-wide cache."""
     provider = provider or settings.EMBEDDING_PROVIDER
+    if provider == "hashing" and settings.APP_ENV.lower() in _PRODUCTION_APP_ENVS:
+        # A loud warning, not a hard failure: HashingEmbeddingProvider is
+        # a real, working implementation (tenant isolation, provenance,
+        # retrieval all function correctly with it) — just not a trained
+        # semantic model (see this module's docstring and the README's
+        # "Semantic Knowledge Architecture" / "Known gaps" sections).
+        # Refusing to start would be safer for a genuine production
+        # deployment, but would also break any legitimate non-production
+        # use of APP_ENV=production (e.g. a prod-configuration smoke
+        # test). This warning is deliberately impossible to miss instead.
+        logger.warning(
+            "EMBEDDING_PROVIDER=hashing with APP_ENV=%r. "
+            "HashingEmbeddingProvider is a deterministic, dependency-free "
+            "feature-hashing embedding built for tests/CI/evaluation — it "
+            "is NOT a trained semantic model and must not be relied on as "
+            "SIE's real semantic retrieval engine. Configure "
+            "EMBEDDING_PROVIDER=sentence_transformers (or another real "
+            "model wired through the EmbeddingProvider abstraction) "
+            "before serving real production traffic.",
+            settings.APP_ENV,
+        )
     if provider == "hashing":
         return HashingEmbeddingProvider(
             model_name=model_name or settings.EMBEDDING_MODEL_NAME,

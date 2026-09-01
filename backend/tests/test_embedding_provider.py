@@ -107,3 +107,75 @@ def test_build_embedding_provider_rejects_unknown_provider_name():
 
 def test_get_embedding_provider_is_cached():
     assert get_embedding_provider() is get_embedding_provider()
+
+
+# --- Production-hashing-provider guardrail ---
+#
+# HashingEmbeddingProvider is the safe-for-tests default, which is the
+# opposite direction of DEV_MODE's safety (the unsafe-for-production
+# value is *not* the default there) — so nothing else stops
+# EMBEDDING_PROVIDER=hashing from quietly reaching a real deployment.
+# build_embedding_provider() closes that gap with a loud warning; these
+# tests are what back that claim.
+
+
+def test_hashing_provider_in_production_app_env_logs_a_warning(monkeypatch, caplog):
+    monkeypatch.setattr("app.core.config.settings.EMBEDDING_PROVIDER", "hashing")
+    monkeypatch.setattr("app.core.config.settings.APP_ENV", "production")
+
+    with caplog.at_level("WARNING", logger="app.embeddings.provider"):
+        build_embedding_provider()
+
+    assert any(
+        "HashingEmbeddingProvider" in record.message and "NOT a trained semantic model" in record.message
+        for record in caplog.records
+    )
+
+
+def test_hashing_provider_in_prod_app_env_also_logs_a_warning(monkeypatch, caplog):
+    """'prod' is treated the same as 'production' — a real deployment
+    should not slip past this check just by spelling APP_ENV differently."""
+    monkeypatch.setattr("app.core.config.settings.EMBEDDING_PROVIDER", "hashing")
+    monkeypatch.setattr("app.core.config.settings.APP_ENV", "prod")
+
+    with caplog.at_level("WARNING", logger="app.embeddings.provider"):
+        build_embedding_provider()
+
+    assert any("HashingEmbeddingProvider" in record.message for record in caplog.records)
+
+
+def test_hashing_provider_in_development_app_env_does_not_warn(monkeypatch, caplog):
+    monkeypatch.setattr("app.core.config.settings.EMBEDDING_PROVIDER", "hashing")
+    monkeypatch.setattr("app.core.config.settings.APP_ENV", "development")
+
+    with caplog.at_level("WARNING", logger="app.embeddings.provider"):
+        build_embedding_provider()
+
+    assert caplog.records == []
+
+
+def test_sentence_transformers_provider_in_production_does_not_warn(monkeypatch, caplog):
+    """The warning is specifically about the hashing provider reaching
+    production, not about production configuration in general. Stubs out
+    the real (network-dependent) SentenceTransformerEmbeddingProvider
+    construction so this stays a fast, offline unit test."""
+    import app.embeddings.provider as provider_module
+
+    class _StubSentenceTransformerProvider:
+        provider_name = "sentence_transformers"
+
+        def __init__(self, *, model_name=None, model_version=None):
+            self.model_name = model_name
+            self.model_version = model_version
+            self.dimensions = 384
+
+    monkeypatch.setattr(
+        provider_module, "SentenceTransformerEmbeddingProvider", _StubSentenceTransformerProvider
+    )
+    monkeypatch.setattr("app.core.config.settings.APP_ENV", "production")
+
+    with caplog.at_level("WARNING", logger="app.embeddings.provider"):
+        provider = build_embedding_provider(provider="sentence_transformers")
+
+    assert isinstance(provider, _StubSentenceTransformerProvider)
+    assert caplog.records == []
