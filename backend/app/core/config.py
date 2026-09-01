@@ -118,6 +118,89 @@ class Settings(BaseSettings):
     # requests without exposing content.
     LOG_RETRIEVAL_QUERY_TEXT: bool = False
 
+    # LLM / RAG (see app/llm/provider.py and app/rag/ — "Evidence-Grounded
+    # RAG" in the README).
+    #
+    # LLM_PROVIDER selects the LLMProvider implementation via
+    # app/llm/provider.py::get_llm_provider() — the same
+    # configuration-based-boundary shape as EMBEDDING_PROVIDER above.
+    # "fake" (the default) is a deterministic, offline test/dev provider —
+    # not a real AI model — chosen for the identical reason
+    # HashingEmbeddingProvider is the default embedding provider: tests
+    # and CI must never require network access or a commercial API key.
+    # It is a hard, not soft, error to let this default reach a real
+    # deployment — see app/llm/provider.py's own "Guardrail" docstring
+    # section and FakeLLMProviderInProductionError.
+    LLM_PROVIDER: str = "fake"
+    LLM_MODEL_NAME: str = "sie-fake-test-llm"
+    LLM_MODEL_VERSION: str = "v1"
+    LLM_TEMPERATURE: float = 0.0
+    LLM_MAX_OUTPUT_TOKENS: int = 800
+    LLM_TIMEOUT_SECONDS: float = 30.0
+    # Only meaningful for LLM_PROVIDER=openai_compatible. None -> that
+    # provider's own default (api.openai.com); set to a self-hosted
+    # inference server's URL to point at one instead. Never a secret
+    # itself, but see LLM_API_KEY just below.
+    LLM_API_BASE_URL: str | None = None
+    # Never committed, never logged — read once at provider construction
+    # time (app/llm/provider.py::OpenAICompatibleLLMProvider) and never
+    # placed in any LLMResponse, exception message, or API response. Unset
+    # by default; LLM_PROVIDER=openai_compatible refuses to construct
+    # without it rather than silently proceeding unauthenticated.
+    LLM_API_KEY: str | None = None
+    # Whether the configured non-fake provider sends the grounded context
+    # (which may contain organization-private evidence) to a
+    # network-reachable service outside this process. True by default —
+    # the safe assumption for any provider a deployment configures — since
+    # a genuinely self-hosted/private endpoint is the exception, not the
+    # rule; a deployment that has one sets this False explicitly. Read by
+    # RAGService's privacy boundary check — see
+    # ALLOW_EXTERNAL_LLM_FOR_PRIVATE_DATA below.
+    LLM_PROVIDER_IS_EXTERNAL: bool = True
+
+    # Evidence selection / cost control (see
+    # app/rag/evidence_selection.py). Selection happens before the LLM is
+    # ever invoked — these are hard caps on what can reach a prompt at
+    # all, not tuning knobs the LLM sees.
+    RAG_MAX_EVIDENCE_ITEMS: int = 6
+    RAG_MAX_CONTEXT_CHARACTERS: int = 6000
+    # Deduplication threshold — see EvidenceSelectionService's own
+    # docstring for the token-overlap measure this bounds.
+    RAG_DEDUP_SIMILARITY_THRESHOLD: float = 0.85
+
+    # Evidence sufficiency (see app/rag/sufficiency.py). Deterministic
+    # rules, never delegated to the LLM — see that module's docstring for
+    # the exact rule set this threshold participates in.
+    RAG_SUFFICIENT_MIN_EVIDENCE_COUNT: int = 2
+
+    # Source conflict detection (see app/rag/conflict.py) — a
+    # deterministic, keyword-based heuristic, not machine learning. Two
+    # requirement-type evidence statements are flagged as conflicting when
+    # their topic-word overlap (Jaccard, after removing stopwords and
+    # requirement/negation cue words) reaches this threshold and their
+    # negation polarity differs. Documented *initial* default, not
+    # scientifically tuned — see that module's own docstring.
+    RAG_CONFLICT_TOPIC_OVERLAP_THRESHOLD: float = 0.3
+
+    # Privacy boundary (milestone item 39): if any selected evidence is
+    # ORGANIZATION-scoped (private, not GLOBAL) and the configured
+    # LLMProvider.is_external is True, RAGService refuses to call it
+    # unless this is explicitly True. Default False — the safe default;
+    # a deployment that has confirmed its provider's data-handling terms
+    # (or uses a genuinely private/self-hosted endpoint, which should also
+    # set LLM_PROVIDER_IS_EXTERNAL=False) opts in explicitly. See the
+    # README's "Privacy" section — SIE makes no claim about any specific
+    # commercial provider's own privacy/data-retention policy.
+    ALLOW_EXTERNAL_LLM_FOR_PRIVATE_DATA: bool = False
+
+    # Observability (see app/rag/rag_service.py). Off by default, the
+    # same reasoning as LOG_RETRIEVAL_QUERY_TEXT below: a RAG query or its
+    # generated answer may contain an organization's sensitive operational
+    # detail. Never written to logs or the audit trail unless a
+    # deployment explicitly opts in.
+    LOG_RAG_QUERY_TEXT: bool = False
+    LOG_RAG_ANSWER_TEXT: bool = False
+
     # Database
     # Either set DATABASE_URL directly, or set the POSTGRES_* components and
     # let it be assembled below.

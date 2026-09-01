@@ -7,7 +7,7 @@ consumer of the SIE API — but it is a consumer, not a dependency. Any
 authorized enterprise application connects the same way: through the
 versioned REST API under `/api/v1`.
 
-Six milestones are implemented so far:
+Seven milestones are implemented so far:
 
 * **Foundation v0.1** — core tenancy models (Organization, Site, User,
   DataSource), a REST API, and infrastructure (FastAPI, PostgreSQL,
@@ -46,21 +46,33 @@ Six milestones are implemented so far:
   search with a minimum-similarity floor and a first-class
   `NO_RELEVANT_EVIDENCE` outcome, full provenance on every result, and a
   synthetic evaluation corpus with real, honestly-reported Recall@K
-  numbers. Proves retrieval works *before* any LLM/RAG layer exists. See
+  numbers. Proved retrieval works *before* any LLM/RAG layer existed. See
   [Semantic Knowledge Architecture](#semantic-knowledge-architecture)
   below.
+* **Evidence-Grounded RAG v0.1** — a controlled reasoning layer over that
+  retrieval evidence: an `LLMProvider` abstraction (a deterministic test
+  provider, plus a documented, unexercised real-provider extension
+  point), evidence selection, deterministic evidence-sufficiency rules,
+  abstention when evidence is insufficient, source-conflict detection,
+  citation generation and validation, full provenance through to the
+  final response, tenant isolation reused unchanged, an external-LLM
+  privacy boundary, prompt versioning, and a synthetic RAG evaluation
+  harness. **The LLM is not the source of truth** — SIE's knowledge
+  sources are the evidence. See
+  [Evidence-Grounded RAG](#evidence-grounded-rag) below.
 
-The AI/LLM layer, RAG, predictive models, OCR execution, transcription,
-and Safelytic integration are all out of scope so far and are stubbed
-out only as empty, documented package placeholders (`app/intelligence`,
-`app/analytics`, `app/predictions`, `app/governance`) or interface-only
-modules (`app/ingestion/ocr.py`) so later phases have a predictable home
-without a restructure. **No AI training, RAG, prompt engineering, answer
-generation, or predictive analytics exist in this codebase yet** — as of
-the Semantic Knowledge Engine milestone, embeddings and vector similarity
-search *do* exist (see above) — everything below that layer stores,
-structures, and now retrieves content for a future reasoning layer;
-nothing yet reasons over it or generates an answer.
+Predictive models, OCR execution, transcription, autonomous/tool-using
+agents, and Safelytic integration are all out of scope so far and are
+stubbed out only as empty, documented package placeholders
+(`app/intelligence`, `app/analytics`, `app/predictions`, `app/governance`)
+or interface-only modules (`app/ingestion/ocr.py`) so later phases have a
+predictable home without a restructure. **No AI training, predictive
+analytics, autonomous agents, tool-calling, web search/crawling, or
+workflow automation exist in this codebase.** As of the Evidence-Grounded
+RAG milestone, embeddings, vector similarity search, evidence-grounded
+LLM reasoning, citations, and abstention *do* exist (see above) — see
+[Evidence-Grounded RAG](#evidence-grounded-rag)'s own "What RAG
+deliberately does not do" section for the complete, current boundary.
 
 ## Architecture
 
@@ -329,19 +341,22 @@ new migration on top.
 | GET    | `/api/v1/organizations/{organization_id}/members/{user_id}` | Get one member (`users:read`)     |
 | POST   | `/api/v1/knowledge/ingestion`                             | Upload and ingest a file (`knowledge:manage`) |
 | POST   | `/api/v1/knowledge/retrieval/search`                      | Semantic evidence search (authenticated; `knowledge:read` if `filters.organization_id` is given) |
+| POST   | `/api/v1/knowledge/rag/query`                              | Evidence-grounded RAG query (authenticated; `knowledge:read` if `filters.organization_id` is given) |
 
 The membership endpoints, the ingestion endpoint, and the retrieval
-search endpoint are the routes in this codebase that require
-authentication today (the retrieval endpoint additionally requires a
-permission check whenever an `organization_id` filter is supplied) — see
-[Identity architecture](#identity-architecture) for what that means in
-practice (development-mode only, no real identity provider connected
-yet) and why the other routes above them still don't, and
-[Universal ingestion architecture](#universal-ingestion-architecture) /
-[Semantic Knowledge Architecture](#semantic-knowledge-architecture) for
-the ingestion and retrieval endpoints' own authorization rules (global vs.
-organization knowledge). There is deliberately no endpoint to *create* or
-modify chunks — see [Knowledge Quality & Semantic Chunking
+search and RAG query endpoints are the routes in this codebase that
+require authentication today (the retrieval and RAG endpoints
+additionally require a permission check whenever an `organization_id`
+filter is supplied) — see [Identity architecture](#identity-architecture)
+for what that means in practice (development-mode only, no real identity
+provider connected yet) and why the other routes above them still don't,
+and [Universal ingestion architecture](#universal-ingestion-architecture) /
+[Semantic Knowledge Architecture](#semantic-knowledge-architecture) /
+[Evidence-Grounded RAG](#evidence-grounded-rag) for the ingestion,
+retrieval, and RAG endpoints' own authorization rules (global vs.
+organization knowledge — the RAG endpoint reuses the retrieval endpoint's
+rule exactly, not a separate one). There is deliberately no endpoint to
+*create* or modify chunks — see [Knowledge Quality & Semantic Chunking
 Pipeline](#knowledge-quality--semantic-chunking-pipeline) for why chunk
 generation is controlled by ingestion processing only, and for the
 tenant-scoping the one read endpoint reuses from its sibling knowledge
@@ -1270,11 +1285,12 @@ exist in this codebase.** Attaching an embedding to a chunk later is
 additive — a new nullable column/table referencing `KnowledgeChunk.id` —
 not a redesign of anything built in this milestone.
 
-*(As of the Semantic Knowledge Engine v0.1 milestone below, this is no
-longer fully true: pgvector is enabled and semantic similarity search
-does exist — see [Semantic Knowledge
-Architecture](#semantic-knowledge-architecture). RAG and LLM integration
-still do not.)*
+*(As of the Semantic Knowledge Engine v0.1 and Evidence-Grounded RAG v0.1
+milestones below, this is no longer true: pgvector is enabled, semantic
+similarity search exists, and an evidence-grounded LLM reasoning layer
+exists on top of it — see [Semantic Knowledge
+Architecture](#semantic-knowledge-architecture) and
+[Evidence-Grounded RAG](#evidence-grounded-rag).)*
 
 ## Semantic Knowledge Architecture
 
@@ -1283,14 +1299,15 @@ still do not.)*
         -> RetrievalService -> Metadata filter -> Vector similarity
         -> Ranked RetrievalResult -> Provenance
 
-This is the Semantic Knowledge Engine v0.1 milestone: it proves SIE can
+This was the Semantic Knowledge Engine v0.1 milestone: it proves SIE can
 retrieve semantically relevant knowledge chunks reliably, with tenant
-isolation and full provenance, **before any LLM/RAG reasoning layer is
-introduced.** No LLM, no RAG, no prompt engineering, no answer
-generation, and no reranking model exist anywhere in this codebase — see
-["What this deliberately does not do"](#future-architecture-not-built-here)
-below. `RetrievalService` returns evidence; nothing downstream of it
-exists yet to turn that evidence into a generated answer.
+isolation and full provenance. `RetrievalService` returns evidence — it
+still does not call an LLM, construct a prompt, or generate an answer;
+that is a separate layer built directly on top of it, unmodified, in the
+[Evidence-Grounded RAG](#evidence-grounded-rag) milestone documented
+below. Still no BM25/keyword search, reranking model, or additional
+search engine exists anywhere in this codebase — see
+["What RAG deliberately does not do"](#what-rag-deliberately-does-not-do).
 
 ### Why embeddings live in their own package, not inside chunking
 
@@ -1626,21 +1643,324 @@ one, correctly tuned to an actual dataset size, is future work — see
 
 ### Future architecture, not built here
 
-    Semantic Retrieval (this milestone)
+    Semantic Retrieval (Semantic Knowledge Engine v0.1)
         -> Hybrid Retrieval (keyword search + vector search -> fusion)
         -> Reranking
-        -> Evidence Selection
-        -> RAG
-        -> LLM Reasoning
+        -> Evidence Selection (built — see Evidence-Grounded RAG)
+        -> RAG (built — see Evidence-Grounded RAG)
+        -> LLM Reasoning (built — see Evidence-Grounded RAG)
 
-`RetrievalService` is deliberately shaped so this evolution is additive:
-it already returns a ranked `RetrievalResponse`; adding a keyword-search
-branch and a fusion step ahead of the final ranking does not require
-changing its public contract. **None of the above exists in this
-codebase.** No BM25/keyword search, no Elasticsearch/OpenSearch or any
-other additional search engine, no reranking model, no RAG, no prompt
-engineering, no answer generation, and no LLM integration — this
-milestone stops at ranked evidence with provenance, on purpose.
+`RetrievalService` was deliberately shaped so this evolution could be
+additive, and the [Evidence-Grounded RAG](#evidence-grounded-rag)
+milestone below is exactly that: it calls `RetrievalService.search()`
+unmodified and layers evidence selection, sufficiency, and an LLM
+reasoning step on top, without changing `RetrievalService`'s own public
+contract. What still does **not** exist anywhere in this codebase: no
+BM25/keyword search, no Elasticsearch/OpenSearch or any other additional
+search engine, no reranking model, no ANN vector index (see "Indexing
+decision" above), and no autonomous/tool-using agent — see
+["What RAG deliberately does not do"](#what-rag-deliberately-does-not-do)
+for the complete, current list.
+
+## Evidence-Grounded RAG
+
+    User Question
+        -> Authorization / Tenant Context      [existing, reused unchanged]
+        -> RetrievalService                     [existing, reused unchanged]
+        -> EvidenceSelectionService              (app/rag/evidence_selection.py)
+        -> evaluate_sufficiency                  (app/rag/sufficiency.py)
+        -> detect_conflicts                      (app/rag/conflict.py)
+        -> build_grounded_context                (app/rag/context_builder.py)
+        -> LLMProvider                           (app/llm/provider.py)
+        -> citation validation                   (app/rag/citations.py)
+        -> RAGResponse, with citations/provenance (app/rag/results.py)
+
+This is the Evidence-Grounded RAG v0.1 milestone: a controlled reasoning
+layer over SIE's existing retrieval evidence. **The LLM is not the
+source of truth.** SIE's knowledge sources are the evidence; the LLM is a
+reasoning/language-generation layer operating over retrieved evidence —
+never a fact source in its own right, and never presented as one. If
+sufficient evidence cannot be retrieved, SIE says so explicitly
+(`INSUFFICIENT_EVIDENCE`) rather than inventing an answer from the
+model's general/pretrained knowledge.
+
+`POST /api/v1/knowledge/rag/query` is the one HTTP entry point
+(`app/api/v1/rag.py`) — same authorization shape as
+`POST /api/v1/knowledge/retrieval/search` (see
+[Semantic retrieval API](#running-with-docker-compose-recommended) /
+`app/api/v1/retrieval.py`'s own docstring): every request must be
+authenticated, and `filters.organization_id`, if present, must be
+authorized (`knowledge:read` in that organization) before it is ever
+passed down. There is no second tenant-isolation mechanism — RAG reuses
+`RetrievalService`'s exactly, unmodified. The client cannot select an
+embedding model or an LLM provider/model; both are resolved server-side
+from app settings.
+
+### LLM provider abstraction
+
+`app/llm/provider.py::LLMProvider` is a `Protocol`
+(`generate(request) -> response`, plus `provider_name`/`model_name`/
+`model_version`/`is_external`) — the exact same "configuration-based
+boundary, nothing above it imports a concrete implementation" shape
+`app/embeddings/provider.py::EmbeddingProvider` already establishes.
+`RAGService` depends on this protocol only; it never imports OpenAI,
+Anthropic, Google, or any other commercial SDK directly.
+
+**`FakeLLMProvider`, a deterministic, dependency-free, offline test/dev
+provider, is the only provider actually exercised anywhere in this
+milestone** — in development, in the test suite, and in the RAG
+evaluation harness alike, for the identical reason
+`HashingEmbeddingProvider` is the only embedding provider actually
+exercised: tests and CI must never require network access or a
+commercial API key. It builds a short, templated, genuinely-grounded
+answer from whatever `[E#]` evidence it actually finds in the supplied
+context — deterministic, and clearly self-identified in every field it
+returns (`provider_name="fake"`, `model_name="sie-fake-test-llm"`) so a
+response can never be mistaken for one from a real AI model.
+
+`OpenAICompatibleLLMProvider` is the documented extension point for a
+real provider — any HTTP service exposing an OpenAI-compatible
+`/chat/completions` endpoint (this covers OpenAI itself, and self-hosted/
+open-source inference servers that speak the same schema). It is
+implemented and code-reviewed but **was not exercised against a real
+model/API in this environment** — the identical honesty principle
+`SentenceTransformerEmbeddingProvider` already follows in this codebase
+(see the corrective migration milestone): no reachable LLM API endpoint
+in this session's sandboxed egress policy, and per explicit instruction,
+no alternative/substitute model was exercised in its place either. Do
+not present it as validated. Selected via `LLM_PROVIDER=openai_compatible`,
+configured entirely through `app/core/config.py` settings
+(`LLM_MODEL_NAME`, `LLM_API_BASE_URL`, `LLM_API_KEY`, `LLM_TEMPERATURE`,
+`LLM_MAX_OUTPUT_TOKENS`, `LLM_TIMEOUT_SECONDS`) — the API key is read
+once from an environment variable, never committed, never logged, and
+never placed in any `LLMResponse` or exposed through the API.
+
+**Guardrail against shipping the test provider by accident.**
+`LLM_PROVIDER` defaults to `"fake"` — the identical asymmetry
+`EMBEDDING_PROVIDER`/`HashingEmbeddingProvider` already has relative to
+`DEV_MODE`: the test/CI-safe default is also the value that must never
+quietly reach a real deployment. `build_llm_provider()` (and therefore
+`get_llm_provider()`, what application startup and every request path
+actually call) **raises `FakeLLMProviderInProductionError` and refuses to
+construct the provider at all** whenever it would resolve to `"fake"`
+while `APP_ENV` is `"production"`/`"prod"` — the same "fail closed" shape
+`DEV_MODE` and `EmbeddingProvider`'s own guard already use.
+
+### Evidence selection — not every retrieved chunk reaches the prompt
+
+`app/rag/evidence_selection.py::EvidenceSelectionService` filters, in
+order: drop `INSUFFICIENT`-quality extractions; drop `LOW`-relevance
+matches (RetrievalService's own similarity floor is looser than what is
+usable *as grounding evidence*); drop near-duplicate content (Jaccard
+token overlap over a configurable threshold, `RAG_DEDUP_SIMILARITY_THRESHOLD`);
+prioritize `VERIFIED` sources (a stable reorder, never a discard); then
+cap at `RAG_MAX_EVIDENCE_ITEMS` and `RAG_MAX_CONTEXT_CHARACTERS` — the
+character cap drops whole items rather than truncating one mid-content,
+so a citation always points at its item's complete text, never a
+silently-cut fragment. Every surviving item keeps its full
+`RetrievalResult` (rank, similarity, verification status, extraction
+quality, location, scope, organization_id, ...) unchanged, and is
+assigned a stable citation id (`E1`, `E2`, ...) in final order.
+
+### Evidence sufficiency — deterministic rules, never delegated to the LLM
+
+`app/rag/sufficiency.py::evaluate_sufficiency` computes one of
+`SUFFICIENT` / `PARTIAL` / `INSUFFICIENT` from `RelevanceLevel` buckets
+and counts alone — never from anything resembling an LLM confidence
+score (milestone's own instruction: "do not call this AI confidence").
+The exact rules:
+
+1. Zero selected evidence items -> `INSUFFICIENT`.
+2. At least one `HIGH`-relevance item **and** at least
+   `RAG_SUFFICIENT_MIN_EVIDENCE_COUNT` (default 2) items overall ->
+   `SUFFICIENT`.
+3. Anything else (some evidence exists, but rule 2's bar isn't met) ->
+   `PARTIAL`.
+
+### Abstention and partial evidence
+
+When `evidence_state == INSUFFICIENT`, `RAGService` returns
+`outcome=INSUFFICIENT_EVIDENCE` **without ever calling the LLM** — the
+deterministic gate runs first, so a provider that might otherwise answer
+confidently from general/pretrained knowledge never gets the chance to.
+The response's `abstention_reason` states what was searched, how many
+candidates were found, how many survived evidence selection, and suggests
+a next step (rephrase, narrow/widen scope, confirm ingestion).
+
+When `evidence_state == PARTIAL`, the request still reaches the LLM (the
+system prompt instructs it to distinguish what is directly supported from
+what cannot be established — see below), and the response additionally
+carries an explicit `PARTIAL_EVIDENCE` warning so a client can always see
+this structurally, independent of the generated prose.
+
+**Unsupported-claim guardrail.** Even when evidence was supplied to the
+LLM, an answer that cites *none* of it is rejected rather than returned
+(`outcome=UNSUPPORTED_CLAIM_REJECTED`, `answer=None`) — an uncited claim
+from a pipeline that is supposed to be evidence-grounded is exactly the
+failure mode this milestone forbids, so it is treated as untrustworthy
+regardless of how confident it reads.
+
+### Source conflicts — never resolved automatically
+
+`app/rag/conflict.py::detect_conflicts` is a small, explicit, **deterministic**
+rule — not machine learning, and not claimed to be a general-purpose
+contradiction detector. Two evidence items that both contain a requirement
+cue word ("required"/"must"/"shall"/...) are flagged as conflicting when
+their topic-word overlap (Jaccard, after removing stopwords and
+requirement/negation cue words) clears `RAG_CONFLICT_TOPIC_OVERLAP_THRESHOLD`
+(same subject) and exactly one of them contains a negation cue
+("not"/"no"/"never"/"without"/...) while the other does not (opposite
+polarity) — e.g. "Hard hats are required." vs. "Hard hats are not
+required." When a conflict is detected, `RAGService` returns
+`outcome=SOURCE_CONFLICT` **built directly from the conflicting evidence,
+without ever calling the LLM** — both sources are named, both statements
+quoted verbatim, and the response states plainly that SIE cannot resolve
+the conflict automatically. This is a defense-in-depth heuristic, not a
+guarantee: a paraphrased conflict with no shared vocabulary, or one that
+doesn't hinge on an explicit negation word, will not be detected.
+
+### Prompt injection defense — documented as defense in depth, not a guarantee
+
+`app/rag/prompt.py`'s versioned system prompt explicitly instructs the
+model to treat retrieved evidence as DATA, never as instructions — even
+text that reads like "ignore previous instructions" inside a document's
+content. `app/rag/context_builder.py` enforces the structural half of
+this: system instructions, the user's question, and retrieved evidence
+are three separate fields all the way to the `LLMProvider` boundary
+(`LLMRequest`), never concatenated into one blob, and every evidence item
+is wrapped in explicit `UNTRUSTED DATA`/`BEGIN DOCUMENT CONTENT`/`END
+DOCUMENT CONTENT` delimiters. **This is documented, not claimed, as
+defense in depth.** A real LLM reads its entire input as one token
+stream; nothing about string concatenation or delimiter text
+*cryptographically* prevents a sufficiently adversarial document from
+influencing a real model's behavior, and this codebase makes no claim
+that it does — see `tests/test_rag_context_builder.py` and
+`tests/test_rag_api.py`'s injection test for exactly what is and is not
+verified.
+
+### Citations — generated from actual evidence, validated, never fabricated
+
+The LLM is asked to cite `[E#]` markers matching the evidence ids it was
+actually given (see the grounded-context format below) — and it is never
+trusted to have done so correctly. `app/rag/citations.py::validate_and_sanitize_citations`
+checks every `[E#]` token in the generated answer against the evidence
+ids that were *actually supplied*: a valid one is left untouched; an
+invalid one (e.g. `[E999]` when no such id exists) is replaced with an
+explicit `[citation removed: not found in supplied evidence]` placeholder
+and reported as an `INVALID_CITATION_REMOVED` warning. The final response
+never contains a fabricated evidence reference.
+
+### Structured evidence context
+
+Each evidence item passed to the LLM is rendered with its full provenance
+— Evidence id, Source, Document, Version, Location, Verification,
+Extraction quality, Authority (where set), Scope, Similarity, and
+Content — exactly the shape the milestone's own example lays out. No
+internal database id is ever included in this text; the model only ever
+sees the stable `[E#]` identifier, never a raw `chunk_id`/`document_id`/
+`source_id`. Those internal ids remain available on the structured
+`Citation` objects in the API response for a client that needs to link
+back to the source record (see "Provenance" below) — they simply never
+appear inside the generated prose itself.
+
+### Provenance — Response -> Citation -> Chunk -> Version -> Document -> Source
+
+Every `Citation` in a `RAGResponse` wraps the original `RetrievalResult`
+unchanged, which in turn was built from real joined rows
+(`KnowledgeChunk` -> `KnowledgeDocumentVersion` -> `KnowledgeDocument` ->
+`KnowledgeSource`) — see `app/retrieval/retrieval_service.py`. Nothing in
+the RAG layer summarizes, rewrites, or drops this chain; every field
+(`document_title`, `source_name`, `version_label`, `location`,
+`verification_status`, `extraction_quality`, `similarity`, `scope`,
+`organization_id`) survives from retrieval all the way to the final HTTP
+response.
+
+### Tenant isolation, global knowledge, and privacy
+
+RAG reuses `RetrievalService`'s tenant isolation exactly — `allowed_organization_id`
+is resolved and authorized by `app/api/v1/rag.py` before `RAGService` is
+ever called, the same "resolve-then-authorize-then-pass-a-trusted-value"
+shape used everywhere else in this codebase. There is no second
+tenant-isolation mechanism. GLOBAL and authorized-organization evidence
+can appear together in one response, each citation's `scope` field
+preserving which is which — this matters when they conflict (see "Source
+conflicts" above).
+
+**External LLM privacy boundary (`ALLOW_EXTERNAL_LLM_FOR_PRIVATE_DATA`,
+default `False`).** If any selected evidence is organization-private
+(not GLOBAL) and the configured `LLMProvider.is_external` is `True`,
+`RAGService` refuses to call it (`outcome=PRIVACY_BLOCKED`) unless this
+setting is explicitly enabled — SIE never silently transmits private
+content to an external provider. `FakeLLMProvider.is_external = False`
+(it never leaves this process); a real provider defaults to
+`is_external=True` unless a deployment explicitly configures a genuinely
+self-hosted/private endpoint (`LLM_PROVIDER_IS_EXTERNAL=False`). SIE
+makes no claim about any specific commercial provider's own
+privacy/data-retention policy — organizations may eventually require
+self-hosted models, private model endpoints, regional processing, or
+no-training/data-retention guarantees; this milestone represents provider
+configuration separately from core logic specifically so that remains
+possible without a redesign.
+
+**No training on organization data.** SIE does not use organization data
+to train the embedding model or the LLM in this milestone, and there is
+no model-training or fine-tuning pipeline anywhere in this codebase.
+Organization data is retrieval context only.
+
+### Prompt versioning and reproducibility
+
+Every `RAGResponse` carries `prompt_version` (`app/rag/prompt.py` — a
+plain version-string-keyed dict, so an older prompt's exact text stays
+retrievable even after a newer one is added), plus a `retrieval_metadata`
+envelope (retrieval/selection counts, embedding model identity, timing).
+Internally (not exposed over HTTP — see "What the API response never
+contains" below), `RAGResponse.reproducibility` additionally carries the
+query, retrieval filters, and every selected chunk's id/version/
+similarity/relevance — so a later challenge to a generated answer can
+always identify exactly what evidence and model configuration produced
+it. This is written into the existing `AuditLog` (see "Audit and
+observability" below), not into a new database table.
+
+### Audit and observability
+
+RAG requests reuse the existing `app/services/audit_service.py`
+(`AuditAction.RAG_QUERY_EXECUTED`) rather than adding a new database
+table — see `app/rag/rag_service.py`'s own docstring for why a dedicated
+table was judged unnecessary: `AuditLog.event_metadata` already gives a
+tenant-scoped, indexed, JSON-capable place for outcome, evidence state,
+evidence/citation/conflict/warning counts, prompt version, model
+identity, timing, success/failure, and the full reproducibility payload
+above. The raw query text and generated answer are included only when
+`LOG_RAG_QUERY_TEXT`/`LOG_RAG_ANSWER_TEXT` are explicitly enabled (both
+default `False`) — identical to `RetrievalService`'s own
+`LOG_RETRIEVAL_QUERY_TEXT` precedent. `logger.info("rag_query", ...)`
+separately emits safe, content-free metrics (durations, counts,
+outcome/evidence_state) for observability tooling.
+
+### What the API response never contains
+
+No system prompt, no raw prompt text, no raw embedding vector, no API
+key, no internal database credential, no private storage path. See
+`app/schemas/rag.py`'s own docstring.
+
+### What RAG deliberately does not do
+
+No predictive analytics, no machine learning, no autonomous or
+tool-using agents, no external web search or web crawling, no model
+fine-tuning or training pipeline, no reinforcement learning, no automatic
+incident intervention or workflow execution, no BM25/keyword search or
+additional search engine, no reranking model, and no conversation
+memory/personality/open-ended general-knowledge chat — SIE RAG is a
+safety-intelligence evidence system, not a general-purpose chatbot. These
+remain future/separate milestones, not part of what this codebase does
+today.
+
+### A note on what citations do and do not mean
+
+**SIE does not guarantee that generated answers are correct simply
+because they contain citations. Citations indicate supporting source
+material; users remain responsible for appropriate professional
+verification of safety-critical decisions.**
 
 ## Configuration
 
@@ -1667,17 +1987,38 @@ text is ever written to logs (query length and an embedding-model
 identity are always logged; the query content itself is not, by
 default — see that section's "Observability" note).
 
+`LLM_PROVIDER` (`fake`) / `LLM_MODEL_NAME` / `LLM_MODEL_VERSION` /
+`LLM_TEMPERATURE` (0.0) / `LLM_MAX_OUTPUT_TOKENS` (800) /
+`LLM_TIMEOUT_SECONDS` (30.0) / `LLM_API_BASE_URL` / `LLM_API_KEY` (unset;
+never committed, never logged) / `LLM_PROVIDER_IS_EXTERNAL` (`true`)
+configure the LLM provider — see [Evidence-Grounded RAG](#evidence-grounded-rag)
+above, in particular "LLM provider abstraction" for why `fake` is the
+default and `FakeLLMProviderInProductionError`'s guardrail against it
+reaching a real deployment. `RAG_MAX_EVIDENCE_ITEMS` (6) /
+`RAG_MAX_CONTEXT_CHARACTERS` (6000) / `RAG_DEDUP_SIMILARITY_THRESHOLD`
+(0.85) configure evidence selection; `RAG_SUFFICIENT_MIN_EVIDENCE_COUNT`
+(2) configures evidence sufficiency; `RAG_CONFLICT_TOPIC_OVERLAP_THRESHOLD`
+(0.3) configures source-conflict detection — all documented *initial*
+defaults, the same "not scientifically validated" spirit as the chunking/
+retrieval defaults above. `ALLOW_EXTERNAL_LLM_FOR_PRIVATE_DATA` (`false`)
+is the external-LLM privacy boundary. `LOG_RAG_QUERY_TEXT` (`false`) /
+`LOG_RAG_ANSWER_TEXT` (`false`) gate whether a RAG request's raw query/
+generated answer are ever written to the audit trail.
+
 ## Deliberate scope boundaries (v0.1)
 
 To keep each foundation phase clean and reviewable, the following are
 intentionally **not** included yet: real OIDC/OAuth2 token verification, a
 commercial identity provider dependency, machine-client authentication
-(API keys, OAuth client credentials), the AI/LLM layer, RAG, prompt
-engineering, answer generation, a reranking model, predictive models,
-machine learning, Safelytic integration, Redis, Celery, Kafka,
-Kubernetes, production (S3/Azure/GCS) object storage, commercial OCR,
-transcription, unrestricted web crawling, and automatic external-source
-trust. See [Identity architecture](#identity-architecture) for what *is*
+(API keys, OAuth client credentials), hybrid/keyword retrieval, a
+reranking model, predictive models, machine learning, autonomous or
+tool-using agents, external web search/crawling, model fine-tuning or
+training, Safelytic integration, Redis, Celery, Kafka, Kubernetes,
+production (S3/Azure/GCS) object storage, commercial OCR, transcription,
+and automatic external-source trust. (The AI/LLM layer and RAG themselves
+*are* now implemented, evidence-grounded only — see
+[Evidence-Grounded RAG](#evidence-grounded-rag).) See
+[Identity architecture](#identity-architecture) for what *is*
 built towards authentication/authorization, and the "Deliberately does
 not implement" list the Identity & Access Foundation milestone itself set
 (no password auth, no stored passwords, no API keys, no OAuth client
@@ -1689,11 +2030,13 @@ execution, semantic chunking, and a JSON/XML schema-mapping layer are
 architected for but not built). **As of the Semantic Knowledge Engine
 v0.1 milestone, embeddings, pgvector, and semantic similarity search
 *are* implemented** — see [Semantic Knowledge
-Architecture](#semantic-knowledge-architecture) for the full design and
-its own explicit statement that hybrid/keyword retrieval, reranking,
-RAG, and LLM reasoning are still not implemented, and remain future work
-layered on top of the ranked-evidence-with-provenance this milestone
-delivers.
+Architecture](#semantic-knowledge-architecture) for the full design.
+**As of the Evidence-Grounded RAG v0.1 milestone, an evidence-grounded
+LLM reasoning layer *is* implemented** on top of that retrieval —
+see [Evidence-Grounded RAG](#evidence-grounded-rag) for the full design,
+and its own "What RAG deliberately does not do" section for what
+remains genuinely out of scope (hybrid/keyword retrieval and reranking
+in particular still are not implemented).
 
 ## Known gaps / next phase
 
@@ -1777,15 +2120,16 @@ delivers.
   safety data a payload represents (an incident, an inspection, ...) and
   mapping it to canonical fields is future work, same as for CSV/XLSX
   rows.
-* **No semantic (embedding-aware) chunking, and no embeddings/vector
-  search/RAG at all.** `StructureAwareChunkingStrategy` is deterministic,
-  structure-based splitting — see [Knowledge Quality & Semantic Chunking
-  Pipeline](#knowledge-quality--semantic-chunking-pipeline). A future
-  `SemanticChunkingStrategy` (or `TableAwareChunkingStrategy`,
+* **No semantic (embedding-aware) *chunking*.** `StructureAwareChunkingStrategy`
+  is deterministic, structure-based splitting — see [Knowledge Quality &
+  Semantic Chunking Pipeline](#knowledge-quality--semantic-chunking-pipeline).
+  A future `SemanticChunkingStrategy` (or `TableAwareChunkingStrategy`,
   `LegalDocumentChunkingStrategy`, `SafetyProcedureChunkingStrategy`) can
   be added as another `ChunkingStrategy` implementation without changing
-  the interface or any call site; none of that, nor any embedding
-  computation, vector column, or retrieval layer, exists yet.
+  the interface or any call site; none of that exists yet. (Embeddings,
+  vector search, and RAG themselves *are* now implemented — see
+  [Semantic Knowledge Architecture](#semantic-knowledge-architecture) and
+  [Evidence-Grounded RAG](#evidence-grounded-rag).)
 * **DOCX list-item detection covers Word's built-in styles only.**
   `app/ingestion/adapters/docx_adapter.py` detects "List Bullet"/"List
   Number" paragraph styles, not manually-formatted lists (a paragraph
@@ -1850,7 +2194,61 @@ delivers.
   "Production architecture consideration" for the future
   Queue -> Embedding Worker evolution this is deliberately shaped to
   support without an API/schema break.
-* **No hybrid (keyword + vector) retrieval, reranking, RAG, or LLM
-  integration.** All explicitly out of scope for this milestone — see
-  [Semantic Knowledge Architecture](#semantic-knowledge-architecture)'s
-  "Future architecture" diagram.
+* **No hybrid (keyword + vector) retrieval or reranking.** Explicitly out
+  of scope — see [Semantic Knowledge Architecture](#semantic-knowledge-architecture)'s
+  "Future architecture" diagram. (RAG and LLM integration themselves
+  *are* now implemented — see [Evidence-Grounded RAG](#evidence-grounded-rag)
+  — the gaps below are specific to that layer.)
+* **The real LLM provider (`OpenAICompatibleLLMProvider`) has not been
+  exercised against a real model/API in this environment.** No reachable
+  LLM API endpoint in this session's sandboxed egress policy — the
+  identical situation `SentenceTransformerEmbeddingProvider` is already
+  in (see the corrective migration milestone). It is implemented and
+  code-reviewed, selectable via `LLM_PROVIDER=openai_compatible`, but not
+  validated end to end against a live provider; do not present it as
+  validated. `FakeLLMProvider` remains the only provider actually
+  exercised by this codebase's tests and evaluation harness.
+* **Source conflict detection is a narrow, keyword-based heuristic, not
+  a general contradiction detector.** See [Evidence-Grounded RAG](#evidence-grounded-rag)'s
+  "Source conflicts" section — it only catches a requirement-type
+  statement paired with its explicit negation over shared vocabulary. A
+  paraphrased conflict, or one with no shared significant words, will not
+  be detected. `RAG_CONFLICT_TOPIC_OVERLAP_THRESHOLD` is a documented
+  initial default, not tuned against any real-world conflict dataset.
+* **Prompt injection defense is structural, not a guarantee.** Retrieved
+  evidence is clearly delimited and never concatenated into the system
+  instructions, and every test provider/test path confirms that
+  structure — but this codebase makes no claim that string delimiting
+  alone can prevent a sufficiently adversarial document from influencing
+  a *real* model's behavior once it becomes one token stream inside that
+  model's own context window. See [Evidence-Grounded RAG](#evidence-grounded-rag)'s
+  "Prompt injection defense" section.
+* **Evidence sufficiency/evidence-selection thresholds
+  (`RAG_SUFFICIENT_MIN_EVIDENCE_COUNT`, `RAG_MAX_EVIDENCE_ITEMS`,
+  `RAG_MAX_CONTEXT_CHARACTERS`, `RAG_DEDUP_SIMILARITY_THRESHOLD`) are
+  documented initial defaults**, calibrated against
+  `HashingEmbeddingProvider`'s own score distribution — the same
+  "not scientifically validated" caveat the retrieval thresholds above
+  already carry. They will need recalibrating if a different embedding
+  or LLM provider is ever configured.
+* **No persistent RAG request/generation table.** RAG audit and
+  reproducibility metadata is written into the existing `AuditLog` table
+  (`AuditAction.RAG_QUERY_EXECUTED`) rather than a new one — see
+  `app/rag/rag_service.py`'s own docstring for why a dedicated table was
+  judged unnecessary for this milestone. The full generated prompt/answer
+  is never stored by default (`LOG_RAG_QUERY_TEXT`/`LOG_RAG_ANSWER_TEXT`,
+  both off).
+* **No RAG-level rate limiting or cost accounting beyond the per-request
+  evidence/token caps.** `RAG_MAX_EVIDENCE_ITEMS`/`RAG_MAX_CONTEXT_CHARACTERS`/
+  `LLM_MAX_OUTPUT_TOKENS` bound one request's cost; there is no
+  per-user/per-organization quota, budget, or rate limit yet.
+* **The RAG evaluation harness (`tests/evaluation/rag_harness.py`) is a
+  small, synthetic, regression-catching check, not a production
+  benchmark** — the same "Prototype evaluation" labeling the Recall@K
+  harness already carries. Its "abstention correctness" metric is
+  honestly below 1.0 on this fixture (~0.67, not asserted higher) for a
+  real, documented reason: `HashingEmbeddingProvider` is a bag-of-words
+  embedding, not a trained semantic model, so an unrelated query can
+  occasionally still hash into overlapping vocabulary buckets and cross
+  the relevance bar. A real embedding model would be expected to score
+  closer to 1.0 here.

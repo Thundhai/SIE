@@ -6,6 +6,7 @@ from app.api.v1 import (
     knowledge,
     memberships,
     organizations,
+    rag,
     retrieval,
     sites,
 )
@@ -18,3 +19,4 @@ api_router.include_router(knowledge.router)
 api_router.include_router(memberships.router)
 api_router.include_router(ingestion.router)
 api_router.include_router(retrieval.router)
+api_router.include_router(rag.router)

@@ -24,6 +24,7 @@ striprtf==0.0.33
 defusedxml==0.7.1
 Pillow==12.3.0
 
-# Testing
+# Testing (httpx also backs app/llm/provider.py::OpenAICompatibleLLMProvider —
+# the real-provider HTTP extension point, never invoked by the test suite)
 pytest==8.3.4
 httpx==0.28.1
