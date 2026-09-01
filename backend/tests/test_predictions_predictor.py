@@ -17,20 +17,21 @@ from tests.fixtures.predictions.synthetic_training_dataset import (
     as_of_dates,
     seed_synthetic_organization,
 )
-from tests.intelligence_test_helpers import make_org, make_safety_event, make_site
+from tests.intelligence_test_helpers import make_org, make_reviewer_user, make_safety_event, make_site
 
 AS_OF = datetime(2026, 6, 1, tzinfo=timezone.utc)
 
 
 def _deployed_model(db_session, *, seed=11):
     org, sites = seed_synthetic_organization(db_session, name="Predictor Org", site_names=["Site 1"], seed=seed)
+    reviewer = make_reviewer_user(db_session)
     dates = as_of_dates()
     examples = build_training_examples(
         db_session, organization_id=org.id, site_ids=[s.id for s in sites], as_of_dates=dates
     )
     entry = train_baseline_model(db_session, organization_id=org.id, examples=examples)
     entry = model_registry.mark_validated(db_session, entry, calibration_validated=False)
-    entry = model_registry.approve(db_session, entry)
+    entry = model_registry.approve(db_session, entry, reviewer_user_id=reviewer.id)
     entry = model_registry.deploy(db_session, entry)
     return org, sites[0], entry
 
@@ -120,13 +121,14 @@ def test_predict_as_of_never_requires_deployed_when_used_for_internal_backtestin
 
 def test_a_successful_prediction_has_a_risk_score_and_category_but_no_fabricated_probability(db_session):
     org, sites = seed_synthetic_organization(db_session, name="Score Org", site_names=["Site 1"], seed=77)
+    reviewer = make_reviewer_user(db_session)
     dates = as_of_dates()
     examples = build_training_examples(
         db_session, organization_id=org.id, site_ids=[s.id for s in sites], as_of_dates=dates
     )
     entry = train_baseline_model(db_session, organization_id=org.id, examples=examples)
     entry = model_registry.mark_validated(db_session, entry, calibration_validated=False)  # NOT calibrated
-    entry = model_registry.approve(db_session, entry)
+    entry = model_registry.approve(db_session, entry, reviewer_user_id=reviewer.id)
     entry = model_registry.deploy(db_session, entry)
 
     prediction = predict_as_of(db_session, organization_id=org.id, site_id=sites[0].id, as_of=dates[-1], model=entry)
@@ -139,13 +141,14 @@ def test_a_successful_prediction_has_a_risk_score_and_category_but_no_fabricated
 
 def test_probability_is_populated_only_when_the_model_is_calibration_validated(db_session):
     org, sites = seed_synthetic_organization(db_session, name="Calibrated Org", site_names=["Site 1"], seed=88)
+    reviewer = make_reviewer_user(db_session)
     dates = as_of_dates()
     examples = build_training_examples(
         db_session, organization_id=org.id, site_ids=[s.id for s in sites], as_of_dates=dates
     )
     entry = train_baseline_model(db_session, organization_id=org.id, examples=examples)
     entry = model_registry.mark_validated(db_session, entry, calibration_validated=True)
-    entry = model_registry.approve(db_session, entry)
+    entry = model_registry.approve(db_session, entry, reviewer_user_id=reviewer.id)
     entry = model_registry.deploy(db_session, entry)
 
     prediction = predict_as_of(db_session, organization_id=org.id, site_id=sites[0].id, as_of=dates[-1], model=entry)
@@ -155,13 +158,14 @@ def test_probability_is_populated_only_when_the_model_is_calibration_validated(d
 
 def test_prediction_provenance_chain_is_fully_inspectable(db_session):
     org, sites = seed_synthetic_organization(db_session, name="Provenance Org", site_names=["Site 1"], seed=66)
+    reviewer = make_reviewer_user(db_session)
     dates = as_of_dates()
     examples = build_training_examples(
         db_session, organization_id=org.id, site_ids=[s.id for s in sites], as_of_dates=dates
     )
     entry = train_baseline_model(db_session, organization_id=org.id, examples=examples)
     entry = model_registry.mark_validated(db_session, entry, calibration_validated=False)
-    entry = model_registry.approve(db_session, entry)
+    entry = model_registry.approve(db_session, entry, reviewer_user_id=reviewer.id)
     entry = model_registry.deploy(db_session, entry)
 
     prediction = predict_as_of(db_session, organization_id=org.id, site_id=sites[0].id, as_of=dates[-1], model=entry)

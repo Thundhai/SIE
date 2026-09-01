@@ -7,7 +7,7 @@ consumer of the SIE API — but it is a consumer, not a dependency. Any
 authorized enterprise application connects the same way: through the
 versioned REST API under `/api/v1`.
 
-Nine milestones are implemented so far:
+Ten milestones are implemented so far:
 
 * **Foundation v0.1** — core tenancy models (Organization, Site, User,
   DataSource), a REST API, and infrastructure (FastAPI, PostgreSQL,
@@ -97,20 +97,53 @@ Nine milestones are implemented so far:
   performance.** See
   [Predictive Intelligence Architecture](#predictive-intelligence-architecture)
   below.
+* **Predictive Model Validation & Governance v0.1** — the validation,
+  governance, monitoring, and controlled-deployment foundation a
+  predictive model needs *before* SIE can responsibly use it against real
+  organizational data: explicit `SYNTHETIC`/`REAL` dataset versioning with
+  a structured, multi-field real-data quality report (never a single
+  collapsed score, never auto-modified — only quarantined/reported);
+  configurable, explicitly-labeled "INITIAL GOVERNANCE DEFAULT" minimum
+  data requirements gating training with `INSUFFICIENT_DATA`; a second
+  comparison model (Gradient Boosting, via scikit-learn — a deliberate,
+  documented exception to this project's hand-rolled-model default)
+  evaluated identically to Logistic Regression with neither
+  auto-selected; reliability-curve/Brier-score/ECE calibration validation
+  that gates whether a score may ever be shown as a "probability";
+  configurable decision thresholds; cross-time/site/data-quality model
+  stability analysis; per-record false-negative/false-positive error
+  analysis; an expanded rolling walk-forward harness and six mandatory
+  temporal-leakage regression tests; a human-approval-gated model
+  lifecycle (`TRAINED -> VALIDATED -> APPROVED -> DEPLOYED -> RETIRED`,
+  the model can never approve itself) with controlled rollback; prediction
+  monitoring, outcome tracking, and lightweight/explainable data, feature,
+  and performance drift detection that only ever *flags* a model for
+  human review, never retrains or redeploys anything automatically;
+  machine- and human-readable model cards with explicit prohibited-use
+  language; and a governance validation report producing an
+  APPROVE/REJECT/REVIEW *recommendation* a human still has to act on. **A
+  model is not "approved" by scoring well — a high-scoring but
+  poorly-calibrated, unstable, or low-provenance model is not approved.**
+  See
+  [Predictive Model Validation & Governance Architecture](#predictive-model-validation--governance-architecture)
+  below.
 
-Sophisticated predictive ML beyond a single interpretable logistic
-regression baseline, OCR execution, transcription, autonomous/tool-using
-agents, automated safety interventions, and Safelytic integration are all
-out of scope so far. `app/analytics`, `app/governance` remain empty,
-documented package placeholders (see
+Deep-learning predictive models, autonomous/automated safety
+interventions or decisions, worker-level risk scoring, automatic model
+retraining, OCR execution, transcription, autonomous/tool-using agents,
+and Safelytic integration are all out of scope so far. `app/analytics`,
+`app/governance` remain empty, documented package placeholders (see
 [Intelligence & Predictive Analytics Architecture](#intelligence--predictive-analytics-architecture)
 for what `app/intelligence` itself now contains, and
-[Predictive Intelligence Architecture](#predictive-intelligence-architecture)
+[Predictive Intelligence Architecture](#predictive-intelligence-architecture) /
+[Predictive Model Validation & Governance Architecture](#predictive-model-validation--governance-architecture)
 for what `app/predictions` now contains) or interface-only modules
 (`app/ingestion/ocr.py`) so later phases have a predictable home without a
-restructure. **No AI training beyond the one hand-rolled logistic
-regression baseline, no autonomous agents, tool-calling, web
-search/crawling, or workflow automation exist in this codebase.**
+restructure. **No AI training beyond the two models in `app/predictions`
+(hand-rolled Logistic Regression; Gradient Boosting via scikit-learn, the
+one deliberate, documented dependency exception), no autonomous agents,
+tool-calling, web search/crawling, automated retraining, or workflow
+automation exist in this codebase.**
 
 ## Architecture
 
@@ -357,13 +390,19 @@ Knowledge Engine v0.1 — pgvector + knowledge_chunk_embeddings), and
 `0007` (Intelligence & Predictive Analytics Foundation v0.1 —
 `safety_events` and `api_clients`; purely additive — see
 [Intelligence & Predictive Analytics Architecture](#intelligence--predictive-analytics-architecture)
-for why no other table was added), and `0008` (Predictive Risk Modeling
+for why no other table was added), `0008` (Predictive Risk Modeling
 Specification v0.1 — `feature_snapshots`, `model_registry_entries`,
 `predictions`; purely additive — see
 [Predictive Intelligence Architecture](#predictive-intelligence-architecture)
 for what each table stores and why no `model_evaluations` table was
-needed). Earlier migrations are never modified; new schema changes are
-always a new migration on top.
+needed), and `0009` (Predictive Model Validation & Governance v0.1 —
+`dataset_versions`, `model_approvals`, `model_review_flags`,
+`prediction_outcomes`, plus an additive, nullable
+`model_registry_entries.dataset_version_id` foreign key; no existing
+column altered or dropped — see
+[Predictive Model Validation & Governance Architecture](#predictive-model-validation--governance-architecture)
+for what each table stores). Earlier migrations are never modified; new
+schema changes are always a new migration on top.
 
 ## API endpoints
 
@@ -402,6 +441,21 @@ always a new migration on top.
 | POST   | `/api/v1/organizations/{organization_id}/api-clients/{id}/revoke` | Revoke a machine client (`users:manage`) |
 | POST   | `/api/v1/intelligence/predictions`                         | Generate/refresh a prediction for one site (`prediction:read`) — server-computed only, see below |
 | GET    | `/api/v1/intelligence/predictions/{entity_id}`              | The latest recorded prediction for one site (`prediction:read`) |
+| POST   | `/api/v1/intelligence/datasets/validate`                    | Register + validate a `SYNTHETIC` or `REAL` dataset version (`governance:manage`) — server-computed quality report |
+| GET    | `/api/v1/intelligence/datasets`                             | List an organization's dataset versions (`governance:read`) |
+| GET    | `/api/v1/intelligence/datasets/{dataset_version_id}`         | One dataset version, with its full quality report (`governance:read`) |
+| POST   | `/api/v1/intelligence/models/train`                          | Train one model — Logistic Regression or Gradient Boosting — from a dataset version (`governance:manage`); `422 INSUFFICIENT_DATA` if minimum data requirements aren't met |
+| GET    | `/api/v1/intelligence/models`                                | List an organization's models (`governance:read`) |
+| GET    | `/api/v1/intelligence/models/{model_id}`                     | One model's full record (`governance:read`) |
+| POST   | `/api/v1/intelligence/models/{model_id}/validate`            | `TRAINED -> VALIDATED` (`governance:manage`) — calibration status checked server-side |
+| POST   | `/api/v1/intelligence/models/{model_id}/approve`             | `VALIDATED -> APPROVED` (`governance:manage`) — reviewer is always the authenticated caller, never client-supplied |
+| POST   | `/api/v1/intelligence/models/{model_id}/reject`              | `-> REJECTED` (`governance:manage`) — requires a reason |
+| POST   | `/api/v1/intelligence/models/{model_id}/deploy`              | `APPROVED -> DEPLOYED` (`governance:manage`) — also usable to redeploy a previously `undeploy`-ed version |
+| POST   | `/api/v1/intelligence/models/{model_id}/undeploy`            | `DEPLOYED -> APPROVED` (`governance:manage`) — pulled from serving without retiring |
+| POST   | `/api/v1/intelligence/models/{model_id}/retire`              | `-> RETIRED` (`governance:manage`) — history is never deleted |
+| GET    | `/api/v1/intelligence/models/{model_id}/card`                | The model card — intended/prohibited use, limitations, metrics (`governance:read`) |
+| GET    | `/api/v1/intelligence/models/{model_id}/validation-report`   | A freshly-generated governance report with an APPROVE/REJECT/REVIEW recommendation (`governance:read`) |
+| GET    | `/api/v1/intelligence/models/{model_id}/monitoring`          | Prediction monitoring + post-outcome-maturity performance monitoring (`governance:read`) |
 
 The membership endpoints, the ingestion endpoint, the retrieval
 search and RAG query endpoints, and the intelligence/API-client endpoints
@@ -416,7 +470,14 @@ yet) and why the other routes above them still don't, and
 [Evidence-Grounded RAG](#evidence-grounded-rag) /
 [Intelligence & Predictive Analytics Architecture](#intelligence--predictive-analytics-architecture)
 for the ingestion, retrieval, RAG, and intelligence endpoints' own
-authorization rules. The intelligence ingestion endpoints are the
+authorization rules. Every `/api/v1/intelligence/datasets/*` and
+`/api/v1/intelligence/models/*` governance route additionally requires
+`governance:read` (every `GET`) or `governance:manage` (every mutating
+call) — granted by default only to `ORG_ADMIN` (`governance:manage`) and
+`ORG_ADMIN`/`HSE_MANAGER`/`HSE_ANALYST`/`VIEWER` (`governance:read`; note
+`HSE_USER` has neither) — see
+[Predictive Model Validation & Governance Architecture](#predictive-model-validation--governance-architecture)
+for the full authorization design. The intelligence ingestion endpoints are the
 exception to every other authenticated route in this codebase: they use
 **machine-client (API key) authentication**
 (`app/api/deps_machine_auth.py`), never the development-mode human
@@ -2725,12 +2786,391 @@ predictive validity.
 
 No production model training or deployment, no deep learning/neural
 networks, no autonomous predictions or automated interventions,
-no worker-level risk scoring, no external web intelligence, no model
-monitoring/drift-detection implementation (documented as explicit future
-work only — prediction-distribution, feature/data/calibration/performance
-drift, missing-data rate, and false-negative-rate monitoring all remain
-undesigned beyond being named here), and no automated safety decisions of
-any kind.
+no worker-level risk scoring, no external web intelligence, and no
+automated safety decisions of any kind. Model monitoring/drift-detection
+was named here as explicit future work only — it is now built, in the
+next milestone; see
+[Predictive Model Validation & Governance Architecture](#predictive-model-validation--governance-architecture)
+below.
+
+## Predictive Model Validation & Governance Architecture
+
+    DatasetVersion (SYNTHETIC | REAL, versioned, immutable)
+        -> validate_dataset()          -- structured, multi-field DataQualityReport (never one score)
+        -> check_minimum_requirements() -- SUFFICIENT | INSUFFICIENT_DATA (INITIAL GOVERNANCE DEFAULT thresholds)
+        -> train_model()                -- Logistic Regression (hand-rolled) OR Gradient Boosting (scikit-learn)
+        -> walk-forward evaluation, calibration, stability, error analysis -- identical methodology for both models
+        -> ModelRegistryEntry(TRAINED)
+        -> [human review: VALIDATED -> APPROVED -> DEPLOYED -> RETIRED]     (never self-approved, never auto-promoted)
+        -> prediction/outcome/drift monitoring -> ModelReviewFlag(MODEL_REVIEW_REQUIRED)  (never auto-retrains/redeploys)
+        -> model card + governance validation report (APPROVE | REJECT | REVIEW recommendation)
+
+This is the Predictive Model Validation & Governance v0.1 milestone. Its
+purpose is **not** to claim the Predictive Risk Modeling Specification
+v0.1 baseline is accurate — it is to determine whether a model is
+*trustworthy enough to responsibly deploy*: technically valid,
+statistically defensible, sufficiently calibrated, stable across time and
+data conditions, explainable, tenant-safe, data-quality aware,
+monitorable, and governable. **Nothing in this milestone optimizes a
+model to get a better metric, and nothing here trains a production model
+on real data — every dataset committed to this repository remains
+synthetic** (see "Real-data readiness" below for what *is* built so an
+organization can supply real data at runtime).
+
+### Dataset versioning — SYNTHETIC and REAL, never mixed silently
+
+`DatasetVersion` (`app/models/dataset_version.py`,
+`app/predictions/dataset_registry.py`) is the one place a predictive
+dataset gets an identity: `dataset_id`, an auto-incremented
+`dataset_version` (`v1`, `v2`, ... — never reused, never overwritten),
+`environment` (`SYNTHETIC` or `REAL`, always explicit, never inferred or
+defaulted), `organization_id`, `source_systems`, `date_range_start/end`,
+`feature_set_version`, `target_version`, `prediction_horizon_days`, and
+`created_at`. `register_synthetic_dataset()` and `register_real_dataset()`
+are the only two entry points anything calls — both simply pin
+`environment` before forwarding to `register_dataset()`, so there is no
+code path that creates a dataset record without an explicit environment
+tag. Every dataset version's own `quality_report` (see below) is
+persisted alongside it, so a model trained from that version is
+reproducible: `build_training_examples_for_dataset_version()`
+deterministically reconstructs the exact `(site_ids, as_of_dates)` a
+`DatasetVersion` implies from its own recorded organization/date-range/
+horizon, rather than depending on any external caller state.
+
+### Real-data readiness — infrastructure, not a real dataset
+
+**No real confidential organizational data is committed to this
+repository — every test fixture is synthetic.**
+`register_real_dataset()` is the infrastructure an organization uses to
+have SIE validate and version *its own* real data at runtime: it reads
+whatever `SafetyEvent` rows that organization has already ingested
+through the existing, generic API/batch ingestion pipeline
+(`app/intelligence/ingestion_service.py`, from the Intelligence &
+Predictive Analytics Foundation milestone) — it never accepts a raw file
+or bulk payload itself, and nothing in `app/predictions/` writes real
+event content to disk or to a fixture file. The only thing this module
+persists about real data is *metadata* (counts, date ranges, a quality
+report) — never the underlying event content, and `source_systems` is
+required and validated non-empty for `REAL` (never defaulted to a
+synthetic-fixture label the way `SYNTHETIC` is). This milestone does not
+claim any real organization has supplied data yet — it claims the path
+exists and is exercised by tests using synthetic events tagged `REAL` to
+prove the environment-tagging and quality-report machinery itself is
+correct, never to claim real-world validation occurred.
+
+### Real-data validation — a structured report, never one score
+
+    validate_dataset(organization_id, site_ids, date_range_start, date_range_end, as_of, thresholds)
+        -> DatasetQualityReport(
+               record_count, valid/partial/quarantined/invalid_count, duplicate_record_count,
+               completeness: CompletenessReport (missing_site_rate, missing_severity_rate,
+                              sites_with_no_exposure_records, missing_exposure_rate),
+               freshness:    FreshnessReport (latest_event_time, latest_ingestion_time,
+                              staleness_days, is_stale),
+               distribution_notes: [...],
+               overall_quality: GOOD | LIMITED | INSUFFICIENT,
+           )
+
+`app/predictions/data_validation.py::validate_dataset()` **never modifies
+or discards a questionable record** — every check (completeness,
+consistency, duplication, temporal integrity, freshness, distribution
+anomalies) is read-only, and a record already `QUARANTINED`/`INVALID` by
+the ingestion pipeline stays exactly as ingestion classified it; this
+module only reports. `DatasetQualityReport` is deliberately a structured,
+multi-field object — `to_dict()` never collapses it into one number a
+caller could rubber-stamp. `overall_quality` is a coarse read of that
+structure for the minimum-data gate below, not a replacement for reading
+the individual fields. `duplicate_record_count` reflects that
+`SafetyEvent`'s own `(organization_id, source_system, source_record_id)`
+unique constraint already rejects true intra-organization duplicates at
+the database level (`test_true_intra_organization_duplicates_are_rejected_at_the_database_level`)
+— the field exists as defense-in-depth for any future, looser-guarantee
+ingestion path, not because it is reachable through this schema today.
+
+### Minimum data requirements — INSUFFICIENT_DATA, not a silently-trained model
+
+`app/predictions/data_requirements.py::check_minimum_requirements()`
+checks a dataset against `DataSufficiencyThresholds` — historical span,
+number of sites, positive-label count, number of distinct prediction
+windows, exposure-hours coverage, record completeness — **every field is
+explicitly documented "INITIAL GOVERNANCE DEFAULT", never claimed as a
+universal or industry-validated threshold**, and every field is
+override-able per call. `POST /api/v1/intelligence/models/train` runs
+this check before training anything: a dataset that fails returns
+`422 MODEL_VALIDATION_STATUS=INSUFFICIENT_DATA` with the specific failed
+checks named — never a model silently trained on too little data.
+
+### Two comparison models, one identical methodology, neither auto-selected
+
+`app/predictions/training.py::train_model()` trains **either** Logistic
+Regression (`app/predictions/logistic_regression.py`, hand-rolled, from
+the prior milestone) **or** Gradient Boosting
+(`app/predictions/gradient_boosting.py`, via scikit-learn's
+`GradientBoostingClassifier`) — chosen by the caller, never both fused —
+against the **exact same** feature set, labels, `FeaturePreprocessor`
+(mean-imputation + missingness-indicator columns, so both models see
+identical missing-data handling), chronological train/validation/test
+split, and evaluation methodology. **Gradient Boosting is the one
+deliberate, fully-documented exception to this project's otherwise
+consistent no-heavy-ML-dependency policy** — `scikit-learn`/`numpy`/
+`scipy` are declared in `requirements.txt` for this reason only, per this
+milestone's own explicit instruction to prefer an established, well-
+maintained library for gradient boosting specifically rather than
+hand-roll it; the Logistic Regression baseline remains pure Python.
+Because a fitted sklearn ensemble has no honest lossless JSON
+representation, `GradientBoostingModel.to_params()` serializes it as
+pickle+base64 into the same JSON `parameters` column Logistic Regression
+uses a plain weight list for — a deliberate, documented trade-off, never
+hidden. `app/predictions/model_comparison.py` builds a side-by-side
+report (precision/recall/PR-AUC/ROC-AUC, false positive/negative counts,
+calibration, coverage/abstention rate, stability) for a human to read —
+**it has no `pick_best_model()`/`select_best_model()` function at all**
+(a dedicated test asserts neither exists as a module attribute); the only
+way a specific model version ever gets deployed is the separate, human-
+driven `approve()` → `deploy()` path described below.
+
+### Calibration — "probability" only when it has been earned
+
+`app/predictions/calibration.py::validate_calibration()` computes a
+reliability curve (predicted-probability bins vs. observed event rate),
+Brier score, and Expected Calibration Error (ECE — the count-weighted
+average gap between each bin's predicted mean and its observed rate) on
+the model's own held-out test split, at training time, and stores the
+result on `ModelRegistryEntry.metrics["test"]["calibration"]` — never
+recomputed from raw scores the API layer no longer has. The result is a
+`PROBABILITY_STATUS` of `CALIBRATED` or `UNCALIBRATED`; `mark_validated()`
+sets `ModelRegistryEntry.calibration_validated` from exactly this
+status, and (as in the prior milestone) `Prediction.probability` is
+populated **only** when that flag is `True` — otherwise a prediction
+still carries a `risk_score`, described as a **"Model score"**, never
+dressed up as a probability. The synthetic evaluation scenarios (below)
+include datasets with known, approximately-engineered event frequencies
+specifically to verify *directional* calibration consistency — this
+milestone never claims statistical calibration validity from a small
+synthetic sample, only that the calibration machinery itself computes
+real, non-fabricated numbers.
+
+### Configurable decision threshold — 0.5 is never assumed
+
+`app/predictions/threshold.py` sweeps a configurable set of candidate
+thresholds against a scored evaluation set and reports recall,
+precision, false-negative rate, and false-positive rate at each one —
+`select_threshold_by_recall_floor()` finds the lowest threshold meeting a
+caller-supplied minimum recall, returning `None` (never a fabricated
+answer) when no swept threshold reaches it. Nothing in this milestone
+auto-selects or auto-applies a threshold to any deployed model; a
+threshold choice is documented trade-off data for a human reviewer, not
+a decision this code makes for them.
+
+### Model stability — across time, sites, and data-quality categories
+
+`app/predictions/stability.py` breaks recall/precision/PR-AUC down by
+time period, site, and data-quality category and reports the resulting
+variability (e.g., recall standard deviation across periods) rather than
+one pooled number — a model that performs well in one period or one site
+only is visible as such, never hidden inside an averaged headline metric.
+`app/predictions/governance.py`'s approval criteria reads this
+variability directly (`max_recall_variability_stdev`) as one of the
+checks that can push a recommendation toward `REVIEW`.
+
+### Error analysis — what the model misses, not just how often
+
+`app/predictions/error_analysis.py` reports false negatives (predicted
+normal, a qualifying incident occurred within the horizon) and false
+positives (predicted elevated, none occurred) **as per-record detail**
+(entity, `as_of`, data quality, score), not just an aggregate count —
+consistent with this milestone's own instruction that *what kinds of
+situations a model misses* matters more than the aggregate score, and
+that a false positive is never automatically classified as useless (an
+early warning that turns out to have no incident inside this particular
+horizon is still potentially actionable safety information).
+
+### Expanded walk-forward evaluation and six mandatory temporal-leakage tests
+
+`app/predictions/walk_forward.py::walk_forward_backtest()` now returns a
+`WalkForwardFold` per rolling window with explicit train/validation/test
+periods, sizes, and metrics — each fold's own validation period becomes
+the next fold's test period's predecessor, and the training window always
+expands (`train = [start, cutoff]`, `cutoff += window_days`), matching
+the milestone's own rolling-window example (train Jan–Dec 2024 / validate
+Jan–Mar 2025 / test Apr–Jun 2025, then train Jan 2024–Mar 2025 / validate
+Apr–Jun 2025 / test Jul–Sep 2025) — **future information never enters an
+earlier training window.** `tests/test_predictive_temporal_leakage.py`
+now enforces all six of the milestone's mandatory cases: a future event
+never affecting a snapshot, a future-ingested (backdated) event being
+excluded from a past `as_of`, a backdated event never retroactively
+changing a past label, a target-window event never appearing as a
+feature even though it can label, a model trained at `T` never using any
+feature snapshot computed after `T`, and evaluating a model never
+mutating or influencing its own training dataset.
+
+### Reproducibility
+
+Every trained `ModelRegistryEntry` records everything needed to
+reproduce it without retraining: `dataset_version_id` (the exact
+`DatasetVersion` it was built from), `feature_set_version`,
+`prediction_target_version`, `label_definition_version`,
+`training_data_version`, the exact `training_period`/`validation_period`/
+`test_period` date ranges, `model_version`, and `hyperparameters` — on
+top of the trained `parameters` themselves the prior milestone already
+persisted. A model is **never overwritten**; every training run creates a
+new, auto-incremented `model_version`.
+
+### The extended model lifecycle — human approval, never self-approval
+
+    create_model_entry() -> TRAINED
+        -> mark_validated(calibration_validated=...)  -> VALIDATED
+        -> approve(reviewer_user_id=...)               -> APPROVED   (writes a ModelApproval row)
+        -> deploy()                                     -> DEPLOYED  (retires any previously deployed model)
+        -> undeploy()                                   -> APPROVED  (pulled from serving, not retired)
+        -> deploy()  [again]                             -> DEPLOYED  (controlled rollback / redeploy)
+        -> retire()                                      -> RETIRED  (terminal; history never deleted)
+        -> reject(reviewer_user_id=..., reason=...)      -> REJECTED (terminal)
+
+`app/predictions/model_registry.py::approve()`/`reject()` **require** a
+`reviewer_user_id` keyword argument — there is no default, so the model
+can never approve itself — and each call writes a `ModelApproval` row
+(`app/models/model_approval.py`: `model_id`, `model_version`,
+`reviewer_user_id`, `decision`, `notes`, the full `validation_report` JSON
+that was reviewed, `created_at`) in the same transaction that changes
+status, so an `APPROVED`/`REJECTED` model always has a matching, audited
+approval record. `is_allowed_transition()` (`app/predictions/enums.py`)
+now additionally permits `DEPLOYED -> APPROVED` (`undeploy()`) — every
+other transition table entry from the prior milestone is unchanged, so
+there remains no path from `TRAINED` straight to `DEPLOYED`.
+`app/api/v1/model_governance.py` — restricted to `governance:manage` —
+is the only way any of this happens over HTTP; a client can never
+directly set a model's status, calibration flag, metrics, or evaluation
+results, and `approve()`/`reject()` always use the authenticated caller's
+own user id as reviewer, never a client-supplied one.
+
+### Prediction monitoring, outcome tracking, and drift — flags, never actions
+
+    Prediction (already recorded at serving time)
+        -> compute_prediction_monitoring()   -- counts, coverage, abstention rate/reasons,
+                                                 data-quality/risk-category/score/probability distributions
+        -> [prediction_time + horizon_days elapses]
+        -> evaluate_prediction_outcome()     -- PredictionOutcome(outcome_known, actual_label, outcome_event_ids, evaluated_at)
+        -> compute_model_performance_monitoring()  -- recall/precision/PR-AUC/calibration, ONLY over matured outcomes
+        -> compute_data_drift() / compute_feature_drift() (PSI, mean/variance)
+        -> check_model_for_review()          -- ModelReviewFlag(MODEL_REVIEW_REQUIRED), if drift crosses threshold
+
+`app/predictions/monitoring.py`/`outcome_tracking.py`/`drift.py` are a
+monitoring *foundation*, deliberately not a full MLOps platform: no
+scheduler, no automatic dashboard, no external metrics system.
+`evaluate_prediction_outcome()` refuses to evaluate a prediction before
+its `horizon_days` has actually elapsed (never fabricates an early or
+partial outcome), and `compute_model_performance_monitoring()` only ever
+scores *matured* outcomes for exactly that reason.
+`compute_psi()`/`compute_feature_drift()`/`compute_data_drift()` are
+lightweight, fully explainable statistics (Population Stability Index,
+distribution distance, mean/variance comparison) — no deep learning, no
+opaque drift model — with thresholds documented as configurable
+`INITIAL GOVERNANCE DEFAULT`s, not universally validated. **Crucially,
+`check_model_for_review()` only ever creates a `ModelReviewFlag` row and
+logs `MODEL_REVIEW_REQUIRED` — it never retrains, redeploys, or retires
+anything itself** (`tests/test_predictions_drift.py`'s
+`test_never_retrains_or_redeploys_a_model_on_drift_detection` proves this
+by AST-parsing the module's own imports); a flagged model waits for
+`acknowledge_review_flag(user_id=...)`, a human decision, and — if the
+human decides retraining is warranted — a separate, future milestone.
+
+### Model cards and the governance validation report
+
+`app/predictions/model_card.py::build_model_card()` produces a machine-
+and human-readable card: name/version/type, target, prediction unit,
+horizon, training/validation data, features, known limitations, metrics,
+calibration status, **intended use**, and an explicit **prohibited-use**
+list (employee disciplinary decisions, individual worker risk scoring,
+employment decisions, automatic permit rejection, automatic equipment
+shutdown), and approval status. `app/predictions/governance.py::
+generate_validation_report()` reads a model's own test-split metrics
+(already computed at training time), its dataset's quality report, and
+optional drift/stability summaries, and produces a structured
+`ValidationReport` with an `APPROVE`/`REJECT`/`REVIEW` **recommendation**
+— every individual `GovernanceCheck` (name, passed, hard/soft severity,
+detail) is independently inspectable, never collapsed into the bottom
+line alone. `ApprovalCriteria` (minimum recall/precision, maximum
+false-negative rate, maximum recall variability, minimum data quality) is
+explicitly documented `INITIAL GOVERNANCE DEFAULT` — a starting point
+this codebase has not validated against real-world safety outcomes, not
+a claim of correctness. **The recommendation is never auto-applied** — a
+human still calls `approve()`/`reject()` separately, and nothing here
+transitions a model's status. The milestone's own worked example (a
+Model A with PR-AUC 0.71/recall 0.83/good calibration must not lose to a
+Model B with a higher PR-AUC of 0.76 but recall 0.61/poor calibration)
+is exactly what `model_comparison.py`'s side-by-side report and this
+report's multi-check design exist to make visible, never automatically
+decided.
+
+### Nine expanded synthetic evaluation scenarios
+
+`tests/fixtures/predictions/synthetic_training_dataset.py` exposes nine
+named, documented scenarios built from one shared event-generation
+engine (never an unrealistically perfect, single-shape synthetic
+dataset): a stable period (flat risk), an increasing-risk period, a
+decreasing-risk period (alongside the prior milestone's own LOW →
+ELEVATED → LOW regime change), a sparse-data period, a stale-data period
+(events stop well before the declared date range ends — verified against
+`validate_dataset()`'s own `FreshnessReport.is_stale`), a reporting-bias
+scenario (reporting volume drops independent of actual risk — a model or
+report that reads "fewer near-misses reported" as "risk went down" is
+exactly the mistake this scenario exists to catch), an equipment-failure
+leading-indicator scenario (failures cluster ahead of an elevated-risk
+period, not merely coincident with it), a corrective-action-
+deterioration scenario, and a training-deterioration scenario (both:
+increasingly OPEN/OVERDUE/EXPIRED rather than CLOSED/COMPLETED as risk
+rises). `tests/test_predictions_synthetic_scenarios.py` checks the
+generated *shape* of each scenario against its own documented promise —
+never a model's learned performance.
+
+### Tenant isolation and audit logging
+
+Every governance object — `DatasetVersion`, `ModelRegistryEntry`,
+`ModelApproval`, `ModelReviewFlag`, `PredictionOutcome` — carries
+`organization_id` and is queried through it; organization A can never
+train on, evaluate, inspect, retrieve, or list organization B's data,
+models, predictions, or model metrics, even when A directly supplies B's
+real object id (a scoped join returns nothing, and every HTTP route
+returns `404`, never revealing existence). There is no pooled,
+cross-tenant model training anywhere in this milestone.
+`app/predictions/dataset_registry.py`/`model_registry.py`/`drift.py`/
+`outcome_tracking.py`/`governance.py` all write through the existing
+`audit_service` — `DATASET_VALIDATED`, `MODEL_VALIDATION_REPORT_GENERATED`,
+`MODEL_APPROVED`, `MODEL_REJECTED`, `MODEL_DEPLOYED`, `MODEL_UNDEPLOYED`,
+`MODEL_RETIRED`, `MODEL_REVIEW_REQUIRED`, `MODEL_REVIEW_ACKNOWLEDGED`, and
+`PREDICTION_OUTCOME_EVALUATED` — and every one of those audit metadata
+payloads is a flat mapping of identifiers/labels/statuses, never a
+feature value, coefficient, or raw event payload
+(`tests/test_predictions_governance_audit_logging.py` enforces this
+directly against real `AuditLog` rows for every action in this list).
+
+### Human oversight — advisory only, still true here
+
+Nothing added in this milestone changes the prior milestone's safety
+language or oversight boundary: predictions remain advisory. Nothing in
+`app/predictions/` automatically suspends or terminates a worker, blocks
+a permit, stops equipment, triggers disciplinary action, contacts a
+regulator, or closes/modifies an organizational record — a
+`ModelReviewFlag` is a request for human attention, never an action
+taken on anyone's behalf.
+
+### What this milestone deliberately does not do
+
+No worker-level risk prediction, and no protected personal attribute is
+ever used as a feature even if present in upstream source data. No
+autonomous safety intervention or automated safety decision of any kind.
+No automatic model retraining — drift detection only ever flags a model
+for human review (`MODEL_REVIEW_REQUIRED`); a human decides whether, and
+how, to retrain, as a separate, future milestone. No deep-learning
+predictive model, no external web intelligence, and no autonomous agents.
+No Kubernetes/Kafka/Spark/Flink/MLflow, no feature-store infrastructure,
+no distributed training — `ModelRegistryEntry`/`DatasetVersion` remain
+plain relational tables, deliberately not a dedicated ML platform. No
+cross-tenant pooled model training. **Every dataset used to train or
+evaluate a model in this repository's own tests is synthetic — this
+milestone does not validate any model against real organizational data,
+and does not claim production predictive performance.**
 
 ## Configuration
 
@@ -3067,19 +3507,17 @@ in particular still are not implemented).
     metrics prove the pipeline computes real, non-fabricated numbers
     correctly, not that any resulting model would perform usefully on
     real organizations' data.
-  * **No model monitoring or drift detection is implemented** —
-    prediction-distribution drift, feature/data drift, calibration
-    decay, performance drift, missing-data-rate tracking, and
-    false-negative-rate tracking are all named as required future work
-    in the specification but intentionally not built here.
+  * **Model monitoring and drift detection were named here as future
+    work — they are now implemented**, in the Predictive Model
+    Validation & Governance v0.1 milestone; see its own "Genuine
+    limitations" below for what remains true even with that built.
   * **No `model_evaluations` table** — per-split metrics live on
     `ModelRegistryEntry.metrics` (JSON) rather than a separate table;
     revisit if evaluation history needs to be queried independently of
     its model or compared across many models at once.
-  * **Only Logistic Regression is implemented.** A Gradient Boosting
-    baseline was designed for in the specification (item 21) but not
-    built — nothing in this milestone needed a second model to prove the
-    architecture.
+  * **A Gradient Boosting baseline was designed for here but not built —
+    it now is**, in the Predictive Model Validation & Governance v0.1
+    milestone (`app/predictions/gradient_boosting.py`, via scikit-learn).
   * **Staleness/cold-start/data-sufficiency thresholds
     (`MIN_HISTORICAL_DAYS`, `MIN_HISTORICAL_EVENT_COUNT`,
     `MAX_SOURCE_DATA_STALENESS_DAYS`, `ELEVATED_RISK_THRESHOLD`,
@@ -3087,7 +3525,36 @@ in particular still are not implemented).
     statistically validated against real incident data — the same
     "not scientifically validated" caveat this codebase already carries
     for its retrieval and intelligence thresholds.
-  * **No automatic model retraining or scheduled evaluation** — training
-    is a deliberate, manual call (`train_baseline_model()`); nothing in
-    this codebase re-trains a model on a schedule or in response to new
-    data arriving.
+* **Predictive Model Validation & Governance v0.1's own genuine
+  limitations:**
+  * **No real organization has actually supplied real data yet.** Every
+    dataset used in this repository's own tests — including every `REAL`-
+    tagged one — is synthetic; `register_real_dataset()`'s environment-
+    tagging and quality-report machinery is proven correct, not that any
+    model has been validated against genuine organizational data.
+  * **Calibration is verified for directional consistency only.** The
+    synthetic calibration checks confirm the reliability-curve/Brier/ECE
+    machinery computes real numbers on data with a known approximate
+    event frequency — this milestone never claims statistical calibration
+    validity that would require a much larger, real-world sample.
+  * **`ApprovalCriteria`/`DataSufficiencyThresholds`/drift thresholds
+    (PSI 0.10/0.25, performance-drift delta, etc.) are documented
+    "INITIAL GOVERNANCE DEFAULT" starting points**, not validated against
+    real-world safety outcomes — the same caveat as every other threshold
+    in this codebase, explicitly repeated here because this milestone is
+    specifically about governance rigor.
+  * **No automatic model retraining or scheduled evaluation.** Drift
+    detection only ever writes a `ModelReviewFlag` and logs
+    `MODEL_REVIEW_REQUIRED` — a human decides whether, and how, to
+    retrain, and that retraining flow itself is unbuilt, by design (the
+    milestone's own stop condition).
+  * **`compute_psi()`'s bin-based estimate is noisy at small sample
+    sizes** (documented directly against a real failure encountered
+    while writing its own tests) — a real limitation of the statistic
+    itself at low n, not something a code fix corrects; it becomes more
+    reliable as the compared samples grow.
+  * **The monitoring/outcome-tracking/drift modules are a foundation,
+    not a full MLOps platform** — no scheduler, no external metrics
+    system, no automated alerting integration; `compute_*_monitoring()`
+    functions are called on demand (via the `GET .../monitoring` route)
+    rather than continuously.

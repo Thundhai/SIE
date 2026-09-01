@@ -31,16 +31,31 @@ auto-promotes a model to `APPROVED`/`DEPLOYED`.
 new `model_version`); historical rows are retained (`RETIRED`, not
 deleted) so a past prediction's `model_id` always still resolves to the
 exact model that produced it.
+
+**`dataset_version_id` (milestone item 20, Model Validation & Governance
+v0.1)** links this model to the exact `DatasetVersion` row it was
+trained/validated/tested against — `ON DELETE SET NULL` (never cascading
+a dataset deletion into deleting the model record itself) so a model
+remains inspectable even if its source dataset row is later pruned. A
+model trained before this milestone existed has `dataset_version_id =
+NULL`; nothing downstream treats that as an error, only as "no linked
+dataset record."
 """
 
+import uuid
 from datetime import date
 
 from sqlalchemy import JSON as GenericJSON
-from sqlalchemy import Date, String, UniqueConstraint
+from sqlalchemy import Date, ForeignKey, String, UniqueConstraint, Uuid
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models.base import Base, OrganizationScopedMixin, TimestampMixin, UUIDPrimaryKeyMixin
+from app.models.base import (
+    Base,
+    OrganizationScopedMixin,
+    TimestampMixin,
+    UUIDPrimaryKeyMixin,
+)
 
 _JSONType = GenericJSON().with_variant(JSONB(), "postgresql")
 
@@ -62,6 +77,10 @@ class ModelRegistryEntry(UUIDPrimaryKeyMixin, OrganizationScopedMixin, Timestamp
     feature_set_version: Mapped[str] = mapped_column(String(30), nullable=False)  # e.g. "predictive-features-v1"
     training_data_version: Mapped[str] = mapped_column(String(30), nullable=False)  # e.g. "safety-risk-v1"
     horizon_days: Mapped[int] = mapped_column(nullable=False)
+
+    dataset_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("dataset_versions.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
     training_period_start: Mapped[date] = mapped_column(Date, nullable=False)
     training_period_end: Mapped[date] = mapped_column(Date, nullable=False)

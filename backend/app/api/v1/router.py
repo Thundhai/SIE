@@ -7,6 +7,7 @@ from app.api.v1 import (
     intelligence,
     knowledge,
     memberships,
+    model_governance,
     organizations,
     predictions,
     rag,
@@ -25,4 +26,5 @@ api_router.include_router(retrieval.router)
 api_router.include_router(rag.router)
 api_router.include_router(intelligence.router)
 api_router.include_router(predictions.router)
+api_router.include_router(model_governance.router)
 api_router.include_router(api_clients.router)

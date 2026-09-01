@@ -47,18 +47,24 @@ from app.predictions.enums import (
 )
 from app.predictions.explain import explain_prediction
 from app.predictions.feature_snapshot_service import get_or_build_feature_snapshot
+from app.predictions.gradient_boosting import (
+    GradientBoostingModel,
+    explain_gradient_boosting,
+)
 from app.predictions.logistic_regression import (
     FeaturePreprocessor,
     LogisticRegressionModel,
 )
 from app.predictions.spec import (
     ELEVATED_RISK_THRESHOLD,
+    FEATURE_SET_VERSION,
     HORIZON_DAYS,
     MAX_SOURCE_DATA_STALENESS_DAYS,
     MIN_HISTORICAL_DAYS,
     MIN_HISTORICAL_EVENT_COUNT,
     MODERATE_RISK_THRESHOLD,
     PREDICTION_ENTITY_TYPE,
+    PREDICTION_TARGET_VERSION,
 )
 from app.predictions.vectorization import vectorize
 from app.services.audit_service import AuditAction, audit_service
@@ -92,6 +98,41 @@ _MODEL_NOT_READY_REASONS = {
     ModelStatus.REJECTED.value: AbstentionReason.MODEL_UNAVAILABLE,
     ModelStatus.RETIRED.value: AbstentionReason.MODEL_UNAVAILABLE,
 }
+
+
+def _score_and_explain(model: ModelRegistryEntry, feature_vector: dict[str, float | None]) -> tuple[float, dict]:
+    """Polymorphic by `model.model_type` (milestone item 8-9: Logistic
+    Regression and Gradient Boosting are both real, servable model
+    types) — every other step of `predict_as_of()` is identical
+    regardless of which model produced the score."""
+    preprocessor = FeaturePreprocessor.from_params(model.parameters["preprocessor"])
+
+    if model.model_type == "gradient_boosting":
+        gb_model = GradientBoostingModel.from_params(model.parameters["model"])
+        encoded_row = preprocessor.transform([feature_vector])[0]
+        risk_score = gb_model.predict_proba(encoded_row)
+        importances = explain_gradient_boosting(gb_model, preprocessor)
+        explanation = {
+            "method": "gradient-boosting-feature-importance",
+            "feature_importances": [{"feature_name": f.feature_name, "importance": f.importance} for f in importances],
+            "disclaimer": (
+                "These are the features the model's ensemble relied on most overall, not a "
+                "per-prediction breakdown, and not a causal claim."
+            ),
+        }
+        return risk_score, explanation
+
+    lr_model = LogisticRegressionModel.from_params(model.parameters["model"])
+    encoded_row = preprocessor.transform([feature_vector])[0]
+    risk_score = lr_model.predict_proba(encoded_row)
+    explanation_obj = explain_prediction(lr_model, preprocessor, feature_vector)
+    explanation = {
+        "top_positive": [asdict(c) for c in explanation_obj.top_positive],
+        "top_negative": [asdict(c) for c in explanation_obj.top_negative],
+        "method": explanation_obj.method,
+        "disclaimer": explanation_obj.disclaimer,
+    }
+    return risk_score, explanation
 
 
 def _risk_category(score: float) -> str:
@@ -199,6 +240,18 @@ def predict_as_of(
             reason=reason, model=model, persist=persist, user_id=user_id,
         )
 
+    # --- Version compatibility (Model Validation & Governance v0.1, item 24) ---
+    # A model trained against a since-superseded feature set or target
+    # definition must never silently keep serving predictions computed
+    # against today's spec.py -- the feature vector its parameters expect
+    # and the one get_or_build_feature_snapshot() would build today are
+    # no longer guaranteed to mean the same thing.
+    if model.feature_set_version != FEATURE_SET_VERSION or model.prediction_target_version != PREDICTION_TARGET_VERSION:
+        return _abstain(
+            db, organization_id=organization_id, site_id=site_id, as_of=as_of, horizon_days=horizon_days,
+            reason=AbstentionReason.MODEL_VERSION_INCOMPATIBLE, model=model, persist=persist, user_id=user_id,
+        )
+
     # --- Cold start / historical sufficiency (items 12-13) ----------------
     history = list(
         db.execute(events_as_of(organization_id=organization_id, as_of=as_of, site_id=site_id)).scalars().all()
@@ -242,12 +295,7 @@ def predict_as_of(
 
     # --- Scoring -------------------------------------------------------------
     feature_vector = vectorize(snapshot.features)
-    preprocessor = FeaturePreprocessor.from_params(model.parameters["preprocessor"])
-    lr_model = LogisticRegressionModel.from_params(model.parameters["model"])
-    encoded_row = preprocessor.transform([feature_vector])[0]
-    risk_score = lr_model.predict_proba(encoded_row)
-
-    explanation = explain_prediction(lr_model, preprocessor, feature_vector)
+    risk_score, explanation = _score_and_explain(model, feature_vector)
 
     prediction = Prediction(
         organization_id=organization_id,
@@ -267,12 +315,7 @@ def predict_as_of(
         model_version=model.model_version,
         feature_snapshot_id=snapshot.id,
         data_quality=_DATA_QUALITY_MAP[snapshot.data_quality],
-        explanation={
-            "top_positive": [asdict(c) for c in explanation.top_positive],
-            "top_negative": [asdict(c) for c in explanation.top_negative],
-            "method": explanation.method,
-            "disclaimer": explanation.disclaimer,
-        },
+        explanation=explanation,
     )
     if persist:
         db.add(prediction)

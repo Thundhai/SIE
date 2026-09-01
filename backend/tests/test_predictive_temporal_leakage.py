@@ -1,16 +1,18 @@
-"""Mandatory temporal-leakage regression tests — milestone item 42,
-explicitly required by the spec. Each of the four cases below is a
-distinct way future information could leak into a feature, a label, or a
-served prediction; each is a real regression test, not a restatement of
-`app/intelligence/temporal.py`'s own existing coverage (this package
-composes that module, and needs its own leakage tests at the predictive
-layer: labels, dataset construction, and served predictions).
+"""Mandatory temporal-leakage regression tests — Predictive Risk
+Modeling Specification v0.1 item 42, expanded to six explicit cases by
+Model Validation & Governance v0.1 item 19. Each case is a distinct way
+future information could leak into a feature, a label, a served
+prediction, or a training/evaluation run; each is a real regression
+test, not a restatement of `app/intelligence/temporal.py`'s own existing
+coverage (this package composes that module, and needs its own leakage
+tests at the predictive layer: labels, dataset construction, served
+predictions, and training/evaluation itself).
 """
 
 from datetime import datetime, timedelta, timezone
 
 from app.predictions import model_registry
-from app.predictions.dataset import build_training_examples
+from app.predictions.dataset import build_training_example, build_training_examples
 from app.predictions.feature_snapshot_service import compute_feature_set_v1
 from app.predictions.labels import generate_label
 from app.predictions.predictor import predict_as_of
@@ -20,7 +22,12 @@ from tests.fixtures.predictions.synthetic_training_dataset import (
     as_of_dates,
     seed_synthetic_organization,
 )
-from tests.intelligence_test_helpers import make_org, make_safety_event, make_site
+from tests.intelligence_test_helpers import (
+    make_org,
+    make_reviewer_user,
+    make_safety_event,
+    make_site,
+)
 
 AS_OF = datetime(2026, 6, 1, tzinfo=timezone.utc)
 
@@ -109,8 +116,9 @@ def test_case_4_a_backtested_prediction_is_unaffected_by_events_added_after_its_
         db_session, organization_id=org.id, site_ids=[s.id for s in sites], as_of_dates=dates
     )
     entry = train_baseline_model(db_session, organization_id=org.id, examples=training_examples)
+    reviewer = make_reviewer_user(db_session)
     entry = model_registry.mark_validated(db_session, entry, calibration_validated=False)
-    entry = model_registry.approve(db_session, entry)
+    entry = model_registry.approve(db_session, entry, reviewer_user_id=reviewer.id)
     entry = model_registry.deploy(db_session, entry)
 
     backtest_as_of = dates[len(dates) // 2]
@@ -145,3 +153,93 @@ def test_case_4_a_backtested_prediction_is_unaffected_by_events_added_after_its_
 
     assert before.risk_score == after.risk_score
     assert before.risk_category == after.risk_category
+
+
+def test_case_5_training_at_an_earlier_as_of_never_uses_a_snapshot_generated_for_a_later_as_of(db_session):
+    """A feature snapshot already exists for this site at a *later*
+    as_of (with more history baked into it) -- building a training
+    example at an *earlier* as_of must resolve to its own,
+    earlier-as_of snapshot, never accidentally reuse the later one."""
+    org = make_org(db_session)
+    site = make_site(db_session, org.id)
+
+    earlier_as_of = AS_OF
+    later_as_of = AS_OF + timedelta(days=60)
+
+    # History up to (and only up to) earlier_as_of.
+    db_session.add(
+        make_safety_event(
+            organization_id=org.id, site_id=site.id, event_type="NEAR_MISS",
+            event_time=earlier_as_of - timedelta(days=5), ingestion_time=earlier_as_of - timedelta(days=5),
+        )
+    )
+    db_session.commit()
+
+    # Build (and persist) the LATER snapshot first, deliberately out of
+    # chronological call order -- this is exactly the scenario where a
+    # naive "most recent snapshot for this site" lookup would leak.
+    from app.predictions.feature_snapshot_service import get_or_build_feature_snapshot
+
+    for d in (10, 20, 30):
+        db_session.add(
+            make_safety_event(
+                organization_id=org.id, site_id=site.id, event_type="NEAR_MISS",
+                event_time=earlier_as_of + timedelta(days=d), ingestion_time=earlier_as_of + timedelta(days=d),
+            )
+        )
+    db_session.commit()
+    later_snapshot = get_or_build_feature_snapshot(db_session, organization_id=org.id, site_id=site.id, as_of=later_as_of)
+
+    # Now build the training example at the EARLIER as_of.
+    earlier_example = build_training_example(db_session, organization_id=org.id, site_id=site.id, as_of=earlier_as_of)
+
+    assert earlier_example.feature_snapshot_id != later_snapshot.id
+    # The earlier example's own snapshot must reflect only the one
+    # NEAR_MISS that existed by earlier_as_of, not the three later ones.
+    assert earlier_example.feature_vector["near_miss_count_30d"] == 1.0
+
+
+def test_case_6_evaluating_a_model_never_mutates_the_training_dataset_or_the_fitted_model(db_session):
+    """Milestone item 19's own framing: "model evaluation cannot
+    influence the training dataset." Scoring/evaluating a held-out split
+    must not change the preprocessor's fitted statistics, the trained
+    model's own parameters, or the training examples' feature vectors."""
+    from app.predictions.logistic_regression import (
+        FeaturePreprocessor,
+        LogisticRegressionModel,
+    )
+    from app.predictions.metrics import evaluate
+    from app.predictions.temporal_split import chronological_split
+
+    org, sites = seed_synthetic_organization(db_session, name="Eval Isolation Org", site_names=["Site 1"], seed=999)
+    dates = as_of_dates()
+    examples = build_training_examples(
+        db_session, organization_id=org.id, site_ids=[s.id for s in sites], as_of_dates=dates
+    )
+    split = chronological_split(examples)
+
+    preprocessor = FeaturePreprocessor().fit([e.feature_vector for e in split.train])
+    means_before = dict(preprocessor.means)
+    stdevs_before = dict(preprocessor.stdevs)
+    train_vectors_before = [dict(e.feature_vector) for e in split.train]
+
+    X_train = preprocessor.transform([e.feature_vector for e in split.train])
+    model = LogisticRegressionModel(epochs=50).fit(X_train, [e.label for e in split.train])
+    weights_before = list(model.weights)
+    bias_before = model.bias
+
+    # Evaluate on validation and test -- this must not feed back into
+    # anything captured above.
+    X_validation = preprocessor.transform([e.feature_vector for e in split.validation])
+    validation_scores = [model.predict_proba(x) for x in X_validation]
+    evaluate([e.label for e in split.validation], validation_scores)
+
+    X_test = preprocessor.transform([e.feature_vector for e in split.test])
+    test_scores = [model.predict_proba(x) for x in X_test]
+    evaluate([e.label for e in split.test], test_scores)
+
+    assert preprocessor.means == means_before
+    assert preprocessor.stdevs == stdevs_before
+    assert [dict(e.feature_vector) for e in split.train] == train_vectors_before
+    assert model.weights == weights_before
+    assert model.bias == bias_before

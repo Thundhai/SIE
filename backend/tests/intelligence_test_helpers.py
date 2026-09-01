@@ -14,6 +14,9 @@ from app.intelligence.schemas import RawSafetyEventPayload
 from app.models.organization import Organization
 from app.models.safety_event import SafetyEvent
 from app.models.site import Site
+from app.models.user import User
+from app.schemas.user import UserCreate
+from app.services.user_service import user_service
 
 
 def make_safety_event(**overrides) -> SafetyEvent:
@@ -66,6 +69,13 @@ def make_site(db_session: Session, organization_id: uuid.UUID, name: str = "Test
     db_session.add(site)
     db_session.commit()
     return site
+
+
+def make_reviewer_user(db_session: Session, name: str = "Reviewer") -> User:
+    """A real `User` row for tests exercising `model_registry.py::approve()`/
+    `reject()`, which require a genuine `reviewer_user_id` (milestone item
+    23: the model can never approve itself) — not just any UUID."""
+    return user_service.create(db_session, obj_in=UserCreate(email=f"{uuid.uuid4().hex}@example.com", name=name))
 
 
 def make_raw_payload(**overrides) -> RawSafetyEventPayload:

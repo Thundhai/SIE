@@ -9,6 +9,7 @@ from app.models.api_client import ApiClient
 from app.models.audit_log import AuditLog
 from app.models.base import Base
 from app.models.data_source import DataSource
+from app.models.dataset_version import DatasetVersion
 from app.models.embedding import KnowledgeChunkEmbedding
 from app.models.feature_snapshot import FeatureSnapshot
 from app.models.identity import Identity
@@ -18,33 +19,40 @@ from app.models.knowledge_chunk import KnowledgeChunk
 from app.models.knowledge_document import KnowledgeDocument
 from app.models.knowledge_document_version import KnowledgeDocumentVersion
 from app.models.knowledge_source import KnowledgeSource
+from app.models.model_approval import ModelApproval
 from app.models.model_registry_entry import ModelRegistryEntry
+from app.models.model_review_flag import ModelReviewFlag
 from app.models.organization import Organization
 from app.models.organization_membership import OrganizationMembership
 from app.models.prediction import Prediction
+from app.models.prediction_outcome import PredictionOutcome
 from app.models.safety_event import SafetyEvent
 from app.models.site import Site
 from app.models.user import User
 
 __all__ = [
-    "Base",
-    "Organization",
-    "Site",
-    "User",
-    "DataSource",
-    "KnowledgeSource",
-    "KnowledgeDocument",
-    "KnowledgeDocumentVersion",
-    "KnowledgeChunk",
-    "KnowledgeChunkEmbedding",
-    "OrganizationMembership",
-    "Identity",
+    "ApiClient",
     "AuditLog",
+    "Base",
+    "DataSource",
+    "DatasetVersion",
+    "FeatureSnapshot",
+    "Identity",
     "IngestedFile",
     "IngestionJob",
-    "SafetyEvent",
-    "ApiClient",
-    "FeatureSnapshot",
+    "KnowledgeChunk",
+    "KnowledgeChunkEmbedding",
+    "KnowledgeDocument",
+    "KnowledgeDocumentVersion",
+    "KnowledgeSource",
+    "ModelApproval",
     "ModelRegistryEntry",
+    "ModelReviewFlag",
+    "Organization",
+    "OrganizationMembership",
     "Prediction",
+    "PredictionOutcome",
+    "SafetyEvent",
+    "Site",
+    "User",
 ]

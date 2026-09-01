@@ -50,9 +50,9 @@ def test_fresh_postgres_database_migrates_through_head_with_no_manual_interventi
 ):
     """The core regression test: starting from a completely empty
     PostgreSQL schema, `alembic upgrade head` must succeed end to end
-    through 0001 -> 0002 -> 0003 -> 0004 -> 0005 -> 0006 -> 0007 with no
-    manual intervention (no pre-created enum types, no pre-enabled
-    pgvector extension — migration 0006 enables that itself)."""
+    through 0001 -> ... -> 0009 with no manual intervention (no
+    pre-created enum types, no pre-enabled pgvector extension —
+    migration 0006 enables that itself)."""
     engine = _fresh_schema_engine()
     try:
         # migrations/env.py reads settings.sqlalchemy_database_uri fresh
@@ -65,7 +65,7 @@ def test_fresh_postgres_database_migrates_through_head_with_no_manual_interventi
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0008"
+            assert version == "0009"
 
             enum_types = {
                 row[0]
@@ -97,6 +97,10 @@ def test_fresh_postgres_database_migrates_through_head_with_no_manual_interventi
             assert "feature_snapshots" in tables
             assert "model_registry_entries" in tables
             assert "predictions" in tables
+            assert "dataset_versions" in tables
+            assert "model_approvals" in tables
+            assert "model_review_flags" in tables
+            assert "prediction_outcomes" in tables
 
             extensions = {
                 row[0] for row in conn.execute(text("SELECT extname FROM pg_extension")).all()
@@ -175,7 +179,7 @@ def test_downgrade_then_reupgrade_round_trips_cleanly(monkeypatch):
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0008"
+            assert version == "0009"
     finally:
         engine.dispose()
 
@@ -217,7 +221,7 @@ def test_intelligence_migration_downgrade_then_reupgrade_round_trips_cleanly(mon
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0008"
+            assert version == "0009"
 
             tables = {
                 row[0]
@@ -273,7 +277,7 @@ def test_predictive_modeling_migration_downgrade_then_reupgrade_round_trips_clea
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0008"
+            assert version == "0009"
 
             tables = {
                 row[0]
@@ -287,5 +291,88 @@ def test_predictive_modeling_migration_downgrade_then_reupgrade_round_trips_clea
             assert "feature_snapshots" in tables
             assert "model_registry_entries" in tables
             assert "predictions" in tables
+    finally:
+        engine.dispose()
+
+
+@requires_postgres
+def test_governance_migration_downgrade_then_reupgrade_round_trips_cleanly(monkeypatch):
+    """0009's own downgrade/re-upgrade round trip, isolated from the
+    others above: `dataset_versions`/`model_approvals`/`model_review_flags`/
+    `prediction_outcomes` must all disappear on downgrade to 0008, and
+    `model_registry_entries.dataset_version_id` must disappear too — and
+    all must reappear correctly on re-upgrade, with nothing 0008 or
+    earlier disturbed either way."""
+    engine = _fresh_schema_engine()
+    try:
+        monkeypatch.setattr("app.core.config.settings.DATABASE_URL", PG_TEST_DATABASE_URL)
+        config = _alembic_config()
+
+        command.upgrade(config, "head")
+        command.downgrade(config, "0008")
+
+        with engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version == "0008"
+
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT table_name FROM information_schema.tables "
+                        "WHERE table_schema = 'public'"
+                    )
+                ).all()
+            }
+            assert "dataset_versions" not in tables
+            assert "model_approvals" not in tables
+            assert "model_review_flags" not in tables
+            assert "prediction_outcomes" not in tables
+            # Untouched by 0009's downgrade.
+            assert "model_registry_entries" in tables
+            assert "predictions" in tables
+            assert "feature_snapshots" in tables
+
+            columns = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = 'model_registry_entries'"
+                    )
+                ).all()
+            }
+            assert "dataset_version_id" not in columns
+
+        command.upgrade(config, "head")
+
+        with engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version == "0009"
+
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT table_name FROM information_schema.tables "
+                        "WHERE table_schema = 'public'"
+                    )
+                ).all()
+            }
+            assert "dataset_versions" in tables
+            assert "model_approvals" in tables
+            assert "model_review_flags" in tables
+            assert "prediction_outcomes" in tables
+
+            columns = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = 'model_registry_entries'"
+                    )
+                ).all()
+            }
+            assert "dataset_version_id" in columns
     finally:
         engine.dispose()

@@ -28,3 +28,14 @@ Pillow==12.3.0
 # the real-provider HTTP extension point, never invoked by the test suite)
 pytest==8.3.4
 httpx==0.28.1
+
+# Gradient Boosting comparison baseline only (see
+# app/predictions/gradient_boosting.py) — a deliberate, milestone-directed
+# exception to this project's otherwise-consistent no-heavy-ML-dependency
+# policy (every other model in app/predictions/ is hand-rolled). Not used
+# anywhere else in the codebase; the Logistic Regression baseline
+# (app/predictions/logistic_regression.py) remains hand-rolled, pure
+# Python. numpy/scipy are scikit-learn's own required dependencies.
+scikit-learn==1.9.0
+numpy==2.5.2
+scipy==1.18.1

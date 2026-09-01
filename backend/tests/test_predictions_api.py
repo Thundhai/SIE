@@ -16,7 +16,7 @@ from tests.fixtures.predictions.synthetic_training_dataset import (
     as_of_dates,
     seed_synthetic_organization,
 )
-from tests.intelligence_test_helpers import make_org, make_site
+from tests.intelligence_test_helpers import make_org, make_reviewer_user, make_site
 
 
 def _make_authorized_user(db_session, organization_id, role=OrganizationRole.HSE_MANAGER):
@@ -34,8 +34,9 @@ def _deployed_model(db_session, *, seed=1):
         db_session, organization_id=org.id, site_ids=[s.id for s in sites], as_of_dates=dates
     )
     entry = train_baseline_model(db_session, organization_id=org.id, examples=examples)
+    reviewer = make_reviewer_user(db_session)
     entry = model_registry.mark_validated(db_session, entry, calibration_validated=False)
-    entry = model_registry.approve(db_session, entry)
+    entry = model_registry.approve(db_session, entry, reviewer_user_id=reviewer.id)
     entry = model_registry.deploy(db_session, entry)
     return org, sites[0], entry, dates[-1]
 
