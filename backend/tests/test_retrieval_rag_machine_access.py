@@ -68,18 +68,36 @@ def _stub_rag_response(**overrides):
 # --- Retrieval --------------------------------------------------------------------------
 
 
-def test_machine_client_global_only_search_succeeds_with_valid_credential(client, db_session, monkeypatch):
+def test_machine_client_global_only_search_succeeds_with_knowledge_read_scope(client, db_session, monkeypatch):
     monkeypatch.setattr("app.api.v1.retrieval.retrieval_service.search", lambda *a, **kw: _stub_retrieval_response())
     org = make_org(db_session)
-    # No knowledge:read scope at all -- irrelevant for a GLOBAL-only
-    # search, mirroring the human "authentication alone is enough" rule.
-    credential = _make_client_credential(db_session, org.id, scopes=[Permission.SAFETY_DATA_WRITE])
+    # Unlike a human caller (authentication alone is enough for a
+    # GLOBAL-only read, since a human's identity carries no fixed
+    # organization to check a role against), a machine client has no
+    # membership-derived role to fall back on -- only whatever scopes it
+    # was explicitly granted -- so `knowledge:read` is still required
+    # even for GLOBAL-only content. See `app.api.deps_context.authorize_context()`.
+    credential = _make_client_credential(db_session, org.id, scopes=[Permission.KNOWLEDGE_READ])
 
     response = client.post(
         "/api/v1/knowledge/retrieval/search", json={"query": "PPE requirements"}, headers=_bearer(credential)
     )
     assert response.status_code == 200
     assert response.json()["outcome"] == "NO_RELEVANT_EVIDENCE"
+
+
+def test_machine_client_without_knowledge_read_scope_cannot_search_global_knowledge(client, db_session):
+    """A credential provisioned for something else entirely (here,
+    ingestion) must not get GLOBAL knowledge access for free just
+    because no `organization_id` was named -- least privilege applies to
+    GLOBAL reads too, not only organization-scoped ones."""
+    org = make_org(db_session)
+    credential = _make_client_credential(db_session, org.id, scopes=[Permission.SAFETY_DATA_WRITE])
+
+    response = client.post(
+        "/api/v1/knowledge/retrieval/search", json={"query": "PPE requirements"}, headers=_bearer(credential)
+    )
+    assert response.status_code == 403
 
 
 def test_machine_client_with_knowledge_read_scope_can_search_its_own_organization(client, db_session, monkeypatch):
@@ -128,16 +146,29 @@ def test_search_still_requires_some_authentication(client):
 # --- RAG ---------------------------------------------------------------------------------
 
 
-def test_machine_client_global_only_rag_query_succeeds_with_valid_credential(client, db_session, monkeypatch):
+def test_machine_client_global_only_rag_query_succeeds_with_knowledge_read_scope(client, db_session, monkeypatch):
     monkeypatch.setattr("app.api.v1.rag.rag_service.query", lambda *a, **kw: _stub_rag_response())
     org = make_org(db_session)
-    credential = _make_client_credential(db_session, org.id, scopes=[Permission.SAFETY_DATA_WRITE])
+    credential = _make_client_credential(db_session, org.id, scopes=[Permission.KNOWLEDGE_READ])
 
     response = client.post(
         "/api/v1/knowledge/rag/query", json={"query": "PPE requirements"}, headers=_bearer(credential)
     )
     assert response.status_code == 200
     assert response.json()["outcome"] == "INSUFFICIENT_EVIDENCE"
+
+
+def test_machine_client_without_knowledge_read_scope_cannot_rag_query_global_knowledge(client, db_session):
+    """Same rule as retrieval search's own GLOBAL test above -- a
+    `safety_data:write`-only credential (provisioned for ingestion, not
+    knowledge access) must not reach GLOBAL knowledge via RAG either."""
+    org = make_org(db_session)
+    credential = _make_client_credential(db_session, org.id, scopes=[Permission.SAFETY_DATA_WRITE])
+
+    response = client.post(
+        "/api/v1/knowledge/rag/query", json={"query": "PPE requirements"}, headers=_bearer(credential)
+    )
+    assert response.status_code == 403
 
 
 def test_machine_client_without_knowledge_read_scope_cannot_rag_query_its_own_organization(client, db_session):

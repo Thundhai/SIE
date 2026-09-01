@@ -7,8 +7,9 @@
 
 Authorization is byte-for-byte the same shape `app/api/v1/retrieval.py`
 already uses (see that module's own docstring for the full rationale,
-including why a GLOBAL-only query requires authentication but not
-organization membership): `filters.organization_id`, if present, must be
+including why a GLOBAL-only query requires only authentication for a
+*human* caller, but still requires the `knowledge:read` scope for a
+*machine* caller): `filters.organization_id`, if present, must be
 authorized via `app.api.deps_context.authorize_context(...,
 KNOWLEDGE_READ, organization_id=...)` before it is ever passed to
 `RAGService` as `allowed_organization_id`. There is no second

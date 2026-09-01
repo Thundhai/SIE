@@ -28,17 +28,20 @@ that precedent:
     bypass authorization by passing another organization_id" true: the
     value only ever reaches `RetrievalService` after this check passes,
     never before.
-  * **`filters.organization_id` omitted -> GLOBAL-only, no organization
-    authorization check.** This is a deliberate, narrower rule than the
-    write path's own "no organization_id -> only a PLATFORM_ADMIN
-    succeeds" behavior (see `app/api/v1/ingestion.py`/`knowledge.py`'s
-    own `_authorize_manage()`) — that behavior is tuned for *writing*
-    GLOBAL knowledge, a meaningfully more privileged action than
-    *reading* already-published GLOBAL knowledge. Requiring only
-    authentication (not platform-admin, not any particular scope) for a
-    GLOBAL-only search follows that stated design intent rather than the
-    write path's stricter rule — see `app.api.deps_context.authorize_context()`'s
-    own docstring, which encodes this exact rule for both identity kinds.
+  * **`filters.organization_id` omitted -> GLOBAL-only.** For a *human*
+    caller this means no further authorization check beyond
+    authentication — a deliberate, narrower rule than the write path's
+    own "no organization_id -> only a PLATFORM_ADMIN succeeds" behavior
+    (see `app/api/v1/ingestion.py`/`knowledge.py`'s own
+    `_authorize_manage()`), tuned for *writing* GLOBAL knowledge, a
+    meaningfully more privileged action than *reading* already-published
+    GLOBAL knowledge. A *machine* caller still needs the `knowledge:read`
+    scope even for a GLOBAL-only search — it has no membership-derived
+    role to fall back on the way a human's authentication alone implies
+    one, only whatever scopes it was explicitly granted, so least
+    privilege applies to GLOBAL reads too — see
+    `app.api.deps_context.authorize_context()`'s own docstring, which
+    encodes this exact rule for both identity kinds.
 
 **Machine-client access (Intelligence Platform Integration & Enterprise
 API v0.1, items 16, 20, 38).** A machine client holding `knowledge:read`

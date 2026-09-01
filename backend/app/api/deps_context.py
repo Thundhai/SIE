@@ -29,11 +29,19 @@ authorization check for organization-scoped human access.
 
 **Item 9 — GLOBAL knowledge is not organization-scoped at all.** When
 `organization_id` is `None` (a GLOBAL-only request), this module's rule
-matches the one `app/api/v1/retrieval.py` already established for human
-callers: authentication alone is sufficient, no permission/scope check
-— extended here to a machine caller with a valid, active credential,
-since GLOBAL content was never gated by any one organization's role or
-scope to begin with.
+for a *human* caller matches the one `app/api/v1/retrieval.py` already
+established: authentication alone is sufficient, no permission/scope
+check, since GLOBAL content was never gated by any one organization's
+role to begin with. A *machine* caller is different: it has no
+organization-membership-derived role to fall back on at all — only the
+scopes it was explicitly granted at credential-creation time — so a
+GLOBAL request from a machine client still requires the endpoint's own
+permission/scope, exactly as an organization-scoped request would.
+Otherwise any active credential, regardless of what it was actually
+provisioned to do (e.g. an ingestion-only `safety_data:write` client),
+could read GLOBAL knowledge/analytics/predictions for free — least
+privilege (item 6) applies to GLOBAL reads too, not only
+organization-scoped ones.
 
 **Item 7 — human vs machine access are not interchangeable everywhere.**
 This module is opt-in per router. The human-only administrative surface
@@ -117,9 +125,20 @@ def authorize_context(
     module docstring for the machine-organization-pinning and
     GLOBAL-knowledge rules this encodes."""
     if organization_id is None:
-        # GLOBAL: authentication alone is this codebase's existing rule
-        # for both identity kinds (see module docstring) — reaching this
-        # function at all already proves that.
+        # GLOBAL: for a human caller, authentication alone is this
+        # codebase's existing rule (see module docstring) — reaching this
+        # function at all already proves that. A machine client is
+        # different: it has no organization-membership-derived role to
+        # fall back on, only the scopes explicitly granted to it at
+        # credential-creation time, so a GLOBAL request must still carry
+        # the endpoint's own required scope — otherwise any credential,
+        # regardless of what it was actually provisioned for (e.g. an
+        # ingestion-only `safety_data:write` client), could read GLOBAL
+        # knowledge/analytics/predictions for free. This does not touch
+        # organization-scoped authorization below, which already checks
+        # scope for machine callers.
+        if context.is_machine:
+            return permission.value in context.scopes
         return True
     if context.is_machine:
         return organization_id == context.machine_organization_id and permission.value in context.scopes
