@@ -37,6 +37,26 @@ enum type created by migration 0004 (referenced here by name, not
 redeclared) — its downgrade() below therefore must not drop that type,
 since 0004's own tables may still be using it; only the two enum types
 newly created by *this* migration are dropped on downgrade.
+
+**Enum type creation.** `content_type` and `quality_status` are brand-new
+PostgreSQL enum types, and on PostgreSQL, `op.add_column()` — batched or
+not — does *not* create the enum type a column references; only
+`op.create_table()` does that, as a side effect of the CREATE TABLE
+statement's own type visitation. Every other native-enum column in this
+schema was introduced via `create_table` (0002/0003/0004), which is why
+this distinction never mattered before now: this is the first migration
+to add a *new* enum-typed column to an *already-existing* table via
+`add_column`. Both enum types are therefore created explicitly, with
+`sa.Enum(...).create(bind, checkfirst=True)`, before the
+`batch_alter_table` block that references them — `checkfirst=True` makes
+this idempotent (a no-op if the type already exists, e.g. a retried or
+partially-applied run), and it is a genuine no-op on SQLite too (SQLite
+has no native enum type to create; `Enum.create()` is a no-op there by
+design, letting this migration's dialect-agnostic authoring stay
+dialect-agnostic). Confirmed live against PostgreSQL 16 + pgvector 0.6.0:
+a fresh, empty database now runs `alembic upgrade head` through 0001-0006
+without manual intervention — see the repository's own migration
+regression test for the exact assertion this protects.
 """
 from typing import Sequence, Union
 
@@ -56,6 +76,24 @@ _FK_NAMING_CONVENTION = {"fk": "%(table_name)s_%(column_0_name)s_fkey"}
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+
+    # See the module docstring's "Enum type creation" note: on
+    # PostgreSQL, add_column() never creates the enum type its column
+    # references, unlike create_table() — so both types are created
+    # explicitly, idempotently, here, before anything references them.
+    # A no-op on SQLite (no native enum type to create there).
+    content_type_enum = sa.Enum(
+        'TEXT', 'TABLE', 'IMAGE', 'STRUCTURED_RECORD',
+        name='knowledge_chunk_content_type',
+    )
+    quality_status_enum = sa.Enum(
+        'HIGH', 'MEDIUM', 'LOW', 'INSUFFICIENT',
+        name='knowledge_chunk_quality_status',
+    )
+    content_type_enum.create(bind, checkfirst=True)
+    quality_status_enum.create(bind, checkfirst=True)
+
     with op.batch_alter_table('knowledge_chunks', naming_convention=_FK_NAMING_CONVENTION) as batch_op:
         batch_op.add_column(sa.Column('document_id', sa.Uuid(), nullable=True))
         batch_op.add_column(sa.Column('source_id', sa.Uuid(), nullable=True))
@@ -63,10 +101,7 @@ def upgrade() -> None:
         batch_op.add_column(
             sa.Column(
                 'content_type',
-                sa.Enum(
-                    'TEXT', 'TABLE', 'IMAGE', 'STRUCTURED_RECORD',
-                    name='knowledge_chunk_content_type',
-                ),
+                content_type_enum,
                 nullable=False,
                 server_default='TEXT',
             )
@@ -95,10 +130,7 @@ def upgrade() -> None:
         batch_op.add_column(
             sa.Column(
                 'quality_status',
-                sa.Enum(
-                    'HIGH', 'MEDIUM', 'LOW', 'INSUFFICIENT',
-                    name='knowledge_chunk_quality_status',
-                ),
+                quality_status_enum,
                 nullable=False,
                 server_default='MEDIUM',
             )

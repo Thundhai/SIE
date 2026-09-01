@@ -31,45 +31,23 @@ here, never help). Adding an IVFFlat or HNSW index, correctly tuned, is
 explicitly future work once a real dataset size is known — see the
 README's "Semantic Knowledge Architecture" section.
 
-**A pre-existing defect in migration 0005, discovered while integrating
-this migration against a real PostgreSQL + pgvector server for the first
-time in this project's history.** `0005`'s `batch_alter_table.add_column()`
-calls add two brand-new PostgreSQL enum-typed columns
-(`content_type`, `quality_status`) to the already-existing
-`knowledge_chunks` table. On real PostgreSQL, Alembic's `add_column`
-operation (batched or not) does **not** auto-create the enum type the
-column references — only `op.create_table()` does that, as a side effect
-of the CREATE TABLE statement's own type visitation. `op.add_column()` is
-a narrower ALTER TABLE construct that never gets that same treatment.
-Every other native-enum column added by an earlier migration
-(0002, 0003, 0004) was introduced via `op.create_table()`, not
-`add_column()` on a pre-existing table, which is why this specific defect
-was never previously triggered — and why it went undetected until this
-milestone, since 0005 itself had only ever been verified via SQLite
-(where the distinction is invisible) and an offline `--sql` dry run
-against PostgreSQL (which prints the ALTER statement's text without ever
-executing it, and so cannot detect that the referenced type does not yet
-exist). Confirmed live in this session: a fresh PostgreSQL 16 + pgvector
-0.6.0 database, migrated from empty via `alembic upgrade head`, fails at
-revision 0005 with `psycopg.errors.UndefinedObject: type
-"knowledge_chunk_content_type" does not exist`.
-
-This migration (0006) cannot fix that defect — by the time any migration
-numbered after 0005 runs, 0005 has already failed and the whole
-`alembic upgrade head` invocation has rolled back as one transaction (see
-migrations/env.py), so nothing after 0005 in the chain can rescue it. The
-only real fix is inside 0005 itself (creating the two enum types with
-`sa.Enum(...).create(op.get_bind(), checkfirst=True)` before the
-`add_column` calls that reference them) — which this milestone's explicit
-instruction not to modify migrations 0001-0005 deliberately leaves
-untouched here. **This is called out prominently in the final report as
-a decision requiring the user's sign-off, not silently patched.** Until
-resolved, `alembic upgrade head` against a *fresh* PostgreSQL database
-fails at 0005 before ever reaching this migration; this migration's own
-SQL was still verified for real, end-to-end, against a live local
-PostgreSQL 16 + pgvector 0.6.0 server whose schema was first brought to
-revision 0005 by pre-creating those two enum types out-of-band (not by
-editing 0005's file) — see the final report for the exact commands used.
+**Migration 0005's enum-type defect — fixed.** An earlier version of this
+milestone's own notes here documented a defect discovered while first
+integrating a real PostgreSQL + pgvector server: `0005`'s
+`batch_alter_table.add_column()` calls add two brand-new PostgreSQL
+enum-typed columns (`content_type`, `quality_status`) to the
+already-existing `knowledge_chunks` table, and `op.add_column()` — unlike
+`op.create_table()` — never auto-creates the enum type a column
+references. That has since been fixed *inside migration 0005 itself*
+(explicit `sa.Enum(...).create(bind, checkfirst=True)` calls before the
+columns that reference them — see that migration's own docstring for the
+full explanation) in a corrective follow-up milestone. A fresh, empty
+PostgreSQL database now runs `alembic upgrade head` through 0001-0006
+without any manual intervention — confirmed live against PostgreSQL 16 +
+pgvector 0.6.0, including a downgrade-to-0004 and re-upgrade round trip.
+This migration's own SQL (the pgvector extension + the
+`knowledge_chunk_embeddings` table) was unaffected by that defect either
+way — it has no enum columns of its own.
 """
 from typing import Sequence, Union
 
