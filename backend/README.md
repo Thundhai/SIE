@@ -1823,13 +1823,17 @@ delivers.
   `EmbeddingService` call site would need to change. Because
   `EMBEDDING_PROVIDER` defaults to `"hashing"` (unlike `DEV_MODE`, whose
   unsafe value is *not* the default), `build_embedding_provider()`
-  (`app/embeddings/provider.py`) logs a loud `WARNING` — naming exactly
-  what to configure instead — whenever it resolves to `"hashing"` while
-  `APP_ENV` is `"production"`/`"prod"`, so this cannot reach a real
-  deployment silently. It is a warning, not a hard startup failure —
-  deliberately, so a legitimate non-production use of `APP_ENV=production`
-  is never blocked by it; see that function's own comment for the
-  trade-off.
+  (`app/embeddings/provider.py`) — and therefore `get_embedding_provider()`,
+  which is what application startup and every request path actually
+  call — **raises `HashingProviderInProductionError` and refuses to
+  construct the provider at all** whenever it would resolve to
+  `"hashing"` while `APP_ENV` is `"production"`/`"prod"`: the same "fail
+  closed" shape `DEV_MODE` already uses for auth
+  (`app/api/deps_auth.py`). A misconfigured production deployment cannot
+  serve a single request on the hashing provider — it fails before any
+  embedding is generated, not after silently returning
+  semantically-meaningless vectors. Development, test, and CI
+  environments (any other `APP_ENV` value) are unaffected.
 * **No ANN vector index (IVFFlat/HNSW).** Deliberate for this milestone's
   dataset size — see [Semantic Knowledge Architecture](#semantic-knowledge-architecture)'s
   "Indexing decision" — but will need to be added and tuned once a real
