@@ -201,6 +201,66 @@ class Settings(BaseSettings):
     LOG_RAG_QUERY_TEXT: bool = False
     LOG_RAG_ANSWER_TEXT: bool = False
 
+    # Intelligence & Predictive Analytics Foundation (see app/intelligence/
+    # and the README's "Intelligence Architecture" section).
+    #
+    # Analytical windows (item 17) — never hard-coded at each call site.
+    INTELLIGENCE_ANALYTICAL_WINDOWS_DAYS: list[int] = [7, 30, 90, 365]
+    INTELLIGENCE_DEFAULT_WINDOW_DAYS: int = 30
+    # Baseline period for trend/anomaly comparison (item 31) — the period
+    # immediately preceding the analysis window, of this many days.
+    INTELLIGENCE_BASELINE_WINDOW_DAYS: int = 90
+
+    # Data sufficiency thresholds (item 30) — event counts in the
+    # analysis window below LIMITED are INSUFFICIENT_DATA; below
+    # SUFFICIENT are LIMITED_DATA. Documented *initial* defaults, not
+    # statistically validated ones — same spirit as the retrieval/RAG
+    # thresholds elsewhere in this codebase.
+    INTELLIGENCE_SUFFICIENT_DATA_MIN_EVENTS: int = 10
+    INTELLIGENCE_LIMITED_DATA_MIN_EVENTS: int = 3
+
+    # Data freshness (item 32) — if the latest ingestion for a source
+    # system is older than this many days, analytics surface STALE_DATA
+    # rather than silently presenting old data as current.
+    INTELLIGENCE_FRESHNESS_THRESHOLD_DAYS: int = 7
+
+    # Trend analysis (item 23) — app/intelligence/trends.py. A trend
+    # needs at least this many non-empty periods to be classified at all
+    # (fewer -> INSUFFICIENT_DATA); the slope must clear this fraction of
+    # the period mean (per period) to be called INCREASING/DECREASING
+    # rather than STABLE.
+    INTELLIGENCE_TREND_MIN_PERIODS: int = 3
+    INTELLIGENCE_TREND_SLOPE_THRESHOLD: float = 0.1
+
+    # Anomaly detection (item 24) — app/intelligence/anomaly.py. A
+    # z-score-based method: needs at least this many baseline periods:
+    # fewer -> INSUFFICIENT_DATA. |z| at or above the threshold ->
+    # ANOMALOUS.
+    INTELLIGENCE_ANOMALY_MIN_BASELINE_PERIODS: int = 4
+    INTELLIGENCE_ANOMALY_Z_SCORE_THRESHOLD: float = 2.0
+
+    # Risk signal thresholds (item 22) — app/intelligence/signals.py.
+    # A current-window count must be at least this many multiples of its
+    # baseline rate, AND at least this many events in absolute terms, to
+    # be flagged as a surge/cluster signal. Documented initial defaults.
+    INTELLIGENCE_SIGNAL_SURGE_MULTIPLIER: float = 2.0
+    INTELLIGENCE_SIGNAL_MIN_EVENT_COUNT: int = 3
+    # Below this rate, TRAINING_COMPLIANCE_DROP is flagged.
+    INTELLIGENCE_TRAINING_COMPLIANCE_THRESHOLD: float = 0.8
+
+    # Privacy (item 34) — safety event `description` free-text and any
+    # `attributes` keys listed here are treated as sensitive: never
+    # included in analytics feature/signal output, and never logged
+    # verbatim (see app/intelligence/privacy.py).
+    INTELLIGENCE_SENSITIVE_ATTRIBUTE_KEYS: list[str] = [
+        "employee_name",
+        "employee_id",
+        "personal_id",
+        "medical_details",
+        "disciplinary_action",
+    ]
+    LOG_INTELLIGENCE_EVENT_DESCRIPTION: bool = False
+
     # Database
     # Either set DATABASE_URL directly, or set the POSTGRES_* components and
     # let it be assembled below.

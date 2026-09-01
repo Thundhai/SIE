@@ -50,9 +50,9 @@ def test_fresh_postgres_database_migrates_through_head_with_no_manual_interventi
 ):
     """The core regression test: starting from a completely empty
     PostgreSQL schema, `alembic upgrade head` must succeed end to end
-    through 0001 -> 0002 -> 0003 -> 0004 -> 0005 -> 0006 with no manual
-    intervention (no pre-created enum types, no pre-enabled pgvector
-    extension — migration 0006 enables that itself)."""
+    through 0001 -> 0002 -> 0003 -> 0004 -> 0005 -> 0006 -> 0007 with no
+    manual intervention (no pre-created enum types, no pre-enabled
+    pgvector extension — migration 0006 enables that itself)."""
     engine = _fresh_schema_engine()
     try:
         # migrations/env.py reads settings.sqlalchemy_database_uri fresh
@@ -65,7 +65,7 @@ def test_fresh_postgres_database_migrates_through_head_with_no_manual_interventi
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0006"
+            assert version == "0007"
 
             enum_types = {
                 row[0]
@@ -92,6 +92,8 @@ def test_fresh_postgres_database_migrates_through_head_with_no_manual_interventi
             assert "knowledge_chunks" in tables
             assert "knowledge_documents" in tables
             assert "organizations" in tables
+            assert "safety_events" in tables
+            assert "api_clients" in tables
 
             extensions = {
                 row[0] for row in conn.execute(text("SELECT extname FROM pg_extension")).all()
@@ -170,6 +172,60 @@ def test_downgrade_then_reupgrade_round_trips_cleanly(monkeypatch):
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version == "0007"
+    finally:
+        engine.dispose()
+
+
+@requires_postgres
+def test_intelligence_migration_downgrade_then_reupgrade_round_trips_cleanly(monkeypatch):
+    """0007's own downgrade/re-upgrade round trip, isolated from the
+    others above: `safety_events`/`api_clients` must both disappear on
+    downgrade to 0006 and both reappear, correctly, on re-upgrade — and
+    nothing 0006 or earlier created is disturbed either way."""
+    engine = _fresh_schema_engine()
+    try:
+        monkeypatch.setattr("app.core.config.settings.DATABASE_URL", PG_TEST_DATABASE_URL)
+        config = _alembic_config()
+
+        command.upgrade(config, "head")
+        command.downgrade(config, "0006")
+
+        with engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
             assert version == "0006"
+
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT table_name FROM information_schema.tables "
+                        "WHERE table_schema = 'public'"
+                    )
+                ).all()
+            }
+            assert "safety_events" not in tables
+            assert "api_clients" not in tables
+            # Untouched by 0007's downgrade.
+            assert "knowledge_chunk_embeddings" in tables
+            assert "organizations" in tables
+
+        command.upgrade(config, "head")
+
+        with engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version == "0007"
+
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT table_name FROM information_schema.tables "
+                        "WHERE table_schema = 'public'"
+                    )
+                ).all()
+            }
+            assert "safety_events" in tables
+            assert "api_clients" in tables
     finally:
         engine.dispose()

@@ -7,7 +7,7 @@ consumer of the SIE API — but it is a consumer, not a dependency. Any
 authorized enterprise application connects the same way: through the
 versioned REST API under `/api/v1`.
 
-Seven milestones are implemented so far:
+Eight milestones are implemented so far:
 
 * **Foundation v0.1** — core tenancy models (Organization, Site, User,
   DataSource), a REST API, and infrastructure (FastAPI, PostgreSQL,
@@ -60,19 +60,34 @@ Seven milestones are implemented so far:
   harness. **The LLM is not the source of truth** — SIE's knowledge
   sources are the evidence. See
   [Evidence-Grounded RAG](#evidence-grounded-rag) below.
+* **Intelligence & Predictive Analytics Foundation v0.1** — the
+  trustworthy data-intelligence foundation a future predictive layer will
+  need, not the predictive layer itself: a canonical, source-agnostic
+  `SafetyEvent` model across eleven safety-data domains; a
+  validate/normalize/idempotent-ingest pipeline (single and batch) with
+  full source provenance and a deterministic data-quality state on every
+  record; machine-client (API key) authentication for external system
+  integration, independent of the dev-mode human header; strict
+  point-in-time-correct feature engineering (no future information can
+  leak into a historical calculation — enforced in one central place and
+  regression-tested); exposure-normalized rates; deterministic leading/
+  lagging indicators, trend classification, z-score anomaly detection,
+  and rule-based risk signals — never a fabricated probability; a
+  synthetic evaluation dataset and harness. **This milestone does not
+  claim to predict accidents or injuries.** See
+  [Intelligence & Predictive Analytics Architecture](#intelligence--predictive-analytics-architecture)
+  below.
 
-Predictive models, OCR execution, transcription, autonomous/tool-using
-agents, and Safelytic integration are all out of scope so far and are
-stubbed out only as empty, documented package placeholders
-(`app/intelligence`, `app/analytics`, `app/predictions`, `app/governance`)
-or interface-only modules (`app/ingestion/ocr.py`) so later phases have a
-predictable home without a restructure. **No AI training, predictive
-analytics, autonomous agents, tool-calling, web search/crawling, or
-workflow automation exist in this codebase.** As of the Evidence-Grounded
-RAG milestone, embeddings, vector similarity search, evidence-grounded
-LLM reasoning, citations, and abstention *do* exist (see above) — see
-[Evidence-Grounded RAG](#evidence-grounded-rag)'s own "What RAG
-deliberately does not do" section for the complete, current boundary.
+Sophisticated predictive ML, OCR execution, transcription, autonomous/
+tool-using agents, and Safelytic integration are all out of scope so far.
+`app/intelligence/predictive_model.py` documents the eventual predictive-
+model interface without implementing one; `app/analytics`, `app/predictions`,
+`app/governance` remain empty, documented package placeholders (see
+[Intelligence & Predictive Analytics Architecture](#intelligence--predictive-analytics-architecture)
+for what `app/intelligence` itself now contains) or interface-only
+modules (`app/ingestion/ocr.py`) so later phases have a predictable home
+without a restructure. **No AI training, autonomous agents, tool-calling,
+web search/crawling, or workflow automation exist in this codebase.**
 
 ## Architecture
 
@@ -305,17 +320,22 @@ alembic revision --autogenerate -m "describe the change"
 alembic downgrade -1
 ```
 
-Four migrations exist so far: `0001` (Foundation v0.1 — organizations,
+Seven migrations exist so far: `0001` (Foundation v0.1 — organizations,
 sites, users, data_sources), `0002` (Knowledge Foundation v0.1 —
 knowledge_sources, knowledge_documents, knowledge_document_versions,
 knowledge_chunks), `0003` (Identity & Access Foundation v0.1 —
 organization_memberships, identities, audit_logs, plus a compatibility
 change to the `users` table — see
-["Compatibility concerns"](#identity-architecture) below), and `0004`
+["Compatibility concerns"](#identity-architecture) below), `0004`
 (Universal Knowledge & Data Ingestion Engine v0.1 — ingested_files,
-ingestion_jobs; purely additive, no changes to any existing table).
-Earlier migrations are never modified; new schema changes are always a
-new migration on top.
+ingestion_jobs; purely additive, no changes to any existing table), `0005`
+(Knowledge Quality & Semantic Chunking Foundation v0.1), `0006` (Semantic
+Knowledge Engine v0.1 — pgvector + knowledge_chunk_embeddings), and
+`0007` (Intelligence & Predictive Analytics Foundation v0.1 —
+`safety_events` and `api_clients`; purely additive — see
+[Intelligence & Predictive Analytics Architecture](#intelligence--predictive-analytics-architecture)
+for why no other table was added). Earlier migrations are never modified;
+new schema changes are always a new migration on top.
 
 ## API endpoints
 
@@ -342,20 +362,35 @@ new migration on top.
 | POST   | `/api/v1/knowledge/ingestion`                             | Upload and ingest a file (`knowledge:manage`) |
 | POST   | `/api/v1/knowledge/retrieval/search`                      | Semantic evidence search (authenticated; `knowledge:read` if `filters.organization_id` is given) |
 | POST   | `/api/v1/knowledge/rag/query`                              | Evidence-grounded RAG query (authenticated; `knowledge:read` if `filters.organization_id` is given) |
+| POST   | `/api/v1/intelligence/events`                              | Ingest one canonical safety event (**machine-client authenticated**, `safety_data:write` scope) |
+| POST   | `/api/v1/intelligence/events/batch`                        | Batch-ingest safety events (same auth; partial success, per-record results) |
+| GET    | `/api/v1/intelligence/analytics/summary`                   | Features + indicators + signals + source reliability for one organization/site (`intelligence:read`) |
+| GET    | `/api/v1/intelligence/analytics/trends`                    | Period-bucketed trend for one named metric (`intelligence:read`) |
+| GET    | `/api/v1/intelligence/analytics/signals`                   | Deterministic risk signals (`intelligence:read`) |
+| GET    | `/api/v1/intelligence/features`                            | Raw computed feature values (`intelligence:read`) |
+| POST   | `/api/v1/organizations/{organization_id}/api-clients`     | Provision a machine-client credential (`users:manage`) — returns the raw secret once |
+| GET    | `/api/v1/organizations/{organization_id}/api-clients`     | List an organization's machine clients (`users:manage`, never the secret) |
+| POST   | `/api/v1/organizations/{organization_id}/api-clients/{id}/rotate` | Rotate a machine client's secret (`users:manage`) |
+| POST   | `/api/v1/organizations/{organization_id}/api-clients/{id}/revoke` | Revoke a machine client (`users:manage`) |
 
-The membership endpoints, the ingestion endpoint, and the retrieval
-search and RAG query endpoints are the routes in this codebase that
-require authentication today (the retrieval and RAG endpoints
-additionally require a permission check whenever an `organization_id`
-filter is supplied) — see [Identity architecture](#identity-architecture)
-for what that means in practice (development-mode only, no real identity
-provider connected yet) and why the other routes above them still don't,
-and [Universal ingestion architecture](#universal-ingestion-architecture) /
+The membership endpoints, the ingestion endpoint, the retrieval
+search and RAG query endpoints, and the intelligence/API-client endpoints
+are the routes in this codebase that require authentication today (the
+retrieval, RAG, and intelligence-analytics endpoints additionally require
+a permission check whenever an `organization_id` is supplied) — see
+[Identity architecture](#identity-architecture) for what that means in
+practice (development-mode only, no real identity provider connected
+yet) and why the other routes above them still don't, and
+[Universal ingestion architecture](#universal-ingestion-architecture) /
 [Semantic Knowledge Architecture](#semantic-knowledge-architecture) /
-[Evidence-Grounded RAG](#evidence-grounded-rag) for the ingestion,
-retrieval, and RAG endpoints' own authorization rules (global vs.
-organization knowledge — the RAG endpoint reuses the retrieval endpoint's
-rule exactly, not a separate one). There is deliberately no endpoint to
+[Evidence-Grounded RAG](#evidence-grounded-rag) /
+[Intelligence & Predictive Analytics Architecture](#intelligence--predictive-analytics-architecture)
+for the ingestion, retrieval, RAG, and intelligence endpoints' own
+authorization rules. The intelligence ingestion endpoints are the
+exception to every other authenticated route in this codebase: they use
+**machine-client (API key) authentication**
+(`app/api/deps_machine_auth.py`), never the development-mode human
+header — see that section for why. There is deliberately no endpoint to
 *create* or modify chunks — see [Knowledge Quality & Semantic Chunking
 Pipeline](#knowledge-quality--semantic-chunking-pipeline) for why chunk
 generation is controlled by ingestion processing only, and for the
@@ -1962,6 +1997,389 @@ because they contain citations. Citations indicate supporting source
 material; users remain responsible for appropriate professional
 verification of safety-critical decisions.**
 
+## Intelligence & Predictive Analytics Architecture
+
+    External Systems (Safelytic, other HSE systems, ERP/HR/CMMS, IoT, audits, ...)
+        -> Data Ingestion (validate -> normalize -> idempotent upsert)
+        -> Canonical SafetyEvent
+        -> Feature Engineering (point-in-time correct)
+        -> Indicators (leading / lagging)
+        -> Risk Signals (deterministic, rule-based)
+        -> Future Predictive Models (interface only — not built here)
+
+This is the Intelligence & Predictive Analytics Foundation v0.1
+milestone. **This milestone does not claim to predict accidents or
+injuries.** It establishes the trustworthy analytical foundation
+(canonical event model, provenance, temporal integrity, data quality,
+exposure normalization, feature engineering, deterministic indicators and
+signals) required for future predictive modeling — see
+`app/intelligence/predictive_model.py`'s own docstring for exactly what
+remains before real predictive ML exists.
+
+### SIE is not Safelytic-only
+
+Nothing in `app/intelligence/` (the core data-intelligence package) or
+its `safety_events` table is Safelytic-specific. `app/intelligence/adapters.py::DataSourceAdapter`
+is the one abstraction boundary every source integrates through
+(`validate`/`normalize`/`transform`/`ingest`) — `GenericJSONAdapter` is
+the only adapter this milestone actually implements (the one the REST
+API uses), but a future Safelytic-specific, CSV-column-mapping, or any
+other source's adapter implements the same interface without any call
+site above it changing. Any authorized external application —
+Safelytic, another HSE platform, an ERP/HR/CMMS system, an IoT/sensor
+feed, an audit platform, or a custom integration — connects the same
+way, through the same versioned REST API, and never needs direct
+database access (milestone item 37).
+
+### Canonical safety event model
+
+One table, `safety_events` (`app/models/safety_event.py`), spans all
+eleven data domains the milestone names — incidents, near misses, safety
+observations, inspections, audits, corrective actions, permits, training,
+workforce, equipment, and environmental conditions — via `event_type`/
+`event_subtype` (plain, extensible strings, not a closed native-enum
+column) plus a flexible `attributes` JSON column for whatever
+domain-specific structured fields that type needs (e.g.
+`{"hours": 10000}` for a workforce exposure record,
+`{"equipment_id": "...", "failure_type": "..."}` for equipment). This is
+deliberately **not** one specialized table per domain — the milestone's
+own instruction: *"Do not create dozens of highly specialized tables
+unless there is a clear need... the model must remain extensible."*
+Adding a new subtype, or even a new domain, never requires a migration.
+
+`event_type`/`severity`/`status`/`data_quality_status` are Python-side
+validated vocabularies (`app/intelligence/enums.py`) but plain, indexed
+`String` database columns — the same choice already made for
+`OrganizationMembership.role` (see `app/services/permissions.py`), and
+deliberately avoiding a repeat of migration 0005's enum-type-creation
+defect (see "Known gaps" below) for a vocabulary expected to evolve
+without a migration.
+
+### External data ingestion
+
+    external system -> DataSourceAdapter.validate() -> .normalize()
+        -> .transform() -> .ingest() -> SafetyEventIngestionService -> SafetyEvent row
+
+`POST /api/v1/intelligence/events` (single) and
+`POST /api/v1/intelligence/events/batch` (batch, up to 1000 records) are
+the two ingestion endpoints. Batch ingestion processes each record inside
+its own database savepoint (`db.begin_nested()`), so **one malformed
+record can never corrupt or abort the rest of the batch** (milestone item
+38) — the response reports created/updated/skipped/rejected counts and a
+per-record result (outcome, data-quality status, validation issues).
+
+### Machine-client authentication
+
+External systems authenticate as a **machine client**
+(`ApiClient` — `app/models/api_client.py`), not as a human user — the
+development-mode `X-SIE-Dev-User-Id` header (`app/api/deps_auth.py`) is
+explicitly documented as unfit for production and is never accepted by
+the ingestion endpoints (`app/api/deps_machine_auth.py`). A machine
+client is:
+
+  * organization-associated (one client belongs to exactly one
+    organization; its credential can never write another organization's
+    data)
+  * scoped explicitly at creation time (`app/services/permissions.py::Permission`
+    values, e.g. `safety_data:write`) — never inherited from a human
+    role, and never wider than what was granted
+  * authenticated via `Authorization: Bearer <client_id>:<secret>`,
+    where `<secret>` is a long (`secrets.token_urlsafe(32)`), high-entropy,
+    SIE-generated value — **never a human-chosen password**
+  * hashed at rest with sha256 (see `app/services/api_client_service.py`'s
+    own docstring for why a slow password-hashing KDF like bcrypt/scrypt
+    is unnecessary here: the secret's entropy, not hash speed, is what
+    protects it), verified with `secrets.compare_digest()` (constant-time)
+  * rotatable and revocable — `POST .../api-clients/{id}/rotate` /
+    `.../revoke`, both audited
+
+The raw secret is shown to the caller **exactly once**, at
+creation/rotation time, and is never stored, logged, or retrievable
+again — only `secret_prefix` (a short, safe-to-display fragment)
+persists for identification afterward.
+
+### Idempotent ingestion
+
+A record's identity is `(organization_id, source_system,
+source_record_id)` — `safety_events`'s own `UniqueConstraint`. Resending
+the identical record is a genuine no-op
+(`IngestionOutcome.SKIPPED_IDEMPOTENT`, detected by comparing a sha256
+content hash of the normalized payload — no duplicate row, no wasted
+write); resending the same record with different content updates the
+existing row in place (`UPDATED`). A record repeated *within the same
+batch* is flagged `duplicate_in_batch` on its own result rather than
+silently creating two rows.
+
+### Data quality framework
+
+Every stored record carries `data_quality_status`
+(`app/intelligence/enums.py::DataQualityStatus`):
+
+  * `VALID` — no issues.
+  * `PARTIAL` — a non-blocking issue (e.g. an unrecognized severity
+    value) — still stored, still used in analytics, the issue visible.
+  * `QUARANTINED` — a blocking issue (e.g. missing/unparseable
+    `event_time`, an impossible date or duration) — **still stored**
+    (milestone item 12: "do not silently 'fix' questionable data"), but
+    excluded from every feature/indicator/signal calculation.
+  * A payload missing its minimum identity fields (`source_system`,
+    `source_record_id`, `event_type`) is `REJECTED` — no row is written
+    at all; there is nothing to deduplicate or classify.
+
+Validation (`app/intelligence/validation.py`) is a small set of
+deterministic rules — never machine learning, never a "confidence"
+score. Normalization (`app/intelligence/normalization.py`) never
+destroys the original value: `SafetyEvent.source_value` always preserves
+exactly what was received, alongside the normalized fields.
+
+**Data quality, risk, and (future) prediction confidence are three
+distinct concepts, never collapsed into one field or score** (milestone
+item 13) — a record can be `data_quality_status=PARTIAL` while
+describing a `severity=CRITICAL` event; nothing in this codebase implies
+otherwise.
+
+### Provenance
+
+    RiskSignal -> supporting_event_ids -> SafetyEvent.id
+        -> SafetyEvent.source_system / source_record_id (external record)
+        -> SafetyEvent.source_value (original payload, preserved)
+        -> SafetyEvent.ingestion_batch_id (one ingestion call's records)
+        -> SafetyEvent.normalization_version / schema_version
+
+Every `FeatureValue` and `RiskSignal` carries `source_event_ids` — the
+actual `SafetyEvent.id`s that produced it (capped at 50 for payload
+size) — so a later question ("what evidence produced this signal?") is
+always answerable down to the original source record, exactly the same
+"stable citation, full provenance chain" principle already established
+for [Evidence-Grounded RAG](#evidence-grounded-rag)'s citations.
+`ingestion_batch_id` is a plain UUID column (one per ingestion call), not
+a foreign key into a separate batch-tracking table — batch-level
+statistics are computed on demand by aggregating `safety_events`,
+avoiding a second, easily-inconsistent table for something this
+codebase can already answer by querying the one it has (the same
+"don't add a table you can compute from instead" judgment call already
+made for RAG request audit metadata reusing `AuditLog`).
+
+### Temporal integrity — no future information may leak into a historical feature
+
+`app/intelligence/temporal.py::events_as_of()` is the **one and only**
+query builder every feature/indicator/trend/anomaly/signal calculation
+in this codebase uses to fetch `SafetyEvent` rows. It filters on
+`event_time <= as_of`, and — by default — also on `ingestion_time <=
+as_of`: a record that *happened* before `as_of` but was only *reported
+or ingested* afterward (a backdated report) would not actually have been
+knowable at that historical moment either, so it is excluded too unless
+a caller explicitly opts into the more lenient event-time-only check.
+Centralizing this in one function, rather than letting each feature
+write its own filter, makes a leakage bug in a *new* feature
+structurally hard to introduce — and lets one regression test
+(`tests/test_temporal_leakage.py`) protect every caller at once. Data
+quality is filtered here too: `QUARANTINED`/`INVALID` records never
+reach a feature calculation.
+
+### Analytical windows and exposure normalization
+
+Configurable windows (7/30/90/365 days by default,
+`settings.INTELLIGENCE_ANALYTICAL_WINDOWS_DAYS`) — never hard-coded per
+call site. Where exposure data exists (`WORKFORCE`/`EXPOSURE_HOURS`
+events — represented as ordinary `SafetyEvent` rows, not a second table),
+raw counts are normalized into rates per 100,000 hours
+(`app/intelligence/exposure.py`): **10 incidents in 10,000 hours and 10
+incidents in 500 hours never report the same rate.** When no exposure
+data exists at all, the rate is reported as the explicit
+`EXPOSURE_DATA_UNAVAILABLE` sentinel — never a fabricated or silently
+misleading number.
+
+### Feature engineering
+
+`app/intelligence/features.py::compute_feature_set()` is a pure function
+over an already-fetched, already-point-in-time-filtered event list (plus
+an already-computed exposure figure) — trivially unit-testable, and the
+only place point-in-time correctness can be gotten wrong stays
+`events_as_of()`, not each feature. ~20 deterministic features: event
+frequency (incident/near-miss/observation/audit/inspection counts),
+severity (average severity, high-potential event count, severe event
+count), corrective actions (open/overdue counts, closure rate, recurring
+count), training (expired certification count, completion rate,
+competency gap count), equipment (overdue inspection count, failure
+count, maintenance-overdue count), operational context (contractor
+activity count, activity diversity, location concentration), and
+exposure-normalized rates. Every `FeatureValue` records its name, value,
+window, `as_of`, `source_event_ids`, `calculation_version`
+(`feature-v1`), and a `data_quality` label — a feature whose value
+depends on a denominator that doesn't exist (a rate with nothing to
+divide by) reports `value=None` with an explicit `unavailable_reason`,
+never a misleading `0`; a legitimately-zero *count* stays a real,
+meaningful `0`.
+
+### Indicators, trends, and anomaly detection
+
+**Indicators** (`app/intelligence/indicators.py`) are a thin,
+labeling-only layer over features — `LAGGING` (incident count, severe
+event count, incidents per 100,000 hours) measures outcomes already
+realized; `LEADING` (near-miss count, observation count, overdue action
+count, inspection count, training completion rate) measures activity
+believed to precede outcomes. Neither is ever presented as a predictive
+probability.
+
+**Trend analysis** (`app/intelligence/trends.py`) is ordinary
+least-squares linear regression over period-bucketed values, classified
+against a relative-slope threshold (`settings.INTELLIGENCE_TREND_SLOPE_THRESHOLD`)
+— `INCREASING`/`DECREASING`/`STABLE`/`INSUFFICIENT_DATA` (fewer than
+`settings.INTELLIGENCE_TREND_MIN_PERIODS` non-empty periods). Documented,
+not hidden, and deliberately relative rather than absolute, so small
+fluctuations around a large baseline don't get overfit into a false
+trend.
+
+**Anomaly detection** (`app/intelligence/anomaly.py`) is a z-score
+against a rolling baseline mean/population-standard-deviation — chosen
+specifically for being fully explainable (every number in the result is
+directly inspectable, nothing is a learned weight). No deep learning —
+see the milestone's own instruction. A zero-variance baseline is handled
+without dividing by zero (any deviation is anomalous; no deviation is
+normal, `z_score=None` rather than fabricated).
+
+**Correlation, never causation** (`app/intelligence/association.py`,
+milestone item 26): a deterministic Pearson correlation over two aligned
+series can only ever report `ASSOCIATION_OBSERVED` /
+`NO_ASSOCIATION_OBSERVED` / `INSUFFICIENT_DATA` — there is no
+`CAUSATION_CONFIRMED` outcome, and never will be. Observing that overtime
+and incidents move together, however strongly, never establishes that
+one causes the other.
+
+### Risk signals
+
+Five deterministic, rule-based signal types
+(`app/intelligence/signals.py`, `calculation_version="risk-signal-v1"`):
+`HIGH_POTENTIAL_EVENT_CLUSTER`, `OVERDUE_ACTION_SURGE`,
+`EQUIPMENT_FAILURE_CLUSTER`, and `UNSAFE_OBSERVATION_SURGE` compare a
+current-window count against a baseline (the mean of several preceding,
+non-overlapping, same-length periods) via a fixed surge multiplier
+(`settings.INTELLIGENCE_SIGNAL_SURGE_MULTIPLIER`) and a minimum absolute
+count (`settings.INTELLIGENCE_SIGNAL_MIN_EVENT_COUNT`);
+`TRAINING_COMPLIANCE_DROP` compares the training-completion-rate feature
+directly against a threshold (`settings.INTELLIGENCE_TRAINING_COMPLIANCE_THRESHOLD`).
+**A signal never fires from too little data** (milestone item 53): if the
+underlying feature's own `data_quality` is `INSUFFICIENT_DATA`, no signal
+is generated, regardless of what the raw arithmetic would say — a site
+with one or two events, even if every one is severe, produces zero
+signals. Every signal carries its observed period, affected entity,
+`supporting_features`, `supporting_event_ids`, `data_quality`, and
+`calculation_version` — never called a prediction, never a probability.
+
+### Entity-level analysis
+
+Every analytics function accepts an `entity_type`/`entity_id` pair
+(`organization` by default, or `site` when `site_id` is supplied) —
+`app/intelligence/temporal.py::events_as_of()` filters by it directly.
+Nothing in this architecture assumes "organization" is the only
+analytical level; project/department/contractor/activity/equipment/shift
+filtering follows the same shape and can be added without a redesign.
+
+### Data sufficiency and freshness
+
+`app/intelligence/sufficiency.py::classify_data_sufficiency()`:
+`SUFFICIENT_DATA` (>= `settings.INTELLIGENCE_SUFFICIENT_DATA_MIN_EVENTS`,
+default 10), `LIMITED_DATA` (>=
+`settings.INTELLIGENCE_LIMITED_DATA_MIN_EVENTS`, default 3), otherwise
+`INSUFFICIENT_DATA` — a site with three days of data is never compared,
+unqualified, to one with three years.
+
+`app/intelligence/reliability.py::compute_source_reliability()` reports,
+per source system connected to an organization: record counts by data-
+quality status, the latest event/ingestion time, and `is_stale` (latest
+ingestion older than `settings.INTELLIGENCE_FRESHNESS_THRESHOLD_DAYS`,
+default 7 days) — analytics never silently present stale data as
+current.
+
+### Tenant isolation and privacy
+
+Ingestion trusts only the authenticated `ApiClient`'s own
+`organization_id` — there is no client-supplied `organization_id` field
+on the ingestion request body at all, so there is nothing for a
+malicious or buggy caller to spoof. Every read endpoint requires
+`organization_id` as an explicit, authorized query parameter
+(`intelligence:read`), the same authenticate-then-authorize-then-pass-a-
+trusted-value shape already established for retrieval/RAG — there is no
+second tenant-isolation mechanism. `events_as_of()` itself always filters
+on `organization_id` as part of its one shared query — verified
+end-to-end (through the full HTTP API, not only at the service layer) in
+`tests/test_intelligence_api.py`.
+
+Safety data can carry sensitive employee information. `SafetyEvent.description`
+and any `attributes` key listed in
+`settings.INTELLIGENCE_SENSITIVE_ATTRIBUTE_KEYS` (employee name/id,
+medical details, disciplinary action, by default) are classified as
+sensitive (`app/intelligence/privacy.py`): never included in any
+feature/signal/analytics output (those only ever carry counts, rates,
+and `source_event_ids` — never event content), and never logged verbatim
+unless a deployment explicitly opts in
+(`LOG_INTELLIGENCE_EVENT_DESCRIPTION`, default off). This is a
+classification/exclusion mechanism, not encryption or field-level access
+control — those remain future work if a deployment needs them.
+
+### Audit and observability
+
+Ingestion (single and batch, one summary entry per batch rather than one
+per record), analytics queries, and API-client lifecycle events (create/
+rotate/revoke) are all recorded via the *existing* `AuditService`/
+`AuditLog` — no new database table for this milestone either. Audit
+metadata is always shape/outcome/counts/identifiers — never a raw
+`description`, raw `attributes`, or full `source_value` payload.
+
+### Future predictive-model interface
+
+`app/intelligence/predictive_model.py::PredictiveModel` documents the
+eventual interface (`fit`/`predict`/`explain`) and `Prediction`'s target
+output shape (`risk_score`, `probability`, `feature_snapshot`,
+`explanation`, `supporting_signals`, ...) — **no model is trained or
+implemented, and no API route calls `predict()`.**
+`NullPredictiveModel` is the one concrete implementation, and it
+deliberately raises `NotImplementedError`, proving the interface is
+wired and testable without ever fabricating a number that could be
+mistaken for a real prediction (milestone item 29). The explainability
+chain the milestone requires (`Prediction -> Model -> Feature snapshot ->
+Feature values -> Source events`) is already fully wired for everything
+below the model itself — a future model only has to plug into it.
+
+### What this milestone deliberately does not do
+
+No sophisticated predictive ML, no accident/injury probability, no model
+training or fine-tuning pipeline, no reinforcement learning, no
+autonomous or tool-using agents, no external web search/crawling, and
+**no automated safety decisions** — this codebase never stops equipment,
+suspends workers, blocks permits, issues disciplinary actions, notifies
+regulators, closes actions, or makes a compliance decision on its own.
+SIE provides intelligence; humans remain responsible for decisions.
+
+### Genuine limitations
+
+  * **Signal/trend/anomaly thresholds are documented initial defaults**,
+    not statistically validated against real incident data — the same
+    "not scientifically validated" caveat this codebase already carries
+    for its retrieval/RAG thresholds.
+  * **The surge-detection heuristic in `app/intelligence/signals.py` is
+    a fixed multiplier over a short baseline**, not a general-purpose
+    statistical process-control method — it will need real deployment
+    data to tune responsibly.
+  * **No persisted feature/signal history.** Features and signals are
+    computed on demand, synchronously, from `safety_events` directly —
+    correct and fully explainable for this milestone, but there is no
+    materialized feature store yet for point-in-time historical
+    backtesting at scale; introducing one (and the async
+    ingestion-worker evolution `app/intelligence/ingestion_service.py`
+    is already shaped to support) is future work.
+  * **Entity resolution across source systems is not implemented** — two
+    systems spelling the same contractor's name differently are treated
+    as two different contractors; `app/intelligence/normalization.py`
+    deliberately does not attempt to reconcile this (milestone item 14:
+    "do not destroy source values").
+  * **No per-organization retention policy enforcement** — see the
+    milestone's own instruction not to implement automatic deletion yet;
+    organizations may eventually require different retention rules for
+    raw source records, normalized records, features, and audit logs,
+    and none of that is built here.
+
 ## Configuration
 
 All configuration is environment-based (`app/core/config.py`, backed by
@@ -2005,19 +2423,44 @@ is the external-LLM privacy boundary. `LOG_RAG_QUERY_TEXT` (`false`) /
 `LOG_RAG_ANSWER_TEXT` (`false`) gate whether a RAG request's raw query/
 generated answer are ever written to the audit trail.
 
+`INTELLIGENCE_ANALYTICAL_WINDOWS_DAYS` (`[7, 30, 90, 365]`) /
+`INTELLIGENCE_DEFAULT_WINDOW_DAYS` (30) / `INTELLIGENCE_BASELINE_WINDOW_DAYS`
+(90) configure analytical windows and baseline periods — see
+[Intelligence & Predictive Analytics Architecture](#intelligence--predictive-analytics-architecture)
+above. `INTELLIGENCE_SUFFICIENT_DATA_MIN_EVENTS` (10) /
+`INTELLIGENCE_LIMITED_DATA_MIN_EVENTS` (3) configure data sufficiency;
+`INTELLIGENCE_FRESHNESS_THRESHOLD_DAYS` (7) configures staleness.
+`INTELLIGENCE_TREND_MIN_PERIODS` (3) / `INTELLIGENCE_TREND_SLOPE_THRESHOLD`
+(0.1) configure trend classification; `INTELLIGENCE_ANOMALY_MIN_BASELINE_PERIODS`
+(4) / `INTELLIGENCE_ANOMALY_Z_SCORE_THRESHOLD` (2.0) configure anomaly
+detection; `INTELLIGENCE_SIGNAL_SURGE_MULTIPLIER` (2.0) /
+`INTELLIGENCE_SIGNAL_MIN_EVENT_COUNT` (3) /
+`INTELLIGENCE_TRAINING_COMPLIANCE_THRESHOLD` (0.8) configure risk-signal
+detection — all documented *initial* defaults, the same "not
+scientifically validated" spirit as every other threshold in this
+codebase. `INTELLIGENCE_SENSITIVE_ATTRIBUTE_KEYS` (employee name/id,
+medical details, disciplinary action) / `LOG_INTELLIGENCE_EVENT_DESCRIPTION`
+(`false`) configure the privacy boundary.
+
 ## Deliberate scope boundaries (v0.1)
 
 To keep each foundation phase clean and reviewable, the following are
-intentionally **not** included yet: real OIDC/OAuth2 token verification, a
-commercial identity provider dependency, machine-client authentication
-(API keys, OAuth client credentials), hybrid/keyword retrieval, a
-reranking model, predictive models, machine learning, autonomous or
-tool-using agents, external web search/crawling, model fine-tuning or
-training, Safelytic integration, Redis, Celery, Kafka, Kubernetes,
-production (S3/Azure/GCS) object storage, commercial OCR, transcription,
-and automatic external-source trust. (The AI/LLM layer and RAG themselves
-*are* now implemented, evidence-grounded only — see
-[Evidence-Grounded RAG](#evidence-grounded-rag).) See
+intentionally **not** included yet: real OIDC/OAuth2 token verification
+for human users, a commercial identity provider dependency, OAuth2
+client-credentials flow specifically (see below for what machine-client
+auth *is* built), hybrid/keyword retrieval, a reranking model,
+sophisticated predictive ML, autonomous or tool-using agents, external
+web search/crawling, model fine-tuning or training, Safelytic
+integration, Redis, Celery, Kafka, Kubernetes, production (S3/Azure/GCS)
+object storage, commercial OCR, transcription, and automatic
+external-source trust. (The AI/LLM layer and RAG themselves *are* now
+implemented, evidence-grounded only — see
+[Evidence-Grounded RAG](#evidence-grounded-rag). Machine-client [API
+key] authentication for external system integration, and the
+data-intelligence foundation for future predictive models, *are* now
+implemented too — see
+[Intelligence & Predictive Analytics Architecture](#intelligence--predictive-analytics-architecture).)
+See
 [Identity architecture](#identity-architecture) for what *is*
 built towards authentication/authorization, and the "Deliberately does
 not implement" list the Identity & Access Foundation milestone itself set
@@ -2252,3 +2695,12 @@ in particular still are not implemented).
   occasionally still hash into overlapping vocabulary buckets and cross
   the relevance bar. A real embedding model would be expected to score
   closer to 1.0 here.
+* **Intelligence & Predictive Analytics Foundation v0.1's own genuine
+  limitations** (unvalidated thresholds, no persisted feature/signal
+  history yet, no cross-source entity resolution, no retention-policy
+  enforcement) are listed in full in
+  [Intelligence & Predictive Analytics Architecture](#intelligence--predictive-analytics-architecture)'s
+  own "Genuine limitations" section, not repeated here. **No
+  sophisticated predictive ML exists in this codebase** —
+  `app/intelligence/predictive_model.py` documents the eventual model
+  interface without implementing one.
