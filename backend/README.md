@@ -170,9 +170,11 @@ for exactly which routes do and don't use it yet.
   API itself) — `docker-compose.yml` uses `pgvector/pgvector:pg16`
   (upstream PostgreSQL 16 with the pgvector extension pre-installed) so
   semantic embeddings work out of the box; see [Semantic Knowledge
-  Architecture](#semantic-knowledge-architecture) and the **known
-  migration-0005 issue** in [Known gaps](#known-gaps--next-phase) before
-  relying on `docker compose up` end to end
+  Architecture](#semantic-knowledge-architecture). The full migration
+  chain (0001-0006) has been verified end to end against a genuinely
+  fresh PostgreSQL 16.13 + pgvector 0.6.0 database with no manual
+  intervention — see [Known gaps](#known-gaps--next-phase) for what was
+  fixed and how it was proven.
 
 ## Running with Docker Compose (recommended)
 
@@ -1360,10 +1362,33 @@ explicit `force=True` updates the existing row in place.
 `app/core/config.py`'s `EMBEDDING_DIMENSIONS` is the single central
 source of truth for the pgvector column's width — both
 `app/models/embedding.py`'s `Vector(...)` column and
-`migrations/versions/0006_semantic_embeddings.py` read this one value;
-neither hardcodes a dimension of its own. Changing it requires a new
-migration (a pgvector column's dimension is fixed at creation time) and
-re-embedding every chunk under a new `EMBEDDING_MODEL_VERSION`.
+`migrations/versions/0006_semantic_embeddings.py` read this one value
+live (not baked in as a literal); neither hardcodes a dimension of its
+own. Changing it requires a new migration (a pgvector column's dimension
+is fixed at creation time) and re-embedding every chunk under a new
+`EMBEDDING_MODEL_VERSION`.
+
+**Design decision: one configured vector dimension per deployment, not
+several at once.** This is the architecture pgvector itself imposes — a
+`vector(N)` column is fixed-width at creation time — and it is what this
+codebase has assumed since migration 0006 was first written. This
+corrective milestone reviewed that assumption deliberately rather than
+changing it silently, and hardened it instead of redesigning it: a new
+`EmbeddingDimensionMismatchError` (`app/embeddings/embedding_service.py`)
+is raised **before** any provider call or database write, the moment a
+provider's `dimensions` disagrees with `settings.EMBEDDING_DIMENSIONS` —
+turning what would otherwise be an opaque `psycopg.errors.DataException`
+deep inside an `INSERT` into an immediate, actionable error naming the
+provider, its model, its real dimension, and the configured column
+width. It deliberately aborts the whole batch in
+`generate_embeddings_for_version` rather than being collected as N
+per-chunk `FAILED` outcomes — a dimension mismatch is a deployment-level
+configuration error, not a fact about any individual chunk. Supporting
+multiple simultaneous embedding dimensions in one deployment (e.g. a
+second pgvector column at a different width) is future work, not
+something this milestone needed: nothing in the current requirements
+calls for two models with different dimensions running side by side in
+production.
 
 ### Embedding generation — what gets skipped, and why
 
@@ -1546,13 +1571,31 @@ the query's expected topic appears within the top-K results.
 place it is surfaced (code, tests, this README, the final report) and is
 never claimed as a production or enterprise accuracy figure.** Its
 purpose is to catch regressions on this one small fixture, nothing more.
-The one real, honestly-calculated result on this fixture, using
-`HashingEmbeddingProvider`: **Recall@1 = 0.83, Recall@3 = 1.00,
-Recall@5 = 1.00** (10 of 12 queries found their expected topic at rank 1;
-all 12 found it within the top 3). This says nothing about how any real
-embedding model would perform on real organizational content — it says
-only that this milestone's retrieval pipeline, end to end, correctly
-surfaces topically relevant evidence on this fixture.
+
+| Provider | Recall@1 | Recall@3 | Recall@5 |
+| --- | --- | --- | --- |
+| `HashingEmbeddingProvider` | 0.83 | 1.00 | 1.00 |
+| `SentenceTransformerEmbeddingProvider` (`all-MiniLM-L6-v2`) | pending | pending | pending |
+
+The `HashingEmbeddingProvider` row is real and honestly-calculated (10 of
+12 queries found their expected topic at rank 1; all 12 found it within
+the top 3). **The `SentenceTransformerEmbeddingProvider` row is
+deliberately left as "pending", not fabricated, estimated, or
+substituted with a different model:** this execution environment's
+egress policy blocks `huggingface.co` (confirmed via the outbound proxy
+returning a policy-denial 403 to that host), so no sentence-transformers
+model weights can be downloaded here, and per explicit instruction no
+alternative model was substituted in its place. The code path itself
+(`SentenceTransformerEmbeddingProvider`, selected via
+`EMBEDDING_PROVIDER=sentence_transformers`) is implemented and
+code-reviewed but has never been executed against real model weights in
+this environment — running it and reporting real numbers is future work
+for an environment with that egress path open, not a documented result
+of this milestone. Either way, this fixture's numbers — real or
+pending — say nothing about how any embedding model would perform on
+real organizational content; they say only whether this milestone's
+retrieval pipeline, end to end, correctly surfaces topically relevant
+evidence on this one small fixture.
 
 ### Production architecture consideration — synchronous today, a queue later
 
@@ -1654,33 +1697,38 @@ delivers.
 
 ## Known gaps / next phase
 
-* **`alembic upgrade head` fails on a fresh PostgreSQL database, at
-  migration 0005, before ever reaching migration 0006.** Discovered in
-  this milestone while integrating a real PostgreSQL + pgvector server
-  for the first time in this project's history (previously, migration
-  0005 had only been dialect-tested via SQLite and an offline `--sql`
-  dry run against PostgreSQL — neither can catch this). Root cause,
-  confirmed live: `0005`'s `batch_alter_table.add_column()` calls add two
-  new PostgreSQL enum-typed columns to the already-existing
-  `knowledge_chunks` table; on real PostgreSQL, Alembic's `add_column`
-  (batched or not) does not auto-create the enum type the column
-  references — only `op.create_table()` does that. Every earlier native
-  enum column was introduced via `create_table`, which is why this had
-  never surfaced before. The fix is a small, well-understood change
-  *inside* migration 0005 itself (creating the two enum types with
-  `sa.Enum(...).create(op.get_bind(), checkfirst=True)` before the
-  `add_column` calls that reference them) — deliberately **not** applied
-  by this milestone, per its explicit instruction not to modify
-  migrations 0001-0005. Migration 0006 (pgvector) was still verified for
-  real against a live local PostgreSQL 16 + pgvector 0.6.0 server, by
-  pre-creating those two enum types out-of-band before running `alembic
-  upgrade head` (not by editing 0005's file) — see
-  `migrations/versions/0006_semantic_embeddings.py`'s own docstring and
-  the Semantic Knowledge Engine milestone's final report for the exact
-  commands. **This blocks any fresh `docker-compose up` deployment
-  today** (see that file's `db`/`backend` service comments) and needs a
-  decision from whoever owns this codebase before the next real
-  deployment.
+* **Fixed: migration 0005's enum-type-creation defect.** Discovered in
+  the Semantic Knowledge Engine v0.1 milestone while integrating a real
+  PostgreSQL + pgvector server for the first time in this project's
+  history (previously, migration 0005 had only been dialect-tested via
+  SQLite and an offline `--sql` dry run against PostgreSQL — neither can
+  catch this). Root cause, confirmed live: `0005`'s
+  `batch_alter_table.add_column()` calls add two new PostgreSQL
+  enum-typed columns to the already-existing `knowledge_chunks` table;
+  on real PostgreSQL, Alembic's `add_column` (batched or not) does not
+  auto-create the enum type the column references — only
+  `op.create_table()` does that. Every earlier native enum column was
+  introduced via `create_table`, which is why this had never surfaced
+  before. **Fixed inside migration 0005 itself** — it now creates both
+  enum types explicitly (`sa.Enum(...).create(op.get_bind(),
+  checkfirst=True)`, idempotent and a no-op on SQLite) before the
+  `add_column` calls that reference them; the downgrade path is
+  unchanged (it already dropped only the two types 0005 itself creates,
+  never touching `extraction_method`, which migration 0004 owns).
+  **Verified live**, in this corrective milestone, against a genuinely
+  fresh PostgreSQL 16.13 + pgvector 0.6.0 database with the schema
+  dropped and recreated first (`DROP SCHEMA public CASCADE; CREATE
+  SCHEMA public;`), with **no manual intervention**: `alembic upgrade
+  head` succeeds 0001 → 0006 end to end, a `downgrade` to 0004 followed
+  by a re-`upgrade` to head round-trips cleanly, and both new enum types
+  plus every expected table/extension exist afterward with nothing else
+  disturbed. This is now also enforced by an automated regression test —
+  `tests/test_migrations.py` (PostgreSQL-only; skipped when no real
+  server is reachable) — which was itself confirmed to fail with the
+  original `psycopg.errors.UndefinedObject` error when the fix was
+  temporarily reverted, and to pass again once restored. `alembic
+  upgrade head` against a fresh `docker-compose up` deployment is no
+  longer blocked.
 * **No real authentication.** The only mechanism that exists (see
   [Identity architecture](#identity-architecture)) is a development-only
   header naming an existing user, gated by `DEV_MODE` (default off, and

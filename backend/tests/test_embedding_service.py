@@ -14,7 +14,13 @@ tests/postgres_support.py for those).
 
 import uuid
 
-from app.embeddings.embedding_service import EmbeddingOutcomeStatus, embedding_service
+import pytest
+
+from app.embeddings.embedding_service import (
+    EmbeddingDimensionMismatchError,
+    EmbeddingOutcomeStatus,
+    embedding_service,
+)
 from app.embeddings.provider import HashingEmbeddingProvider
 from app.models.embedding import KnowledgeChunkEmbedding
 from app.models.enums import QualityStatus, ScopeType
@@ -88,7 +94,8 @@ def test_embedding_column_dimension_matches_central_setting(db_session):
 # --- 2/3. Embedding creation & metadata --------------------------------------
 
 
-def test_embedding_creation_records_full_metadata(db_session):
+def test_embedding_creation_records_full_metadata(db_session, monkeypatch):
+    monkeypatch.setattr("app.core.config.settings.EMBEDDING_DIMENSIONS", 32)
     (chunk,) = make_chunks(
         db_session, texts_and_quality=[("Fall protection is required at height.", QualityStatus.HIGH)]
     )
@@ -113,7 +120,7 @@ def test_embedding_never_modifies_the_source_chunk(db_session):
         db_session, texts_and_quality=[("Original chunk content.", QualityStatus.HIGH)]
     )
     original_content = chunk.content
-    embedding_service.embed_chunk(db_session, chunk=chunk, provider=HashingEmbeddingProvider(dimensions=16))
+    embedding_service.embed_chunk(db_session, chunk=chunk, provider=HashingEmbeddingProvider(dimensions=256))
     assert chunk.content == original_content
 
 
@@ -122,8 +129,8 @@ def test_embedding_never_modifies_the_source_chunk(db_session):
 
 def test_different_model_versions_coexist_for_the_same_chunk(db_session):
     (chunk,) = make_chunks(db_session, texts_and_quality=[("PPE is required on site.", QualityStatus.HIGH)])
-    v1 = HashingEmbeddingProvider(model_name="sie-hashing-embedder", model_version="v1", dimensions=16)
-    v2 = HashingEmbeddingProvider(model_name="sie-hashing-embedder", model_version="v2", dimensions=16)
+    v1 = HashingEmbeddingProvider(model_name="sie-hashing-embedder", model_version="v1", dimensions=256)
+    v2 = HashingEmbeddingProvider(model_name="sie-hashing-embedder", model_version="v2", dimensions=256)
 
     out1 = embedding_service.embed_chunk(db_session, chunk=chunk, provider=v1)
     out2 = embedding_service.embed_chunk(db_session, chunk=chunk, provider=v2)
@@ -144,8 +151,8 @@ def test_different_model_versions_coexist_for_the_same_chunk(db_session):
 
 def test_different_providers_coexist_for_the_same_chunk(db_session):
     (chunk,) = make_chunks(db_session, texts_and_quality=[("Confined space entry.", QualityStatus.HIGH)])
-    a = HashingEmbeddingProvider(model_name="model-a", model_version="v1", dimensions=16)
-    b = HashingEmbeddingProvider(model_name="model-b", model_version="v1", dimensions=16)
+    a = HashingEmbeddingProvider(model_name="model-a", model_version="v1", dimensions=256)
+    b = HashingEmbeddingProvider(model_name="model-b", model_version="v1", dimensions=256)
 
     embedding_service.embed_chunk(db_session, chunk=chunk, provider=a)
     embedding_service.embed_chunk(db_session, chunk=chunk, provider=b)
@@ -163,7 +170,7 @@ def test_different_providers_coexist_for_the_same_chunk(db_session):
 
 def test_reembedding_the_same_chunk_and_model_is_idempotent(db_session):
     (chunk,) = make_chunks(db_session, texts_and_quality=[("Emergency evacuation route.", QualityStatus.HIGH)])
-    provider = HashingEmbeddingProvider(dimensions=16)
+    provider = HashingEmbeddingProvider(dimensions=256)
 
     first = embedding_service.embed_chunk(db_session, chunk=chunk, provider=provider)
     second = embedding_service.embed_chunk(db_session, chunk=chunk, provider=provider)
@@ -185,7 +192,7 @@ def test_stale_content_hash_is_not_silently_overwritten(db_session):
     a chunk's content changing after it was already embedded — the
     milestone's own "do not overwrite historical embeddings blindly"."""
     (chunk,) = make_chunks(db_session, texts_and_quality=[("Original text.", QualityStatus.HIGH)])
-    provider = HashingEmbeddingProvider(dimensions=16)
+    provider = HashingEmbeddingProvider(dimensions=256)
     first = embedding_service.embed_chunk(db_session, chunk=chunk, provider=provider)
 
     chunk.content = "Changed text that no longer matches the stored embedding."
@@ -206,7 +213,7 @@ def test_stale_content_hash_is_not_silently_overwritten(db_session):
 
 def test_empty_content_chunk_is_never_embedded(db_session):
     (chunk,) = make_chunks(db_session, texts_and_quality=[("", QualityStatus.INSUFFICIENT)])
-    outcome = embedding_service.embed_chunk(db_session, chunk=chunk, provider=HashingEmbeddingProvider(dimensions=16))
+    outcome = embedding_service.embed_chunk(db_session, chunk=chunk, provider=HashingEmbeddingProvider(dimensions=256))
     assert outcome.status == EmbeddingOutcomeStatus.SKIPPED_EMPTY_CONTENT
     assert outcome.embedding is None
 
@@ -215,7 +222,7 @@ def test_insufficient_quality_chunk_is_skipped_by_default(db_session):
     (chunk,) = make_chunks(
         db_session, texts_and_quality=[("Some text that extracted poorly.", QualityStatus.INSUFFICIENT)]
     )
-    outcome = embedding_service.embed_chunk(db_session, chunk=chunk, provider=HashingEmbeddingProvider(dimensions=16))
+    outcome = embedding_service.embed_chunk(db_session, chunk=chunk, provider=HashingEmbeddingProvider(dimensions=256))
     assert outcome.status == EmbeddingOutcomeStatus.SKIPPED_INSUFFICIENT_QUALITY
     assert outcome.embedding is None
 
@@ -225,7 +232,7 @@ def test_insufficient_quality_chunk_can_be_embedded_via_explicit_config(db_sessi
     (chunk,) = make_chunks(
         db_session, texts_and_quality=[("Some text that extracted poorly.", QualityStatus.INSUFFICIENT)]
     )
-    outcome = embedding_service.embed_chunk(db_session, chunk=chunk, provider=HashingEmbeddingProvider(dimensions=16))
+    outcome = embedding_service.embed_chunk(db_session, chunk=chunk, provider=HashingEmbeddingProvider(dimensions=256))
     assert outcome.status == EmbeddingOutcomeStatus.CREATED
 
 
@@ -234,7 +241,7 @@ def test_insufficient_quality_chunk_can_be_embedded_via_force(db_session):
         db_session, texts_and_quality=[("Some text that extracted poorly.", QualityStatus.INSUFFICIENT)]
     )
     outcome = embedding_service.embed_chunk(
-        db_session, chunk=chunk, provider=HashingEmbeddingProvider(dimensions=16), force=True
+        db_session, chunk=chunk, provider=HashingEmbeddingProvider(dimensions=256), force=True
     )
     assert outcome.status == EmbeddingOutcomeStatus.CREATED
 
@@ -254,7 +261,7 @@ def test_batch_embedding_embeds_every_chunk_in_a_version(db_session):
     version_id = chunks[0].document_version_id
 
     report = embedding_service.generate_embeddings_for_version(
-        db_session, version_id=version_id, provider=HashingEmbeddingProvider(dimensions=16)
+        db_session, version_id=version_id, provider=HashingEmbeddingProvider(dimensions=256)
     )
 
     assert report.total == 3
@@ -272,7 +279,7 @@ def test_batch_embedding_is_idempotent_on_rerun(db_session):
         ],
     )
     version_id = chunks[0].document_version_id
-    provider = HashingEmbeddingProvider(dimensions=16)
+    provider = HashingEmbeddingProvider(dimensions=256)
 
     first = embedding_service.generate_embeddings_for_version(db_session, version_id=version_id, provider=provider)
     second = embedding_service.generate_embeddings_for_version(db_session, version_id=version_id, provider=provider)
@@ -299,7 +306,7 @@ def test_provider_failure_is_reported_not_raised(db_session):
         provider_name = "broken"
         model_name = "broken-model"
         model_version = "v1"
-        dimensions = 16
+        dimensions = 256
 
         def embed_text(self, text):
             raise RuntimeError("simulated embedding provider failure")
@@ -328,12 +335,12 @@ def test_batch_embedding_continues_past_a_single_chunk_failure(db_session):
         provider_name = "sometimes-broken"
         model_name = "m"
         model_version = "v1"
-        dimensions = 8
+        dimensions = 256
 
         def embed_text(self, text):
             if text == "BOOM":
                 raise RuntimeError("simulated failure")
-            return [0.1] * 8
+            return [0.1] * 256
 
         def embed_texts(self, texts):
             return [self.embed_text(t) for t in texts]
@@ -345,3 +352,61 @@ def test_batch_embedding_continues_past_a_single_chunk_failure(db_session):
     assert report.total == 3
     assert report.created == 2
     assert report.failed == 1
+
+
+# --- Embedding dimension design (corrective milestone item 7) ---------------
+#
+# The pgvector column is fixed-width per deployment
+# (settings.EMBEDDING_DIMENSIONS) — a provider whose real output
+# dimension doesn't match must never be allowed to reach the database and
+# surface as an opaque pgvector error; it fails immediately and clearly
+# instead. See EmbeddingDimensionMismatchError's own docstring.
+
+
+def test_embed_chunk_rejects_a_provider_whose_dimension_does_not_match_settings(
+    db_session, monkeypatch
+):
+    monkeypatch.setattr("app.core.config.settings.EMBEDDING_DIMENSIONS", 256)
+    (chunk,) = make_chunks(db_session, texts_and_quality=[("Some text.", QualityStatus.HIGH)])
+    mismatched_provider = HashingEmbeddingProvider(dimensions=384)
+
+    with pytest.raises(EmbeddingDimensionMismatchError, match="384"):
+        embedding_service.embed_chunk(db_session, chunk=chunk, provider=mismatched_provider)
+
+    # Nothing was written — the check fires before any provider call or
+    # DB write, not partway through.
+    assert (
+        db_session.query(KnowledgeChunkEmbedding)
+        .filter(KnowledgeChunkEmbedding.knowledge_chunk_id == chunk.id)
+        .count()
+        == 0
+    )
+
+
+def test_embed_chunk_accepts_a_provider_whose_dimension_matches_settings(db_session, monkeypatch):
+    monkeypatch.setattr("app.core.config.settings.EMBEDDING_DIMENSIONS", 128)
+    (chunk,) = make_chunks(db_session, texts_and_quality=[("Some text.", QualityStatus.HIGH)])
+    matching_provider = HashingEmbeddingProvider(dimensions=128)
+
+    outcome = embedding_service.embed_chunk(db_session, chunk=chunk, provider=matching_provider)
+
+    assert outcome.status == EmbeddingOutcomeStatus.CREATED
+
+
+def test_batch_embedding_aborts_immediately_on_a_dimension_mismatch_rather_than_per_chunk_failures(
+    db_session, monkeypatch
+):
+    monkeypatch.setattr("app.core.config.settings.EMBEDDING_DIMENSIONS", 256)
+    chunks = make_chunks(
+        db_session,
+        texts_and_quality=[
+            ("Chunk one.", QualityStatus.HIGH),
+            ("Chunk two.", QualityStatus.HIGH),
+        ],
+    )
+    version_id = chunks[0].document_version_id
+
+    with pytest.raises(EmbeddingDimensionMismatchError):
+        embedding_service.generate_embeddings_for_version(
+            db_session, version_id=version_id, provider=HashingEmbeddingProvider(dimensions=64)
+        )

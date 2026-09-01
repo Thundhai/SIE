@@ -43,13 +43,11 @@ services:
       - "8000:8000"
     volumes:
       - .:/app
-    # KNOWN ISSUE: `alembic upgrade head` from a fresh database currently
-    # fails partway through migration 0005 on real PostgreSQL (a
-    # pre-existing defect, not introduced by pgvector/migration 0006 —
-    # see that migration's own docstring and the README's "Known gaps"
-    # section for the exact cause and the fix this milestone deliberately
-    # left unapplied, pending the user's decision, per the instruction
-    # not to modify migrations 0001-0005).
+    # `alembic upgrade head` from a genuinely fresh database is verified
+    # to succeed end to end (0001 -> 0006) with no manual intervention —
+    # see the README's "Known gaps / next phase" section for the
+    # migration-0005 enum-type-creation defect this fixed, and
+    # tests/test_migrations.py for the regression test that guards it.
     command: >
       sh -c "alembic upgrade head &&
              uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"

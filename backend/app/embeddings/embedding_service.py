@@ -38,6 +38,43 @@ from app.models.knowledge_chunk import KnowledgeChunk
 logger = logging.getLogger(__name__)
 
 
+class EmbeddingDimensionMismatchError(ValueError):
+    """Raised immediately, before any provider call or DB write, when a
+    provider's own output dimension does not match this deployment's one
+    central `settings.EMBEDDING_DIMENSIONS` — the pgvector column's fixed
+    width (see app/models/embedding.py's own docstring).
+
+    This architecture assumes **one configured vector dimension per
+    deployment** — the pgvector `vector(N)` column type is fixed-width at
+    creation time, so a single `knowledge_chunk_embeddings` table cannot
+    simultaneously hold, say, 256-dim hashing vectors and 384-dim
+    sentence-transformer vectors. That is not a limitation introduced
+    here; it is what a fixed-width SQL column type means. Supporting
+    multiple *simultaneous* embedding dimensions safely would require a
+    real schema redesign (one column/table per dimension, or a
+    variable-length representation pgvector does not offer) — deliberately
+    not undertaken, since nothing in this codebase's own requirements
+    needs more than one embedding model live at a time.
+
+    Switching to a model with a different dimension is still fully
+    supported — it is a **new migration** (widening or replacing the
+    `vector(N)` column, exactly as `EMBEDDING_DIMENSIONS`'s own docstring
+    in app/core/config.py already says) plus setting `EMBEDDING_DIMENSIONS`
+    to match that model's real output dimension *before* that migration
+    ever runs — migration 0006 reads the setting live, at migration-run
+    time, not a value baked into the migration file, specifically so this
+    works without editing the migration itself.
+
+    Without this check, a misconfigured deployment (e.g.
+    `EMBEDDING_PROVIDER=sentence_transformers` with a model whose real
+    dimension doesn't match a stale `EMBEDDING_DIMENSIONS`) would only
+    surface as an opaque `psycopg.errors.DataException: expected N
+    dimensions, not M` from deep inside the INSERT — this raises the same
+    fact immediately, with an actionable message, before ever calling the
+    provider or touching the database.
+    """
+
+
 class EmbeddingOutcomeStatus(str, Enum):
     """What happened for one chunk. Deliberately not booleans/exceptions
     for the common cases — a skip is an expected, everyday outcome
@@ -121,6 +158,17 @@ class EmbeddingService:
         overwrite historical embeddings blindly" instruction.
         """
         provider = provider or get_embedding_provider()
+        if provider.dimensions != settings.EMBEDDING_DIMENSIONS:
+            raise EmbeddingDimensionMismatchError(
+                f"EmbeddingProvider {provider.provider_name!r} (model "
+                f"{provider.model_name!r}:{provider.model_version!r}) produces "
+                f"{provider.dimensions}-dimensional vectors, but this deployment's "
+                f"pgvector column is configured for EMBEDDING_DIMENSIONS="
+                f"{settings.EMBEDDING_DIMENSIONS}. Set EMBEDDING_DIMENSIONS to "
+                f"match this provider's real output dimension (and run a new "
+                f"migration to widen the column) before embedding with it, or "
+                f"choose a provider/model whose dimension already matches."
+            )
 
         content = chunk.content or ""
         if not content.strip():
@@ -242,7 +290,12 @@ class EmbeddingService:
         provider/model identity are skipped (see `embed_chunk`), never
         duplicated. Failures on individual chunks are collected into the
         report rather than aborting the whole batch — one bad chunk does
-        not block embedding the rest of the version.
+        not block embedding the rest of the version. A dimension
+        mismatch (`EmbeddingDimensionMismatchError`) is the one exception
+        to that: it is a deployment-level configuration error affecting
+        every chunk equally, not a per-chunk data problem, so it is
+        deliberately allowed to propagate and abort the whole batch
+        immediately rather than being reported as N separate failures.
         """
         provider = provider or get_embedding_provider()
 
