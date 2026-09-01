@@ -8,8 +8,12 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
+from sqlalchemy.orm import Session
+
 from app.intelligence.schemas import RawSafetyEventPayload
+from app.models.organization import Organization
 from app.models.safety_event import SafetyEvent
+from app.models.site import Site
 
 
 def make_safety_event(**overrides) -> SafetyEvent:
@@ -48,6 +52,20 @@ def make_safety_event(**overrides) -> SafetyEvent:
     )
     defaults.update(overrides)
     return SafetyEvent(**defaults)
+
+
+def make_org(db_session: Session, name: str = "Test Org") -> Organization:
+    org = Organization(name=name)
+    db_session.add(org)
+    db_session.commit()
+    return org
+
+
+def make_site(db_session: Session, organization_id: uuid.UUID, name: str = "Test Site") -> Site:
+    site = Site(organization_id=organization_id, name=name)
+    db_session.add(site)
+    db_session.commit()
+    return site
 
 
 def make_raw_payload(**overrides) -> RawSafetyEventPayload:

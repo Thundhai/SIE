@@ -7,7 +7,7 @@ consumer of the SIE API — but it is a consumer, not a dependency. Any
 authorized enterprise application connects the same way: through the
 versioned REST API under `/api/v1`.
 
-Eight milestones are implemented so far:
+Nine milestones are implemented so far:
 
 * **Foundation v0.1** — core tenancy models (Organization, Site, User,
   DataSource), a REST API, and infrastructure (FastAPI, PostgreSQL,
@@ -77,17 +77,40 @@ Eight milestones are implemented so far:
   claim to predict accidents or injuries.** See
   [Intelligence & Predictive Analytics Architecture](#intelligence--predictive-analytics-architecture)
   below.
+* **Predictive Risk Modeling Specification v0.1** — a rigorous, auditable
+  predictive-modeling foundation: an explicit, versioned specification of
+  what SIE predicts (Elevated Safety Event Risk, per site, over a 30-day
+  horizon), a deterministic label generator that never leaks into
+  features, a versioned/persisted feature-snapshot architecture, a
+  hand-rolled (no numpy/scikit-learn) logistic regression baseline,
+  chronological train/validation/test splitting and walk-forward
+  backtesting, Recall/Precision/PR-AUC-first evaluation reported
+  separately for sufficient- and limited-data entities, a minimal model
+  registry with an enforced human-review lifecycle
+  (`TRAINED -> VALIDATED -> APPROVED -> DEPLOYED`, nothing auto-promoted),
+  coefficient-based "contributing feature" explanations that never claim
+  causation, mandatory abstention (`NO_PREDICTION`) whenever data is
+  insufficient/stale/cold-start or the model isn't deployed, and a full
+  prediction-to-source-record provenance chain. **Only a
+  prototype model, explicitly labeled and trained on synthetic data, is
+  produced — this milestone does not claim production predictive
+  performance.** See
+  [Predictive Intelligence Architecture](#predictive-intelligence-architecture)
+  below.
 
-Sophisticated predictive ML, OCR execution, transcription, autonomous/
-tool-using agents, and Safelytic integration are all out of scope so far.
-`app/intelligence/predictive_model.py` documents the eventual predictive-
-model interface without implementing one; `app/analytics`, `app/predictions`,
-`app/governance` remain empty, documented package placeholders (see
+Sophisticated predictive ML beyond a single interpretable logistic
+regression baseline, OCR execution, transcription, autonomous/tool-using
+agents, automated safety interventions, and Safelytic integration are all
+out of scope so far. `app/analytics`, `app/governance` remain empty,
+documented package placeholders (see
 [Intelligence & Predictive Analytics Architecture](#intelligence--predictive-analytics-architecture)
-for what `app/intelligence` itself now contains) or interface-only
-modules (`app/ingestion/ocr.py`) so later phases have a predictable home
-without a restructure. **No AI training, autonomous agents, tool-calling,
-web search/crawling, or workflow automation exist in this codebase.**
+for what `app/intelligence` itself now contains, and
+[Predictive Intelligence Architecture](#predictive-intelligence-architecture)
+for what `app/predictions` now contains) or interface-only modules
+(`app/ingestion/ocr.py`) so later phases have a predictable home without a
+restructure. **No AI training beyond the one hand-rolled logistic
+regression baseline, no autonomous agents, tool-calling, web
+search/crawling, or workflow automation exist in this codebase.**
 
 ## Architecture
 
@@ -334,8 +357,13 @@ Knowledge Engine v0.1 — pgvector + knowledge_chunk_embeddings), and
 `0007` (Intelligence & Predictive Analytics Foundation v0.1 —
 `safety_events` and `api_clients`; purely additive — see
 [Intelligence & Predictive Analytics Architecture](#intelligence--predictive-analytics-architecture)
-for why no other table was added). Earlier migrations are never modified;
-new schema changes are always a new migration on top.
+for why no other table was added), and `0008` (Predictive Risk Modeling
+Specification v0.1 — `feature_snapshots`, `model_registry_entries`,
+`predictions`; purely additive — see
+[Predictive Intelligence Architecture](#predictive-intelligence-architecture)
+for what each table stores and why no `model_evaluations` table was
+needed). Earlier migrations are never modified; new schema changes are
+always a new migration on top.
 
 ## API endpoints
 
@@ -372,6 +400,8 @@ new schema changes are always a new migration on top.
 | GET    | `/api/v1/organizations/{organization_id}/api-clients`     | List an organization's machine clients (`users:manage`, never the secret) |
 | POST   | `/api/v1/organizations/{organization_id}/api-clients/{id}/rotate` | Rotate a machine client's secret (`users:manage`) |
 | POST   | `/api/v1/organizations/{organization_id}/api-clients/{id}/revoke` | Revoke a machine client (`users:manage`) |
+| POST   | `/api/v1/intelligence/predictions`                         | Generate/refresh a prediction for one site (`prediction:read`) — server-computed only, see below |
+| GET    | `/api/v1/intelligence/predictions/{entity_id}`              | The latest recorded prediction for one site (`prediction:read`) |
 
 The membership endpoints, the ingestion endpoint, the retrieval
 search and RAG query endpoints, and the intelligence/API-client endpoints
@@ -2380,6 +2410,328 @@ SIE provides intelligence; humans remain responsible for decisions.
     raw source records, normalized records, features, and audit logs,
     and none of that is built here.
 
+## Predictive Intelligence Architecture
+
+    SafetyEvent (point-in-time filtered, app/intelligence/temporal.py)
+        -> FeatureSnapshot (app/predictions/feature_snapshot_service.py)
+           -- versioned, persisted, immutable, auditable --
+        -> LabelResult (app/predictions/labels.py)
+           -- built independently from FeatureSnapshot; never a feature --
+        -> TrainingExample (app/predictions/dataset.py)
+        -> chronological train/validation/test split (app/predictions/temporal_split.py)
+        -> LogisticRegressionModel (hand-rolled; app/predictions/logistic_regression.py)
+        -> evaluation (Recall/Precision/PR-AUC first; app/predictions/metrics.py)
+        -> walk-forward backtest (app/predictions/walk_forward.py)
+        -> ModelRegistryEntry (TRAINED; app/predictions/model_registry.py)
+        -> [human review: VALIDATED -> APPROVED -> DEPLOYED]
+        -> predict_as_of() (app/predictions/predictor.py)
+        -> Prediction (PREDICTED or NO_PREDICTION; app/models/prediction.py)
+        -> explain_prediction() (app/predictions/explain.py)
+
+This is the Predictive Risk Modeling Specification v0.1 milestone —
+before implementing any predictive ML, it establishes a rigorous,
+auditable specification (`app/predictions/spec.py`) answering what
+exactly SIE predicts, for what unit, over what horizon, from what
+information, and when it must refuse to answer — and only then builds
+the pipeline that specification requires. **Per the milestone's own
+boundary, only a prototype baseline model is trained here, on synthetic
+data — this milestone does not claim production predictive
+performance.**
+
+### The specification (`app/predictions/spec.py`)
+
+Every other module in `app/predictions/` implements a decision this one
+module documents and versions — nothing below re-derives or silently
+redefines these:
+
+* **Target: Elevated Safety Event Risk.** Whether a site experiences at
+  least one qualifying `INCIDENT` within the horizon. Evaluated against
+  the existing data model before being chosen (`SafetyEvent` already
+  carries `event_type`/`event_time`/`site_id`/`organization_id` with
+  proven temporal-integrity guarantees); no other candidate target
+  (severity prediction, contractor attribution, time-to-next-incident) is
+  as well supported by what this codebase reliably captures today. Only
+  this one target is implemented (`PREDICTION_TARGET_VERSION`).
+* **Prediction unit: Site.** `SafetyEvent.site_id` is a real, populated
+  foreign key and the natural granularity at which "elevated risk" is
+  operationally actionable — a site manager can act on it.
+* **Horizon: 30 days**, with exact inclusive/exclusive semantics —
+  `horizon_start = as_of` (**exclusive**, `event_time > as_of`),
+  `horizon_end = as_of + 30 days` (**inclusive**, `event_time <= horizon_end`).
+* **Target definition never conflates report types.** Only a recorded
+  `INCIDENT` (with `data_quality_status` `VALID`/`PARTIAL`) qualifies —
+  never a `NEAR_MISS` or `OBSERVATION` (those are *leading-indicator
+  features*, see below, precisely because using them as the target
+  itself would conflate "an incident happened" with "something was
+  reported"). A `QUARANTINED`/`INVALID` future record never flips the
+  label either way.
+* **Reporting bias is documented, not assumed away.** More near-miss/
+  observation reports can mean conditions worsened *or* that reporting
+  culture improved — this codebase never presents leading-indicator
+  activity as a direct risk measurement, only as a predictor on a
+  documented hypothesis (`REPORTING_BIAS_NOTE`).
+
+### Deterministic label generation — never a feature
+
+    generate_label(organization_id, site_id, as_of, horizon_days)
+        -> SafetyEvent rows strictly after as_of, within the horizon
+        -> LabelResult(label: 0 | 1, supporting_event_ids)
+
+`app/predictions/labels.py::generate_label()` is a pure, deterministic
+function of future events — and it is the *only* module in this package
+allowed to look past `as_of`. **Feature/label separation is
+non-negotiable**: `app/predictions/feature_snapshot_service.py` never
+calls it, never reads its output, and never reads any event with
+`event_time > as_of`; `LabelResult.supporting_event_ids` exists purely
+for audit/evaluation, never as a model input. This separation has a
+dedicated regression test (`tests/test_feature_label_separation.py`)
+proving a feature vector is byte-for-byte unchanged by adding or removing
+future label-window events, and vice versa — plus four additional,
+milestone-mandated temporal-leakage regression tests
+(`tests/test_predictive_temporal_leakage.py`) covering a future incident
+never entering a snapshot, a backdated (late-ingested) report being
+excluded, a label never counting an at-or-before-`as_of` event, and a
+backtested prediction being unaffected by events inserted after its
+`as_of`.
+
+### Versioned, persisted feature snapshots
+
+    compute_feature_set_v1(organization_id, site_id, as_of)
+        -> app.intelligence.features.feature_engineering_service.compute()
+           at 7d / 30d / 90d windows (reused unchanged)
+        -> app.intelligence.trends.classify_trend() / app.intelligence.anomaly.detect_anomaly()
+           (reused unchanged)
+        -> FeatureSetV1 -> FeatureSnapshot (persisted, immutable)
+
+`FeatureSnapshot` (`app/models/feature_snapshot.py`) is what makes a past
+prediction reproducible and auditable months later: one row per
+`(organization_id, entity_type, entity_id, as_of, feature_set_version)`
+— idempotent (`get_or_build_feature_snapshot()` reuses an existing row
+rather than recomputing/duplicating one), and never mutated once written.
+Every value is a uniform `SnapshotFeature` (value, data quality,
+calculation version, source event ids, an explicit
+`unavailable_reason`) regardless of whether the underlying computation
+was a count, a rate, a trend direction, or an anomaly status — so the
+whole snapshot stays one flat, JSON-serializable dict. **A feature this
+module cannot reliably compute keeps `value=None` with an explicit
+reason — never fabricated as `0` unless `0` is the real, computed
+answer** (a genuine zero incident count is a real, meaningful value, not
+missingness).
+
+`FEATURE_SET_V1` (`app/predictions/vectorization.py::FEATURE_NAMES`)
+composes counts/rates (`incident_count_7d/30d/90d`, `near_miss_count_30d`,
+`observation_count_30d`, `overdue_action_count_30d`,
+`overdue_action_rate`, `work_hours_30d`, `incidents_per_100000_hours`,
+`severe_event_count_90d`, `high_potential_event_count_90d`,
+`equipment_failure_count_90d`, `overdue_equipment_inspection_count`,
+`training_compliance_rate`, `expired_training_count`,
+`action_closure_rate`), trend directions
+(`incident_trend`/`near_miss_trend`/`observation_trend`), and anomaly
+statuses (`incident_anomaly`/`equipment_failure_anomaly`) — every one
+built entirely from the already point-in-time-safe
+`app/intelligence/` modules from the prior milestone; no new temporal
+filtering logic exists anywhere in `app/predictions/`.
+
+### Model input: no fabricated feature values
+
+`app/predictions/logistic_regression.py::FeaturePreprocessor` converts
+the feature snapshot's `dict[str, float | None]` into the numeric vector
+a linear model needs — but never by silently treating a missing value as
+`0`. A missing feature is imputed with the **training split's own mean**
+(computed once, at `fit()` time, only from training-partition data — never
+from validation/test data, which would leak split information) **and** a
+companion missingness-indicator column is added per feature, so the
+model can still learn from the fact that a value was unavailable rather
+than have that information silently disappear. `explain.py`'s
+contribution accounting includes both terms, so a missing feature's real
+effect on a prediction is never under-reported.
+
+### Chronological splitting and walk-forward backtesting
+
+`app/predictions/temporal_split.py::chronological_split()` splits on the
+**sorted, distinct set of `as_of` dates** — never a random row-level
+split, and no `as_of` date is ever split across two partitions (every
+example sharing one `as_of`, across every site, lands in the same
+partition) — so every training `as_of` precedes every validation `as_of`,
+which precedes every test `as_of`.
+`app/predictions/walk_forward.py::walk_forward_backtest()` goes further:
+train on everything up to a rolling cutoff, evaluate on the next slice,
+advance, repeat — proving the pipeline generalizes across many rolling
+future periods, not just one split. Implemented to prove the
+architecture works, not tuned to a benchmark: every fold's raw metrics
+are returned individually, a fold with a single-class training set is
+explicitly marked `skipped_reason="SINGLE_CLASS_TRAIN_SET"` rather than
+silently fit, and nothing here adjusts hyperparameters based on backtest
+results.
+
+### Evaluation — Recall/Precision/PR-AUC first, never accuracy
+
+`app/predictions/metrics.py` computes precision, recall, F1, PR-AUC,
+ROC-AUC, Brier score, and calibration bins entirely in pure Python (no
+`sklearn.metrics`) — **accuracy is never computed at all**, consistent
+with the milestone's instruction that it is not a meaningful headline
+metric under the class imbalance a rare safety-event target produces.
+Every metric that is mathematically undefined for the data at hand
+(PR-AUC/ROC-AUC need both classes present; a rate needs a non-zero
+denominator) is reported as an explicit `None`, alongside `sample_size`/
+`positive_count` so *why* is always inspectable — never a placeholder
+number. `evaluate_by_data_quality()` reports every metric **separately**
+for sufficient- and limited-data entities (never one pooled number that
+hides how much of the apparent performance came from data-rich sites) —
+`training.py` calls this for the train/validation/test split of every
+trained model.
+
+### The hand-rolled logistic regression baseline
+
+`app/predictions/logistic_regression.py::LogisticRegressionModel` —
+gradient descent with L2 regularization, implemented in pure Python.
+**Deliberately not scikit-learn/numpy** (neither is a declared
+dependency of this project, even though both happen to be importable in
+this sandbox) and **deliberately not a neural network, LSTM,
+transformer, or large ensemble** — the milestone rules those out
+explicitly, and a linear model's coefficients are what make
+`explain.py`'s "contributing feature" output honest and auditable. A
+second model (Gradient Boosting) was designed for in the spec but is not
+implemented — nothing in this milestone needed it to prove the pipeline.
+
+### The minimal model registry — human review, never auto-promotion
+
+    create_model_entry() -> TRAINED
+        -> mark_validated() -> VALIDATED
+        -> approve()        -> APPROVED
+        -> deploy()         -> DEPLOYED  (retires any previously deployed
+                                           model for the same organization
+                                           + entity type)
+        -> retire() / reject() -> RETIRED / REJECTED (terminal)
+
+`ModelRegistryEntry` (`app/models/model_registry_entry.py`) is one table,
+not MLflow — everything needed to reproduce, audit, and govern one
+trained model version: model/training-data/feature-set/label-definition
+versions, the exact training/validation/test date ranges, hyperparameters,
+metrics, and the trained parameters themselves (coefficients, intercept,
+feature means/stdevs — enough to reconstruct the model for prediction or
+explanation without retraining). **Training only ever produces a
+`TRAINED` row** (`app/predictions/training.py` calls
+`create_model_entry()` and nothing else) — every later transition is a
+separate, explicit, audited call in `app/predictions/model_registry.py`,
+enforcing `app/predictions/enums.py::is_allowed_transition()`
+(`InvalidModelTransitionError` on anything not in the allowed-transition
+table). `organization_id` is required — one model is always trained on,
+and only ever serves, exactly one organization's own data; there is no
+pooled cross-tenant model anywhere in this milestone. A model is **never
+overwritten**: every training run creates a new `model_version`
+(`v1`, `v2`, ...), and old rows are retained (`RETIRED`, never deleted).
+
+### No fake probabilities — calibration-gated exposure
+
+`Prediction.probability` (`app/models/prediction.py`) is populated
+**only** when the serving model's `ModelRegistryEntry.calibration_validated`
+is `True` — a flag that defaults to `False` and is set only by an
+explicit `mark_validated(calibration_validated=...)` call, never assumed.
+Whenever it is `False`, a prediction still carries a `risk_score` and a
+categorical `risk_category` (`ELEVATED`/`MODERATE`/`LOW`/
+`INSUFFICIENT_DATA`, threshold-based —
+`app/predictions/spec.py::ELEVATED_RISK_THRESHOLD`/
+`MODERATE_RISK_THRESHOLD`) — never an uncalibrated score dressed up as an
+interpretable probability like "73% accident probability."
+
+### Explainability — contributing features, never causes
+
+`app/predictions/explain.py::explain_prediction()` exploits the model's
+own linearity: each feature's contribution to one prediction is exactly
+`weight * standardized_value` (plus the missingness-indicator term, see
+above) — no separate black-box explainer needed. Every result is
+described as a **"contributing feature"** with a **"model association"**
+to the prediction — the disclaimer and every per-feature note explicitly
+state this is not a causal claim (`tests/test_predictions_explain.py`
+asserts the word "causes" never appears in an affirmative sense).
+
+### Mandatory abstention — never a forced prediction
+
+    predict_as_of(organization_id, site_id, as_of, model)
+        -> entity/model-governance checks    -> NO_PREDICTION, or continue
+        -> historical sufficiency (cold start) -> NO_PREDICTION, or continue
+        -> staleness check                     -> NO_PREDICTION, or continue
+        -> feature snapshot data-sufficiency    -> NO_PREDICTION, or continue
+        -> score -> PREDICTED
+
+`app/predictions/predictor.py::predict_as_of()` is the single function
+both live serving and internal backtesting use (it takes `as_of` as an
+explicit parameter and never reads "now" internally) — the live
+Predictions API always calls it with `require_deployed=True` (only a
+`DEPLOYED` model ever serves a live prediction), while backtesting calls
+it with `require_deployed=False` against a merely-`TRAINED` model.
+`Prediction.outcome` is `NO_PREDICTION` with a specific
+`AbstentionReason` (`COLD_START`, `INSUFFICIENT_HISTORICAL_DATA`,
+`STALE_SOURCE_DATA`, `REQUIRED_FEATURES_MISSING`, `UNSUPPORTED_ENTITY`,
+`MODEL_NOT_VALIDATED`/`MODEL_NOT_APPROVED`/`MODEL_UNAVAILABLE`) whenever a
+prediction cannot be trusted — an abstention is itself a real, audited,
+persisted outcome, never an exception the caller has to catch and never
+skipped silently.
+
+### Full provenance, tenant isolation, and input security
+
+    Prediction -> model_id -> ModelRegistryEntry
+               -> feature_snapshot_id -> FeatureSnapshot
+                                       -> features[*].source_event_ids -> SafetyEvent
+                                                                        -> source_system / source_record_id
+
+Every step is a real foreign key, inspectable directly — nothing
+summarized away. `POST /api/v1/intelligence/predictions` /
+`GET /api/v1/intelligence/predictions/{entity_id}` verify authorization
+(`prediction:read`), confirm the requested site actually belongs to the
+authenticated organization (a 404, not a 403, for a cross-tenant id —
+never revealing whether it exists elsewhere), resolve the organization's
+own `DEPLOYED` model, and build the feature snapshot server-side, at
+request time, from that organization's own data. **The request schema
+(`PredictionRequest`) has no field for a client-supplied feature value,
+risk score, or label at all** — only `entity_id` and an optional `as_of`
+— so there is nothing for a client to inject; a mandatory
+cross-tenant-isolation regression test suite
+(`tests/test_predictive_cross_tenant_isolation.py`) proves org A's
+features, labels, training, deployed-model lookup, and served
+predictions are all unaffected by org B's data, even when both share
+matching site names and identical `as_of` timestamps.
+
+### Human oversight and safety language — non-negotiable
+
+This system never automatically disciplines, terminates, or suspends a
+worker, stops equipment, blocks a permit, issues a regulatory report, or
+declares a person unsafe — nothing in `app/predictions/` calls any such
+action, and no protected personal characteristic is ever a feature.
+Every prediction response carries a fixed safety-language note
+(`app/predictions/spec.py::SAFETY_LANGUAGE_NOTE`): *"This is a model
+estimate, not a certainty. The model identifies elevated risk of a
+qualifying safety event within the horizon based on available historical
+data — it does not predict that an accident will occur."*
+
+### Prototype model — synthetic data only
+
+`app/predictions/training.py::train_baseline_model()` exists to prove
+the complete pipeline is wired correctly end to end, per the milestone's
+own boundary ("unless necessary to prove the architecture, do not train
+a production predictive model in this milestone"). Every model it
+produces carries `PROTOTYPE_MODEL_LABEL` in `ModelRegistryEntry.notes` —
+*"Prototype Model — Synthetic Data... has NOT been validated against
+real-world data and must never be described as production predictive
+intelligence."* The synthetic dataset used to prove it
+(`tests/fixtures/predictions/synthetic_training_dataset.py`) spans two
+organizations, multiple sites, and roughly two years with a deliberate,
+known LOW → ELEVATED → LOW incident-risk regime change — it demonstrates
+the pipeline is technically sound, not that any resulting model has real
+predictive validity.
+
+### What this milestone deliberately does not do
+
+No production model training or deployment, no deep learning/neural
+networks, no autonomous predictions or automated interventions,
+no worker-level risk scoring, no external web intelligence, no model
+monitoring/drift-detection implementation (documented as explicit future
+work only — prediction-distribution, feature/data/calibration/performance
+drift, missing-data rate, and false-negative-rate monitoring all remain
+undesigned beyond being named here), and no automated safety decisions of
+any kind.
+
 ## Configuration
 
 All configuration is environment-based (`app/core/config.py`, backed by
@@ -2701,6 +3053,41 @@ in particular still are not implemented).
   enforcement) are listed in full in
   [Intelligence & Predictive Analytics Architecture](#intelligence--predictive-analytics-architecture)'s
   own "Genuine limitations" section, not repeated here. **No
-  sophisticated predictive ML exists in this codebase** —
-  `app/intelligence/predictive_model.py` documents the eventual model
-  interface without implementing one.
+  sophisticated predictive ML exists in this codebase** — the one model
+  implemented (a hand-rolled logistic regression,
+  `app/predictions/logistic_regression.py`) is explicitly a prototype
+  baseline trained on synthetic data only, never described as production
+  predictive intelligence — see
+  [Predictive Intelligence Architecture](#predictive-intelligence-architecture).
+* **Predictive Risk Modeling Specification v0.1's own genuine
+  limitations:**
+  * **No real-world model performance claim of any kind.** Every model
+    this milestone can produce is trained on the synthetic dataset in
+    `tests/fixtures/predictions/synthetic_training_dataset.py` — its
+    metrics prove the pipeline computes real, non-fabricated numbers
+    correctly, not that any resulting model would perform usefully on
+    real organizations' data.
+  * **No model monitoring or drift detection is implemented** —
+    prediction-distribution drift, feature/data drift, calibration
+    decay, performance drift, missing-data-rate tracking, and
+    false-negative-rate tracking are all named as required future work
+    in the specification but intentionally not built here.
+  * **No `model_evaluations` table** — per-split metrics live on
+    `ModelRegistryEntry.metrics` (JSON) rather than a separate table;
+    revisit if evaluation history needs to be queried independently of
+    its model or compared across many models at once.
+  * **Only Logistic Regression is implemented.** A Gradient Boosting
+    baseline was designed for in the specification (item 21) but not
+    built — nothing in this milestone needed a second model to prove the
+    architecture.
+  * **Staleness/cold-start/data-sufficiency thresholds
+    (`MIN_HISTORICAL_DAYS`, `MIN_HISTORICAL_EVENT_COUNT`,
+    `MAX_SOURCE_DATA_STALENESS_DAYS`, `ELEVATED_RISK_THRESHOLD`,
+    `MODERATE_RISK_THRESHOLD`) are documented initial defaults**, not
+    statistically validated against real incident data — the same
+    "not scientifically validated" caveat this codebase already carries
+    for its retrieval and intelligence thresholds.
+  * **No automatic model retraining or scheduled evaluation** — training
+    is a deliberate, manual call (`train_baseline_model()`); nothing in
+    this codebase re-trains a model on a schedule or in response to new
+    data arriving.

@@ -65,7 +65,7 @@ def test_fresh_postgres_database_migrates_through_head_with_no_manual_interventi
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0007"
+            assert version == "0008"
 
             enum_types = {
                 row[0]
@@ -94,6 +94,9 @@ def test_fresh_postgres_database_migrates_through_head_with_no_manual_interventi
             assert "organizations" in tables
             assert "safety_events" in tables
             assert "api_clients" in tables
+            assert "feature_snapshots" in tables
+            assert "model_registry_entries" in tables
+            assert "predictions" in tables
 
             extensions = {
                 row[0] for row in conn.execute(text("SELECT extname FROM pg_extension")).all()
@@ -172,7 +175,7 @@ def test_downgrade_then_reupgrade_round_trips_cleanly(monkeypatch):
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0007"
+            assert version == "0008"
     finally:
         engine.dispose()
 
@@ -214,7 +217,7 @@ def test_intelligence_migration_downgrade_then_reupgrade_round_trips_cleanly(mon
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0007"
+            assert version == "0008"
 
             tables = {
                 row[0]
@@ -227,5 +230,62 @@ def test_intelligence_migration_downgrade_then_reupgrade_round_trips_cleanly(mon
             }
             assert "safety_events" in tables
             assert "api_clients" in tables
+    finally:
+        engine.dispose()
+
+
+@requires_postgres
+def test_predictive_modeling_migration_downgrade_then_reupgrade_round_trips_cleanly(monkeypatch):
+    """0008's own downgrade/re-upgrade round trip, isolated from the
+    others above: `feature_snapshots`/`model_registry_entries`/
+    `predictions` must all disappear on downgrade to 0007 and all
+    reappear, correctly, on re-upgrade — and nothing 0007 or earlier
+    created is disturbed either way."""
+    engine = _fresh_schema_engine()
+    try:
+        monkeypatch.setattr("app.core.config.settings.DATABASE_URL", PG_TEST_DATABASE_URL)
+        config = _alembic_config()
+
+        command.upgrade(config, "head")
+        command.downgrade(config, "0007")
+
+        with engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version == "0007"
+
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT table_name FROM information_schema.tables "
+                        "WHERE table_schema = 'public'"
+                    )
+                ).all()
+            }
+            assert "feature_snapshots" not in tables
+            assert "model_registry_entries" not in tables
+            assert "predictions" not in tables
+            # Untouched by 0008's downgrade.
+            assert "safety_events" in tables
+            assert "api_clients" in tables
+
+        command.upgrade(config, "head")
+
+        with engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version == "0008"
+
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT table_name FROM information_schema.tables "
+                        "WHERE table_schema = 'public'"
+                    )
+                ).all()
+            }
+            assert "feature_snapshots" in tables
+            assert "model_registry_entries" in tables
+            assert "predictions" in tables
     finally:
         engine.dispose()
