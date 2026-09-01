@@ -63,6 +63,13 @@ class AuditLog(UUIDPrimaryKeyMixin, Base):
         DateTime(timezone=True), default=utcnow, nullable=False
     )
 
+    # The originating HTTP request's id (Intelligence Platform Integration
+    # v0.1, item 11: "associated with audit events"). Nullable -- audit
+    # rows written outside an HTTP request (a direct service/script call,
+    # as most of this codebase's own tests exercise) simply have none;
+    # this is traceability, never a join key anything depends on.
+    request_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+
     # Structured context for the action (e.g. {"role": "ORG_ADMIN"} for a
     # MEMBER_ADDED event). Never a credential — see module docstring.
     event_metadata: Mapped[dict[str, Any] | None] = mapped_column(

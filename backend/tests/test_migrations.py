@@ -50,7 +50,7 @@ def test_fresh_postgres_database_migrates_through_head_with_no_manual_interventi
 ):
     """The core regression test: starting from a completely empty
     PostgreSQL schema, `alembic upgrade head` must succeed end to end
-    through 0001 -> ... -> 0009 with no manual intervention (no
+    through 0001 -> ... -> 0010 with no manual intervention (no
     pre-created enum types, no pre-enabled pgvector extension —
     migration 0006 enables that itself)."""
     engine = _fresh_schema_engine()
@@ -65,7 +65,7 @@ def test_fresh_postgres_database_migrates_through_head_with_no_manual_interventi
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0009"
+            assert version == "0010"
 
             enum_types = {
                 row[0]
@@ -101,6 +101,29 @@ def test_fresh_postgres_database_migrates_through_head_with_no_manual_interventi
             assert "model_approvals" in tables
             assert "model_review_flags" in tables
             assert "prediction_outcomes" in tables
+            assert "idempotency_keys" in tables
+
+            api_client_columns = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = 'api_clients'"
+                    )
+                ).all()
+            }
+            assert "expires_at" in api_client_columns
+
+            audit_log_columns = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = 'audit_logs'"
+                    )
+                ).all()
+            }
+            assert "request_id" in audit_log_columns
 
             extensions = {
                 row[0] for row in conn.execute(text("SELECT extname FROM pg_extension")).all()
@@ -179,7 +202,7 @@ def test_downgrade_then_reupgrade_round_trips_cleanly(monkeypatch):
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0009"
+            assert version == "0010"
     finally:
         engine.dispose()
 
@@ -221,7 +244,7 @@ def test_intelligence_migration_downgrade_then_reupgrade_round_trips_cleanly(mon
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0009"
+            assert version == "0010"
 
             tables = {
                 row[0]
@@ -277,7 +300,7 @@ def test_predictive_modeling_migration_downgrade_then_reupgrade_round_trips_clea
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0009"
+            assert version == "0010"
 
             tables = {
                 row[0]
@@ -348,7 +371,7 @@ def test_governance_migration_downgrade_then_reupgrade_round_trips_cleanly(monke
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0009"
+            assert version == "0010"
 
             tables = {
                 row[0]
@@ -374,5 +397,102 @@ def test_governance_migration_downgrade_then_reupgrade_round_trips_cleanly(monke
                 ).all()
             }
             assert "dataset_version_id" in columns
+    finally:
+        engine.dispose()
+
+
+@requires_postgres
+def test_enterprise_api_migration_downgrade_then_reupgrade_round_trips_cleanly(monkeypatch):
+    """0010's own downgrade/re-upgrade round trip, isolated from the
+    others above: `idempotency_keys` must disappear on downgrade to
+    0009, and `api_clients.expires_at`/`audit_logs.request_id` must both
+    disappear too — and all must reappear correctly on re-upgrade, with
+    nothing 0009 or earlier disturbed either way."""
+    engine = _fresh_schema_engine()
+    try:
+        monkeypatch.setattr("app.core.config.settings.DATABASE_URL", PG_TEST_DATABASE_URL)
+        config = _alembic_config()
+
+        command.upgrade(config, "head")
+        command.downgrade(config, "0009")
+
+        with engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version == "0009"
+
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT table_name FROM information_schema.tables "
+                        "WHERE table_schema = 'public'"
+                    )
+                ).all()
+            }
+            assert "idempotency_keys" not in tables
+            # Untouched by 0010's downgrade.
+            assert "dataset_versions" in tables
+            assert "model_registry_entries" in tables
+
+            api_client_columns = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = 'api_clients'"
+                    )
+                ).all()
+            }
+            assert "expires_at" not in api_client_columns
+
+            audit_log_columns = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = 'audit_logs'"
+                    )
+                ).all()
+            }
+            assert "request_id" not in audit_log_columns
+
+        command.upgrade(config, "head")
+
+        with engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version == "0010"
+
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT table_name FROM information_schema.tables "
+                        "WHERE table_schema = 'public'"
+                    )
+                ).all()
+            }
+            assert "idempotency_keys" in tables
+
+            api_client_columns = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = 'api_clients'"
+                    )
+                ).all()
+            }
+            assert "expires_at" in api_client_columns
+
+            audit_log_columns = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = 'audit_logs'"
+                    )
+                ).all()
+            }
+            assert "request_id" in audit_log_columns
     finally:
         engine.dispose()

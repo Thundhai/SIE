@@ -1,11 +1,13 @@
-"""Intelligence & Predictive Analytics API — milestone items 9, 27, 37.
+"""Intelligence & Predictive Analytics API — milestone items 9, 27, 37;
+extended by Intelligence Platform Integration & Enterprise API v0.1,
+items 17, 30, 38.
 
     external system -> Authorization: Bearer <client_id>:<secret>
         -> require_scope(SAFETY_DATA_WRITE)
         -> POST .../events | .../events/batch
         -> GenericJSONAdapter -> SafetyEventIngestionService -> SafetyEvent rows
 
-    human user -> authorization_service.can(INTELLIGENCE_READ, organization_id)
+    human OR machine caller -> RequestContext -> authorize_context(INTELLIGENCE_READ, organization_id)
         -> GET .../analytics/summary | .../analytics/trends | .../analytics/signals | .../features
 
 **External applications never touch the database directly** (milestone
@@ -20,6 +22,17 @@ on `SafetyEventCreate` at all). Reads require `organization_id` as an
 explicit, authorized query parameter, the same
 authenticate-then-authorize-then-pass-a-trusted-value shape
 `app/api/v1/retrieval.py`/`app/api/v1/rag.py` already establish.
+
+**Analytics reads now accept a machine caller too** (item 17's
+`intelligence:analytics` scope example, item 30's third-party
+integration example — "POST safety events -> SIE -> Analytics -> Risk
+signals -> External HSE Platform" only makes sense end to end if the
+same external system can read analytics back, not only push events).
+`app.api.deps_context.RequestContext`/`require_context_permission()` is
+the one dependency that accepts either identity kind — reusing
+`Permission.INTELLIGENCE_READ` as the machine scope too (see that
+module's own docstring for why this codebase does not maintain a second,
+parallel scope vocabulary).
 """
 
 from __future__ import annotations
@@ -30,8 +43,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
-from app.api.deps_auth import get_dev_authenticated_user_id
+from app.api.deps_context import RequestContext, require_context_permission
 from app.api.deps_machine_auth import MachineClientContext, require_scope
+from app.api.deps_rate_limit import RateLimitClass, require_rate_limit
 from app.intelligence.adapters import GenericJSONAdapter
 from app.intelligence.analytics import compute_summary, compute_trend
 from app.intelligence.features import feature_engineering_service
@@ -53,7 +67,6 @@ from app.schemas.intelligence import (
     TrendPeriodRead,
     TrendResultRead,
 )
-from app.services.authorization_service import authorization_service
 from app.services.permissions import Permission
 
 router = APIRouter(prefix="/intelligence", tags=["intelligence"])
@@ -99,7 +112,9 @@ def _to_record_read(result) -> IngestionRecordRead:
 # --- Ingestion (machine-client authenticated) ---------------------------------------
 
 
-@router.post("/events", response_model=IngestionRecordRead)
+@router.post(
+    "/events", response_model=IngestionRecordRead, dependencies=[Depends(require_rate_limit(RateLimitClass.WRITE))]
+)
 def ingest_event(
     body: SafetyEventCreate,
     context: MachineClientContext = Depends(require_scope(Permission.SAFETY_DATA_WRITE)),
@@ -114,7 +129,11 @@ def ingest_event(
     return _to_record_read(result)
 
 
-@router.post("/events/batch", response_model=BatchIngestionRead)
+@router.post(
+    "/events/batch",
+    response_model=BatchIngestionRead,
+    dependencies=[Depends(require_rate_limit(RateLimitClass.WRITE))],
+)
 def ingest_event_batch(
     body: SafetyEventBatchCreate,
     context: MachineClientContext = Depends(require_scope(Permission.SAFETY_DATA_WRITE)),
@@ -138,33 +157,26 @@ def ingest_event_batch(
     )
 
 
-# --- Analytics (human-authenticated, tenant-authorized) ------------------------------
+# --- Analytics (human OR machine, tenant-authorized) ------------------------------
 
 
-def _authorize_read(db: Session, user_id: uuid.UUID, organization_id: uuid.UUID) -> None:
-    if not authorization_service.can(
-        db, user_id=user_id, permission=Permission.INTELLIGENCE_READ, organization_id=organization_id
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Missing intelligence:read permission in the requested organization.",
-        )
-
-
-@router.get("/analytics/summary", response_model=AnalyticsSummaryRead)
+@router.get(
+    "/analytics/summary",
+    response_model=AnalyticsSummaryRead,
+    dependencies=[Depends(require_rate_limit(RateLimitClass.READ))],
+)
 def analytics_summary(
     organization_id: uuid.UUID = Query(...),
     site_id: uuid.UUID | None = Query(default=None),
     window_days: int | None = Query(default=None, ge=1, le=3650),
-    user_id: uuid.UUID = Depends(get_dev_authenticated_user_id),
+    context: RequestContext = Depends(require_context_permission(Permission.INTELLIGENCE_READ)),
     db: Session = Depends(get_db),
 ) -> AnalyticsSummaryRead:
-    _authorize_read(db, user_id, organization_id)
     entity_type = "site" if site_id is not None else "organization"
     summary = compute_summary(
         db, organization_id=organization_id, site_id=site_id, window_days=window_days, entity_type=entity_type
     )
-    _audit_analytics_query(db, user_id=user_id, organization_id=organization_id, endpoint="summary")
+    _audit_analytics_query(db, context=context, organization_id=organization_id, endpoint="summary")
     return AnalyticsSummaryRead(
         organization_id=summary.organization_id,
         entity_type=summary.entity_type,
@@ -183,17 +195,20 @@ def analytics_summary(
     )
 
 
-@router.get("/analytics/trends", response_model=TrendResultRead)
+@router.get(
+    "/analytics/trends",
+    response_model=TrendResultRead,
+    dependencies=[Depends(require_rate_limit(RateLimitClass.READ))],
+)
 def analytics_trends(
     organization_id: uuid.UUID = Query(...),
     metric: str = Query(...),
     site_id: uuid.UUID | None = Query(default=None),
     period_days: int | None = Query(default=None, ge=1, le=3650),
     num_periods: int | None = Query(default=None, ge=2, le=52),
-    user_id: uuid.UUID = Depends(get_dev_authenticated_user_id),
+    context: RequestContext = Depends(require_context_permission(Permission.INTELLIGENCE_READ)),
     db: Session = Depends(get_db),
 ) -> TrendResultRead:
-    _authorize_read(db, user_id, organization_id)
     try:
         trend = compute_trend(
             db,
@@ -205,7 +220,7 @@ def analytics_trends(
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    _audit_analytics_query(db, user_id=user_id, organization_id=organization_id, endpoint="trends")
+    _audit_analytics_query(db, context=context, organization_id=organization_id, endpoint="trends")
     return TrendResultRead(
         metric=trend.metric,
         direction=trend.direction,
@@ -217,36 +232,42 @@ def analytics_trends(
     )
 
 
-@router.get("/analytics/signals", response_model=list[RiskSignalRead])
+@router.get(
+    "/analytics/signals",
+    response_model=list[RiskSignalRead],
+    dependencies=[Depends(require_rate_limit(RateLimitClass.READ))],
+)
 def analytics_signals(
     organization_id: uuid.UUID = Query(...),
     site_id: uuid.UUID | None = Query(default=None),
     window_days: int | None = Query(default=None, ge=1, le=3650),
-    user_id: uuid.UUID = Depends(get_dev_authenticated_user_id),
+    context: RequestContext = Depends(require_context_permission(Permission.INTELLIGENCE_READ)),
     db: Session = Depends(get_db),
 ) -> list[RiskSignalRead]:
-    _authorize_read(db, user_id, organization_id)
     signals = risk_signal_service.detect_all(
         db, organization_id=organization_id, site_id=site_id, window_days=window_days
     )
-    _audit_analytics_query(db, user_id=user_id, organization_id=organization_id, endpoint="signals")
+    _audit_analytics_query(db, context=context, organization_id=organization_id, endpoint="signals")
     return [_signal_read(s) for s in signals]
 
 
-@router.get("/features", response_model=FeaturesRead)
+@router.get(
+    "/features",
+    response_model=FeaturesRead,
+    dependencies=[Depends(require_rate_limit(RateLimitClass.READ))],
+)
 def features(
     organization_id: uuid.UUID = Query(...),
     site_id: uuid.UUID | None = Query(default=None),
     window_days: int | None = Query(default=None, ge=1, le=3650),
-    user_id: uuid.UUID = Depends(get_dev_authenticated_user_id),
+    context: RequestContext = Depends(require_context_permission(Permission.INTELLIGENCE_READ)),
     db: Session = Depends(get_db),
 ) -> FeaturesRead:
-    _authorize_read(db, user_id, organization_id)
     entity_type = "site" if site_id is not None else "organization"
     feature_values = feature_engineering_service.compute(
         db, organization_id=organization_id, site_id=site_id, window_days=window_days, entity_type=entity_type
     )
-    _audit_analytics_query(db, user_id=user_id, organization_id=organization_id, endpoint="features")
+    _audit_analytics_query(db, context=context, organization_id=organization_id, endpoint="features")
     return FeaturesRead(
         organization_id=organization_id,
         entity_type=entity_type,
@@ -288,7 +309,7 @@ def _signal_read(s) -> RiskSignalRead:
     )
 
 
-def _audit_analytics_query(db: Session, *, user_id: uuid.UUID, organization_id: uuid.UUID, endpoint: str) -> None:
+def _audit_analytics_query(db: Session, *, context: RequestContext, organization_id: uuid.UUID, endpoint: str) -> None:
     from app.services.audit_service import AuditAction, audit_service
 
     audit_service.log(
@@ -296,6 +317,6 @@ def _audit_analytics_query(db: Session, *, user_id: uuid.UUID, organization_id: 
         action=AuditAction.INTELLIGENCE_ANALYTICS_QUERIED,
         resource_type="IntelligenceAnalytics",
         organization_id=organization_id,
-        user_id=user_id,
-        metadata={"endpoint": endpoint},
+        user_id=context.user_id,  # None for a machine caller -- its own API_AUTHENTICATED row already names the client
+        metadata={"endpoint": endpoint, "caller_kind": context.kind},
     )

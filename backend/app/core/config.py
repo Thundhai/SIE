@@ -261,6 +261,32 @@ class Settings(BaseSettings):
     ]
     LOG_INTELLIGENCE_EVENT_DESCRIPTION: bool = False
 
+    # Intelligence Platform Integration & Enterprise API v0.1 (see the
+    # README's own section for this milestone).
+    #
+    # Rate limiting (item 13) — app/core/rate_limit.py. Off by default so
+    # every existing test/local-dev flow is unaffected unless a
+    # deployment opts in; a deployment that does should also read that
+    # module's own docstring on why the in-memory implementation is not
+    # multi-instance-safe. Read/write are separate budgets (a client
+    # that's exhausted its write budget can still read).
+    RATE_LIMIT_ENABLED: bool = False
+    RATE_LIMIT_READ_REQUESTS_PER_MINUTE: int = 120
+    RATE_LIMIT_WRITE_REQUESTS_PER_MINUTE: int = 60
+
+    # Idempotency-Key (item 12) — app/core/idempotency.py. How long a
+    # stored request/response pair is honored for replay before a reused
+    # key is treated as a new request again.
+    IDEMPOTENCY_KEY_TTL_HOURS: int = 24
+
+    # Request size limits (item 14) — app/core/request_limits.py. Applied
+    # to every request via Content-Length, before the body is ever
+    # parsed; MAX_UPLOAD_SIZE_BYTES above remains the more specific,
+    # already-enforced limit for a file upload's own multipart body, and
+    # `RetrievalSearchRequest.query`/`RAGQueryRequest.query` already cap
+    # query length at 2000 characters (pre-existing, unchanged).
+    MAX_JSON_BODY_BYTES: int = 1 * 1024 * 1024  # 1 MiB
+
     # Database
     # Either set DATABASE_URL directly, or set the POSTGRES_* components and
     # let it be assembled below.

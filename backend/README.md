@@ -409,38 +409,41 @@ schema changes are always a new migration on top.
 | Method | Path                                                    | Description                          |
 |--------|----------------------------------------------------------|---------------------------------------|
 | GET    | `/health`                                                | Liveness check                       |
+| GET    | `/health/live`                                           | Process-liveness check — never fails on a dependency (Intelligence Platform Integration v0.1) |
+| GET    | `/health/ready`                                          | Readiness check — 503 if PostgreSQL is unreachable (Intelligence Platform Integration v0.1) |
 | POST   | `/api/v1/organizations`                                  | Create an organization               |
 | GET    | `/api/v1/organizations/{organization_id}`                | Get an organization                  |
 | POST   | `/api/v1/organizations/{organization_id}/sites`          | Create a site under an organization  |
 | GET    | `/api/v1/organizations/{organization_id}/sites`          | List sites for an organization       |
 | POST   | `/api/v1/organizations/{organization_id}/data-sources`   | Create a data source                 |
 | GET    | `/api/v1/organizations/{organization_id}/data-sources`   | List data sources for an organization|
-| POST   | `/api/v1/knowledge/sources`                              | Create a knowledge source (GLOBAL or ORGANIZATION) |
-| GET    | `/api/v1/knowledge/sources`                              | List knowledge sources (GLOBAL, or one organization's — see below) |
-| GET    | `/api/v1/knowledge/sources/{source_id}`                  | Get a knowledge source               |
-| POST   | `/api/v1/knowledge/documents`                            | Create a document under a source     |
-| GET    | `/api/v1/knowledge/documents/{document_id}`              | Get a knowledge document             |
-| POST   | `/api/v1/knowledge/documents/{document_id}/versions`     | Create a document version            |
-| GET    | `/api/v1/knowledge/documents/{document_id}/versions`     | List a document's versions           |
-| GET    | `/api/v1/knowledge/documents/{document_id}/versions/{version_id}/chunks` | List one version's chunks (read-only — see below) |
+| POST   | `/api/v1/knowledge/sources`                              | Create a knowledge source (GLOBAL or ORGANIZATION) — authenticated; `knowledge:manage`, platform-admin-only for GLOBAL |
+| GET    | `/api/v1/knowledge/sources`                              | List knowledge sources (GLOBAL, or one organization's — see below) — authenticated; `knowledge:read` for an organization |
+| GET    | `/api/v1/knowledge/sources/{source_id}`                  | Get a knowledge source — authenticated; `knowledge:read` for an organization-scoped source |
+| POST   | `/api/v1/knowledge/documents`                            | Create a document under a source — authenticated; `knowledge:manage` |
+| GET    | `/api/v1/knowledge/documents/{document_id}`              | Get a knowledge document — authenticated; `knowledge:read` for an organization-scoped document |
+| POST   | `/api/v1/knowledge/documents/{document_id}/versions`     | Create a document version — authenticated; `knowledge:manage` |
+| GET    | `/api/v1/knowledge/documents/{document_id}/versions`     | List a document's versions — authenticated; `knowledge:read` for an organization-scoped document |
+| GET    | `/api/v1/knowledge/documents/{document_id}/versions/{version_id}/chunks` | List one version's chunks (read-only — see below) — authenticated; `knowledge:read` for an organization-scoped document |
 | POST   | `/api/v1/organizations/{organization_id}/members`        | Add a member (`users:manage`)        |
 | GET    | `/api/v1/organizations/{organization_id}/members`        | List members (`users:read`)          |
 | GET    | `/api/v1/organizations/{organization_id}/members/{user_id}` | Get one member (`users:read`)     |
 | POST   | `/api/v1/knowledge/ingestion`                             | Upload and ingest a file (`knowledge:manage`) |
-| POST   | `/api/v1/knowledge/retrieval/search`                      | Semantic evidence search (authenticated; `knowledge:read` if `filters.organization_id` is given) |
-| POST   | `/api/v1/knowledge/rag/query`                              | Evidence-grounded RAG query (authenticated; `knowledge:read` if `filters.organization_id` is given) |
+| POST   | `/api/v1/knowledge/retrieval/search`                      | Semantic evidence search — **human OR machine caller** (`RequestContext`); `knowledge:read` if `filters.organization_id` is given |
+| POST   | `/api/v1/knowledge/rag/query`                              | Evidence-grounded RAG query — **human OR machine caller**; `knowledge:read` if `filters.organization_id` is given |
 | POST   | `/api/v1/intelligence/events`                              | Ingest one canonical safety event (**machine-client authenticated**, `safety_data:write` scope) |
 | POST   | `/api/v1/intelligence/events/batch`                        | Batch-ingest safety events (same auth; partial success, per-record results) |
-| GET    | `/api/v1/intelligence/analytics/summary`                   | Features + indicators + signals + source reliability for one organization/site (`intelligence:read`) |
-| GET    | `/api/v1/intelligence/analytics/trends`                    | Period-bucketed trend for one named metric (`intelligence:read`) |
-| GET    | `/api/v1/intelligence/analytics/signals`                   | Deterministic risk signals (`intelligence:read`) |
-| GET    | `/api/v1/intelligence/features`                            | Raw computed feature values (`intelligence:read`) |
-| POST   | `/api/v1/organizations/{organization_id}/api-clients`     | Provision a machine-client credential (`users:manage`) — returns the raw secret once |
+| GET    | `/api/v1/intelligence/analytics/summary`                   | Features + indicators + signals + source reliability for one organization/site — **human OR machine caller**; `intelligence:read` |
+| GET    | `/api/v1/intelligence/analytics/trends`                    | Period-bucketed trend for one named metric — **human OR machine caller**; `intelligence:read` |
+| GET    | `/api/v1/intelligence/analytics/signals`                   | Deterministic risk signals — **human OR machine caller**; `intelligence:read` |
+| GET    | `/api/v1/intelligence/features`                            | Raw computed feature values — **human OR machine caller**; `intelligence:read` |
+| POST   | `/api/v1/organizations/{organization_id}/api-clients`     | Provision a machine-client credential (`users:manage`) — returns the raw secret once; optional `expires_at` |
 | GET    | `/api/v1/organizations/{organization_id}/api-clients`     | List an organization's machine clients (`users:manage`, never the secret) |
-| POST   | `/api/v1/organizations/{organization_id}/api-clients/{id}/rotate` | Rotate a machine client's secret (`users:manage`) |
+| POST   | `/api/v1/organizations/{organization_id}/api-clients/{id}/rotate` | Rotate a machine client's secret (`users:manage`) — org/scopes/identity survive; old secret dies immediately |
 | POST   | `/api/v1/organizations/{organization_id}/api-clients/{id}/revoke` | Revoke a machine client (`users:manage`) |
-| POST   | `/api/v1/intelligence/predictions`                         | Generate/refresh a prediction for one site (`prediction:read`) — server-computed only, see below |
-| GET    | `/api/v1/intelligence/predictions/{entity_id}`              | The latest recorded prediction for one site (`prediction:read`) |
+| POST   | `/api/v1/intelligence/predictions`                         | Generate/refresh a prediction for one site — **human OR machine caller**; `prediction:read`; server-computed only, see below; accepts `Idempotency-Key` |
+| GET    | `/api/v1/intelligence/predictions/{entity_id}`              | The latest recorded prediction for one site — **human OR machine caller**; `prediction:read` |
+| GET    | `/api/v1/intelligence/predictions/{entity_id}/history`      | Paginated prediction history, newest first, wrapped in the standard response envelope — **human OR machine caller**; `prediction:read` (Intelligence Platform Integration v0.1) |
 | POST   | `/api/v1/intelligence/datasets/validate`                    | Register + validate a `SYNTHETIC` or `REAL` dataset version (`governance:manage`) — server-computed quality report |
 | GET    | `/api/v1/intelligence/datasets`                             | List an organization's dataset versions (`governance:read`) |
 | GET    | `/api/v1/intelligence/datasets/{dataset_version_id}`         | One dataset version, with its full quality report (`governance:read`) |
@@ -457,14 +460,20 @@ schema changes are always a new migration on top.
 | GET    | `/api/v1/intelligence/models/{model_id}/validation-report`   | A freshly-generated governance report with an APPROVE/REJECT/REVIEW recommendation (`governance:read`) |
 | GET    | `/api/v1/intelligence/models/{model_id}/monitoring`          | Prediction monitoring + post-outcome-maturity performance monitoring (`governance:read`) |
 
-The membership endpoints, the ingestion endpoint, the retrieval
-search and RAG query endpoints, and the intelligence/API-client endpoints
-are the routes in this codebase that require authentication today (the
-retrieval, RAG, and intelligence-analytics endpoints additionally require
-a permission check whenever an `organization_id` is supplied) — see
-[Identity architecture](#identity-architecture) for what that means in
-practice (development-mode only, no real identity provider connected
-yet) and why the other routes above them still don't, and
+**As of Intelligence Platform Integration & Enterprise API v0.1, every
+route in the table above requires authentication** — the knowledge
+source/document/version/chunk routes (previously trusting the URL
+directly) were retrofitted to close that gap; see [Intelligence Platform
+Integration & Enterprise API
+Architecture](#intelligence-platform-integration--enterprise-api-architecture)
+for the full design. The membership endpoints, the ingestion endpoint,
+the retrieval search and RAG query endpoints, the knowledge endpoints,
+and the intelligence/API-client endpoints are all authenticated (the
+retrieval, RAG, knowledge, and intelligence-analytics endpoints
+additionally require a permission check whenever an `organization_id` is
+supplied) — see [Identity architecture](#identity-architecture) for what
+that means in practice (development-mode only, no real identity provider
+connected yet), and
 [Universal ingestion architecture](#universal-ingestion-architecture) /
 [Semantic Knowledge Architecture](#semantic-knowledge-architecture) /
 [Evidence-Grounded RAG](#evidence-grounded-rag) /
@@ -3172,6 +3181,290 @@ evaluate a model in this repository's own tests is synthetic — this
 milestone does not validate any model against real organizational data,
 and does not claim production predictive performance.**
 
+## Intelligence Platform Integration & Enterprise API Architecture
+
+    external system -> Authorization: Bearer <client_id>:<secret>  (machine)
+      OR human -> X-SIE-Dev-User-Id                                (human, dev-mode only)
+        -> RequestContext (app/api/deps_context.py)
+        -> authorize_context() / require_context_permission()  -- tenant identity from the
+           authenticated caller only, never a client-supplied organization_id
+        -> [rate limit] -> [request size limit] -> existing Service -> existing Intelligence Engine
+        -> Result -> [request_id + standard error contract] -> Response
+
+This is the Intelligence Platform Integration & Enterprise API v0.1
+milestone. Its purpose is **not** to add new intelligence — every ML
+calculation, vector search, RAG safeguard, and analytics computation
+built in prior milestones is reused completely unchanged — it is to turn
+SIE's separate intelligence foundations (knowledge, safety intelligence,
+predictive intelligence, governance) into one secure, versioned,
+multi-consumer platform. **SIE is not architected as "Safelytic's
+backend."** Safelytic is one consumer, authenticated and authorized
+exactly the same way any other external application (an HSE system, an
+ERP, a construction-management platform) would be — see ["Third-party
+integration example"](#third-party-integration-example) below for a
+worked example proving that independence, not just asserting it.
+
+The one architectural rule every change in this milestone was held to:
+**the API layer orchestrates; it never computes.** `app/api/v1/*.py`
+routes call existing services (`app/intelligence/*`, `app/retrieval/*`,
+`app/rag/*`, `app/predictions/*`) and existing authorization/tenant
+machinery — nothing in this milestone re-implements a calculation, a
+retrieval rule, a privacy gate, or a provenance chain that already
+existed. Every retrofit below is additive to what a prior milestone
+built, never a parallel, second mechanism.
+
+### `RequestContext` — one dependency, either caller kind
+
+`app/api/deps_context.py`'s `RequestContext` composes the pre-existing
+human mechanism (`app/api/deps_auth.py`'s dev-mode `X-SIE-Dev-User-Id`
+header) and the pre-existing machine mechanism
+(`app/api/deps_machine_auth.py`'s `Authorization: Bearer
+<client_id>:<secret>`, built in an earlier milestone) into one type, so
+a route that should accept either caller kind — analytics, predictions,
+knowledge, retrieval, RAG — declares exactly one dependency rather than
+duplicating every route twice. It is **not** a third authentication
+system: it never verifies a credential itself, only wraps whichever of
+the two existing mechanisms actually authenticated the request.
+`authorize_context(db, context, permission, organization_id)` encodes
+one rule uniformly for every route that uses it: a request naming no
+`organization_id` (a GLOBAL-only read) requires only authentication; a
+request naming an `organization_id` requires that permission *within
+that organization*, resolved from the caller's own authenticated
+identity — an `OrganizationMembership` role for a human, `ApiClient.scopes`
+for a machine client — **never** from a client-supplied value trusted
+at face value. A machine client's `organization_id` is always
+`ApiClient.organization_id`; there is no field anywhere a machine
+client can name a different organization and have it honored (item 36's
+own rule, and see ["Tenant isolation"](#tenant-isolation-principle)
+below for the cross-tenant tests that prove it).
+
+GLOBAL-knowledge **writes** are a deliberate exception, kept out of
+`authorize_context()` entirely: `app/api/v1/knowledge.py`'s own
+`_authorize_manage()` requires platform-admin — a human-only concept —
+mirroring the rule `app/api/v1/ingestion.py` already established. A
+machine client can never write GLOBAL knowledge, because a machine
+client has no platform-admin identity to check.
+
+### Scopes — one vocabulary, not two
+
+Machine-client scopes reuse `app.services.permissions.Permission` — the
+exact enum human roles already resolve to — rather than a second,
+parallel "intelligence:analytics"-style vocabulary. A scope granted to
+an `ApiClient` (e.g. `Permission.INTELLIGENCE_READ`,
+`Permission.PREDICTION_READ`, `Permission.KNOWLEDGE_READ`,
+`Permission.SAFETY_DATA_WRITE`) means literally the same permission a
+human role would need for the same action — least privilege by default,
+one place to reason about what a permission actually grants.
+`ApiClientService._validate_scopes()` rejects any scope string that
+isn't a real `Permission` value at credential-creation time, so a
+typo'd or invented scope fails loudly rather than silently granting
+nothing (or, worse, something unintended once that string later becomes
+a real permission).
+
+### Credential lifecycle
+
+Building on the existing `ApiClient`/`ApiClientService` architecture,
+this milestone adds `expires_at` (optional; `authenticate()` rejects an
+expired credential exactly like a revoked one, without touching
+`status`/`revoked_at`, so the two remain distinguishable in an audit
+trail) and machine-authenticated audit events (`API_AUTHENTICATED` on
+every successful machine call, `API_ACCESS_DENIED` on a missing-scope
+403 — never containing the secret, only `client_id` and scope
+metadata). `POST .../api-clients/{id}/rotate` issues a new secret while
+keeping the same `client_id`, organization, and scopes — the old secret
+stops authenticating the instant rotation commits, the new one works
+immediately, with no gap where neither credential works and no window
+where both do.
+
+### Standard response envelope, request IDs, and errors
+
+`app/core/request_id.py`'s `RequestIdMiddleware` generates a UUID per
+request (returned as `X-Request-Id` and available to every handler,
+error response, and audit-log entry via `get_request_id()`) — outermost
+in the middleware stack so it exists before anything else runs.
+`app/core/errors.py` adds a parallel `error: {code, message,
+request_id}` object to every error response **without changing FastAPI's
+existing `detail` field at all** — full backward compatibility with
+every existing consumer of an error body (item 35's own rule). Error
+codes are a fixed, named set (`AUTHENTICATION_REQUIRED`,
+`AUTHORIZATION_DENIED`, `TENANT_ACCESS_DENIED`, `RESOURCE_NOT_FOUND`,
+`VALIDATION_ERROR`, `RATE_LIMIT_EXCEEDED`, `IDEMPOTENCY_CONFLICT`,
+`INSUFFICIENT_DATA`, `PRIVACY_BLOCKED`, `MODEL_NOT_AVAILABLE`,
+`INTERNAL_ERROR`); the unhandled-exception handler never leaks a stack
+trace, a database error string, or an internal path — verified by a
+dedicated test that a genuine `RuntimeError` raised inside a route still
+produces only the safe, generic body over the wire.
+`app/schemas/envelope.py`'s `ResponseEnvelope[T]`
+(`data`/`status`/`request_id`/`timestamp`/`data_quality`/`provenance`)
+is applied to exactly one genuinely new endpoint — `GET
+.../predictions/{entity_id}/history` — never retrofitted onto an
+existing response shape, for the same backward-compatibility reason.
+
+### Idempotency, rate limiting, and request size limits
+
+`Idempotency-Key` (`app/core/idempotency.py`) is wired into `POST
+/api/v1/intelligence/predictions` only: repeating the same key with the
+same request body replays the original response; repeating it with a
+*different* body is a `409 IDEMPOTENCY_CONFLICT`; omitting the header
+entirely never triggers either path. It is deliberately **not** wired
+into event ingestion, which already has its own domain-level
+idempotency (`(organization_id, source_system, source_record_id)`) —
+adding a second, HTTP-transport-level mechanism on top would have no
+semantic value there.
+
+`app/core/rate_limit.py`'s `LocalRateLimiter` is a fixed-window,
+per-key, thread-safe, **in-process** implementation — explicitly
+documented as unsuitable for a multi-instance production deployment
+(each instance would enforce its own independent window). The seam for
+that is the `RateLimiter` Protocol itself: a future `RedisRateLimiter`
+implements the same three methods and every call site
+(`app/api/deps_rate_limit.py`'s `require_rate_limit(RateLimitClass.READ
+| WRITE)`) is unchanged. Every machine-client and shared human/machine
+route in this milestone carries a rate-limit dependency; a breach
+returns `429 RATE_LIMIT_EXCEEDED`. `app/core/request_limits.py`'s
+`RequestSizeLimitMiddleware` enforces `MAX_JSON_BODY_BYTES` on JSON
+bodies specifically — a multipart file upload (the existing ingestion
+endpoint) is exempt, since it already has its own, separately-controlled
+upload-size limit that this milestone left untouched.
+
+### Knowledge, analytics, and predictions over the API
+
+Every read/write capability exposed here calls the exact same service
+that has always computed it — `app/retrieval/retrieval_service.py`,
+`app/rag/rag_service.py`, `app/intelligence/analytics.py`,
+`app/intelligence/signals.py`, `app/predictions/predictor.py`. The one
+genuinely new capability is `GET
+/api/v1/intelligence/predictions/{entity_id}/history` — paginated,
+newest-first, envelope-wrapped — and it reads the same `Prediction` rows
+`POST .../predictions` always wrote; nothing about prediction storage or
+computation changed to support it.
+
+**Prediction safety is unchanged and still enforced at the API
+boundary**: `PredictionRequest` has exactly two fields, `entity_id` and
+an optional `as_of` timestamp — there is no field a client could use to
+supply a feature value, a label, or a risk score, and a client-supplied
+value under any of those names in the request body is simply ignored
+(extra fields dropped by the schema, never read by the handler); the
+server always computes its own feature snapshot. A dedicated OpenAPI
+test (`tests/test_openapi_schema.py`) asserts the generated schema
+itself has no such field on any predictive/governance request type, so
+this stays visible in the published contract, not only enforced in
+code.
+
+**RAG's full safeguard pipeline is reachable, never bypassed, from
+either caller kind.** Query → Authorization → Retrieval → Evidence
+selection → Sufficiency → Privacy gate → LLM → Citation validation →
+Response is exactly the same sequence `app/rag/rag_service.py` always
+ran; `app/api/v1/rag.py` calls `rag_service.query()` once, with no
+alternate, lighter-weight path for a machine caller. A `PRIVACY_BLOCKED`
+outcome (the external-LLM-privacy-gate case) reaches the HTTP caller as
+that exact outcome — a normal `200` with `outcome ==
+"PRIVACY_BLOCKED"` and no `answer` — never silently upgraded into a
+generated response by anything in the API layer (see
+["Provenance and data quality survive the API
+boundary"](#provenance-and-data-quality-survive-the-api-boundary)
+below for how this is tested).
+
+### Provenance and data quality survive the API boundary
+
+Every provenance chain a prior milestone already computed is passed
+through unchanged, never recomputed at the API layer: prediction →
+model → feature snapshot → explanation (`model_id`, `model_version`,
+`feature_snapshot_id`, per-feature contributions with direction and an
+association note — never an opaque, unexplained number); RAG citation →
+chunk → document version → document → source (`chunk_id`, `document_id`,
+`document_version_id`, `source_id` on every citation); retrieval result →
+the same chain; analytics risk signal → `supporting_event_ids`, the
+exact real `SafetyEvent` rows that produced it. `tests/test_privacy_and_provenance_api.py`
+proves this the strict way — not by re-deriving what the expected chain
+*should* be, but by comparing the HTTP response directly against the
+underlying stored row or the exact object a stubbed service call
+returned, so an API layer bug that silently dropped or reshaped a
+provenance field would fail these tests even though the endpoint still
+returned `200`. `data_quality` (`GOOD`/`LIMITED`/`INSUFFICIENT`/`STALE`)
+is likewise reported, never hidden, and an `INSUFFICIENT_DATA` result is
+never quietly turned into a normal success.
+
+### Audit logging and observability
+
+Machine authentication (`API_AUTHENTICATED`), scope denial
+(`API_ACCESS_DENIED`), and knowledge queries (`KNOWLEDGE_QUERY`) join
+the existing `AuditAction` vocabulary, using the same
+`audit_service.log()` every prior milestone already writes through — no
+second logging mechanism. Audit metadata never contains a credential
+secret, a raw incident description, or PII; a dedicated test asserts
+this directly against the audit rows a real machine-authenticated
+request produces. `app/core/observability.py`'s `AccessLogMiddleware`
+records method/path/status/duration/caller-identity/request-id for every
+request (never the request body) and attaches the active rate-limit
+counters as response headers — a foundation for future metrics
+aggregation, not a metrics backend itself.
+
+### Health and dependency checks
+
+`GET /health` (unversioned, pre-existing) and the two new endpoints,
+`GET /health/live` and `GET /health/ready`, are deliberately distinct:
+liveness never depends on anything external (an optional LLM/embedding
+provider being unreachable must never fail it — both default to fully
+offline `fake`/`hashing` implementations in every configured
+environment), while readiness checks the one *required* dependency,
+PostgreSQL, through the same `Depends(get_db)` every other route uses
+(not a standalone connection that would silently bypass the test
+suite's SQLite override) and returns `503` — never a raw driver
+exception — when it's down.
+
+### OpenAPI, developer documentation, and integration examples
+
+`app/core/openapi.py` injects real `securitySchemes` for both
+authentication mechanisms and a vendor extension, `x-sie-scopes`,
+generated live from the `Permission` enum — never a hand-maintained,
+driftable copy. `tests/test_openapi_schema.py` keeps the generated
+schema honest: every declared path matches an actually-registered route
+(and vice versa), every scope in `x-sie-scopes` matches a real
+`Permission` value, and no predictive/governance request schema exposes
+a client-writable outcome field. `docs/INTEGRATION_GUIDE.md` is the
+developer-facing guide — both authentication mechanisms, tenant context,
+ingestion, analytics, knowledge/RAG, predictions, provenance, the
+envelope, the error contract, rate limits, a Python example client, and
+two worked integration examples:
+
+* **Safelytic integration example** — Safelytic authenticates with its
+  own `ApiClient` credential like any other consumer; nothing in the
+  intelligence engine contains Safelytic-specific logic, a
+  Safelytic-only code path, or a Safelytic-only schema field.
+* **Third-party integration example** — a fictional, unrelated HSE
+  application ("ThirdPartyHSE") walks the exact same
+  authenticate → ingest → query-analytics flow, using nothing Safelytic
+  has that it doesn't, proving the app-independence claim rather than
+  merely asserting it.
+
+### Webhooks/outbound events — interface only
+
+`app/services/webhook_events.py` defines `WebhookEventName`
+(`risk.signal.created`, `prediction.available`,
+`model.review.required`, `knowledge.updated`), an `OutboundEvent` shape,
+and a `WebhookDispatcher` Protocol with a `NoOpWebhookDispatcher` as the
+only concrete implementation today — mirroring the same
+documented-but-unimplemented extension-point pattern
+`app/ingestion/ocr.py` already established in an earlier milestone.
+Nothing in this codebase calls `.dispatch()` yet; this is architecture
+for a future milestone, not a working event bus, and no message broker
+was introduced to support it.
+
+### What this milestone deliberately does not add
+
+No new predictive model, no deep learning, no autonomous or
+tool-using agents, no automated safety intervention, no automated model
+retraining, no external web crawling, no worker-level risk scoring — the
+milestone's own stop condition. No Redis, no Kafka, no multi-instance
+rate-limit coordination (the documented `LocalRateLimiter` limitation
+above), no multi-language SDK (the Python example in
+`docs/INTEGRATION_GUIDE.md` is illustrative documentation, not a
+published package), no `/api/v2/` (the versioning scheme allows one
+later without breaking `/api/v1/`, but none is built now). See
+["Known gaps / next phase"](#known-gaps--next-phase) for this
+milestone's own genuine, as-built limitations.
+
 ## Configuration
 
 All configuration is environment-based (`app/core/config.py`, backed by
@@ -3271,7 +3564,17 @@ LLM reasoning layer *is* implemented** on top of that retrieval —
 see [Evidence-Grounded RAG](#evidence-grounded-rag) for the full design,
 and its own "What RAG deliberately does not do" section for what
 remains genuinely out of scope (hybrid/keyword retrieval and reranking
-in particular still are not implemented).
+in particular still are not implemented). **As of Intelligence Platform
+Integration & Enterprise API v0.1, SIE is a versioned, multi-consumer
+platform with a standard response/error contract, request IDs,
+idempotency, rate limiting, request size limits, OpenAPI documentation,
+health/readiness endpoints, and observability foundations** — see
+[Intelligence Platform Integration & Enterprise API
+Architecture](#intelligence-platform-integration--enterprise-api-architecture)
+for the full design and that section's own "What this milestone
+deliberately does not add" for what remains genuinely out of scope
+(Redis-backed rate limiting, a real event bus, multi-language SDKs, and
+`/api/v2/` in particular).
 
 ## Known gaps / next phase
 
@@ -3558,3 +3861,43 @@ in particular still are not implemented).
     system, no automated alerting integration; `compute_*_monitoring()`
     functions are called on demand (via the `GET .../monitoring` route)
     rather than continuously.
+* **Intelligence Platform Integration & Enterprise API v0.1's own
+  genuine limitations:**
+  * **`LocalRateLimiter` is single-process, in-memory.** Explicitly
+    documented as unsuitable for a multi-instance production deployment
+    — each instance would enforce an independent window, so the
+    effective limit scales with instance count. The `RateLimiter`
+    Protocol is the seam a future `RedisRateLimiter` would fill without
+    changing any call site; none is built in this milestone.
+  * **No real event bus.** `app/services/webhook_events.py` is an
+    interface and a `NoOpWebhookDispatcher` only — nothing in this
+    codebase actually calls `.dispatch()` yet. Outbound webhooks
+    (`risk.signal.created`, `prediction.available`,
+    `model.review.required`, `knowledge.updated`) remain a documented
+    future architecture, not a working feature.
+  * **No multi-language SDK.** The Python example client in
+    `docs/INTEGRATION_GUIDE.md` is illustrative documentation an
+    integrator can copy from, not a published, versioned package.
+  * **Human authentication is still development-mode only** — this
+    milestone did not add real OIDC/OAuth2 token verification for human
+    callers; see [Identity architecture](#identity-architecture) and the
+    "No real authentication" gap above, both still true. Machine-client
+    authentication (`ApiClient` bearer credentials) is the one mechanism
+    in this codebase suitable for anything beyond local development
+    today.
+  * **Performance numbers are local-development-machine, single-request
+    timings only** — no concurrency, no realistic production data
+    volume, no warmed production hardware; see
+    `docs/PERFORMANCE_BASELINE.md` and that report's own repeated
+    caveat. They exist to catch a future gross regression, never to
+    claim a production capacity or SLA figure.
+  * **Observability is a foundation, not a metrics platform.**
+    `AccessLogMiddleware` logs structured request lines and the
+    rate-limiter exposes response headers; there is no aggregation,
+    dashboarding, or alerting system wired up, and none was in scope.
+  * **`/api/v2/` does not exist.** The versioning scheme (a bare,
+    unprefixed `/api/v1/` namespace with no version-specific coupling
+    baked into route logic) is intended to allow a future `/api/v2/`
+    without breaking existing consumers, but nothing about v2 was
+    designed or built — premature for a v0.1 platform with no external
+    consumers yet.

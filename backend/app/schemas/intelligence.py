@@ -170,7 +170,15 @@ class FeaturesRead(BaseModel):
 
 class ApiClientCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
+    # Least privilege by default (Intelligence Platform Integration v0.1,
+    # item 6) -- each value must be a real app.services.permissions.Permission
+    # value or app/services/api_client_service.py::ApiClientService.create()
+    # rejects the whole request (422); there is no way to grant a scope
+    # that does not correspond to a real, reviewable capability.
     scopes: list[str] = Field(..., min_length=1)
+    # Optional (item 25's "expiration where appropriate") -- omit for a
+    # credential that does not expire.
+    expires_at: datetime | None = None
 
 
 class ApiClientRead(BaseModel):
@@ -185,6 +193,7 @@ class ApiClientRead(BaseModel):
     last_used_at: datetime | None
     rotated_at: datetime | None
     revoked_at: datetime | None
+    expires_at: datetime | None
 
 
 class ApiClientCreatedRead(ApiClientRead):

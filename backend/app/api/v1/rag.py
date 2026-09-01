@@ -1,22 +1,30 @@
 """Evidence-grounded RAG API — the one HTTP entry point onto `RAGService`
 (milestone item 21).
 
-    authenticated user -> [organization_id requested?]
-        -> authorization_service.can(KNOWLEDGE_READ) -> allowed scope
+    human OR machine caller -> RequestContext -> [organization_id requested?]
+        -> authorize_context(KNOWLEDGE_READ) -> allowed scope
         -> RAGService -> RAGResponse
 
 Authorization is byte-for-byte the same shape `app/api/v1/retrieval.py`
 already uses (see that module's own docstring for the full rationale,
 including why a GLOBAL-only query requires authentication but not
 organization membership): `filters.organization_id`, if present, must be
-authorized via `authorization_service.can(..., KNOWLEDGE_READ,
-organization_id=...)` before it is ever passed to `RAGService` as
-`allowed_organization_id`. There is no second tenant-isolation mechanism
-here (milestone item 18) — RAG reuses exactly this one.
+authorized via `app.api.deps_context.authorize_context(...,
+KNOWLEDGE_READ, organization_id=...)` before it is ever passed to
+`RAGService` as `allowed_organization_id`. There is no second
+tenant-isolation mechanism here (milestone item 18) — RAG reuses exactly
+this one.
 
 **Milestone item 21: the client cannot select an embedding model or an
 LLM provider/model.** `RAGQueryRequest` has no field for either — both
 are resolved server-side by `RAGService` from app settings.
+
+**Machine-client access (Intelligence Platform Integration & Enterprise
+API v0.1, items 16, 20, 38).** A machine client holding `knowledge:read`
+can now call this endpoint too — every safeguard `RAGService` already
+enforces (evidence selection, sufficiency, the privacy gate, citation
+validation) applies identically regardless of caller kind; the API layer
+never bypasses or reimplements any of it (item 20).
 """
 
 import uuid
@@ -25,7 +33,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
-from app.api.deps_auth import get_dev_authenticated_user_id
+from app.api.deps_context import RequestContext, authorize_context, get_request_context
+from app.api.deps_rate_limit import RateLimitClass, require_rate_limit
 from app.rag.rag_service import rag_service
 from app.rag.results import RAGResponse
 from app.retrieval.filters import RetrievalFilters
@@ -36,22 +45,23 @@ from app.schemas.rag import (
     SourceConflictRead,
     SourceRead,
 )
-from app.services.authorization_service import authorization_service
 from app.services.permissions import Permission
 
 router = APIRouter(prefix="/knowledge/rag", tags=["rag"])
 
 
-@router.post("/query", response_model=RAGQueryResponse)
+@router.post(
+    "/query",
+    response_model=RAGQueryResponse,
+    dependencies=[Depends(require_rate_limit(RateLimitClass.READ))],
+)
 def query_knowledge(
     payload: RAGQueryRequest,
-    user_id: uuid.UUID = Depends(get_dev_authenticated_user_id),
+    context: RequestContext = Depends(get_request_context),
     db: Session = Depends(get_db),
 ) -> RAGQueryResponse:
     organization_id = payload.filters.organization_id
-    if organization_id is not None and not authorization_service.can(
-        db, user_id=user_id, permission=Permission.KNOWLEDGE_READ, organization_id=organization_id
-    ):
+    if not authorize_context(db, context, permission=Permission.KNOWLEDGE_READ, organization_id=organization_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Missing knowledge:read permission in the requested organization.",
@@ -73,7 +83,7 @@ def query_knowledge(
         db,
         query_text=payload.query,
         allowed_organization_id=organization_id,
-        user_id=user_id,
+        user_id=context.user_id,  # None for a machine caller -- rag_service.py's own audit logging handles that
         filters=filters,
         top_k=payload.top_k,
     )

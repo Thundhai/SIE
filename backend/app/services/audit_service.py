@@ -56,6 +56,15 @@ class AuditAction:
     MODEL_REVIEW_REQUIRED = "MODEL_REVIEW_REQUIRED"
     MODEL_REVIEW_ACKNOWLEDGED = "MODEL_REVIEW_ACKNOWLEDGED"
     PREDICTION_OUTCOME_EVALUATED = "PREDICTION_OUTCOME_EVALUATED"
+    # Intelligence Platform Integration & Enterprise API v0.1 (milestone
+    # item 24's own list). ANALYTICS_QUERY/RAG_QUERY/EVENT_INGESTION are
+    # already covered by the existing, more specific
+    # INTELLIGENCE_ANALYTICS_QUERIED/RAG_QUERY_EXECUTED/
+    # SAFETY_EVENT_INGESTED(_BATCH) actions above -- reused, not
+    # duplicated under a second, vaguer name.
+    API_AUTHENTICATED = "API_AUTHENTICATED"
+    API_ACCESS_DENIED = "API_ACCESS_DENIED"
+    KNOWLEDGE_QUERY = "KNOWLEDGE_QUERY"
 
 
 class AuditService:
@@ -69,6 +78,7 @@ class AuditService:
         organization_id: uuid.UUID | None = None,
         user_id: uuid.UUID | None = None,
         metadata: dict[str, Any] | None = None,
+        request_id: str | None = None,
     ) -> AuditLog:
         entry = AuditLog(
             action=action,
@@ -77,6 +87,7 @@ class AuditService:
             organization_id=organization_id,
             user_id=user_id,
             event_metadata=metadata,
+            request_id=request_id,
         )
         db.add(entry)
         db.commit()

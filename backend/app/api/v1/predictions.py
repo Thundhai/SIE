@@ -1,7 +1,9 @@
-"""Predictions API — milestone item 31.
+"""Predictions API — milestone item 31; extended by Intelligence Platform
+Integration & Enterprise API v0.1, items 12, 18, 38.
 
-    POST /api/v1/intelligence/predictions       -> generate/refresh a prediction for one entity
-    GET  /api/v1/intelligence/predictions/{id}   -> the latest recorded prediction for that entity
+    POST /api/v1/intelligence/predictions               -> generate/refresh a prediction for one entity
+    GET  /api/v1/intelligence/predictions/{id}           -> the latest recorded prediction for that entity
+    GET  /api/v1/intelligence/predictions/{id}/history   -> paginated prediction history for that entity
 
 **Input security (milestone item 45).** The request body
 (`PredictionRequest`) carries only `entity_id` and an optional `as_of` —
@@ -12,46 +14,47 @@ request time, from this organization's own stored `SafetyEvent` data
 
 **Authorization, model status, and entity ownership are all verified
 before anything is computed** — `organization_id` comes from the
-authenticated user's own tenant context (never a client-supplied field:
-see `_authorize_read()`'s callers below, the same
+authenticated caller's own authorized context (never a client-supplied
+field), human or machine (`app.api.deps_context.RequestContext`, the same
 authenticate-then-authorize-then-pass-a-trusted-value shape
 `app/api/v1/intelligence.py` already establishes); the entity is checked
 to actually belong to that organization before any prediction is
 attempted; only a `DEPLOYED` model is ever used to serve a live
 prediction (`app/predictions/predictor.py::predict_as_of(require_deployed=True)`).
+
+**Idempotency (item 12).** `POST /predictions` accepts an optional
+`Idempotency-Key` header — a retried request with the same key and the
+same body replays the first attempt's recorded prediction rather than
+generating (and persisting) a second one; a reused key with a different
+body is a 409 `IDEMPOTENCY_CONFLICT`. See `app/core/idempotency.py`.
 """
 
 from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
-from app.api.deps_auth import get_dev_authenticated_user_id
+from app.api.deps_context import RequestContext, require_context_permission
+from app.api.deps_rate_limit import RateLimitClass, require_rate_limit
+from app.core.idempotency import check_and_replay, compute_request_hash, store_response
+from app.core.request_id import get_request_id
 from app.intelligence.temporal import utcnow
 from app.models.prediction import Prediction
 from app.models.site import Site
 from app.predictions import model_registry
 from app.predictions.predictor import abstain_no_deployed_model, predict_as_of
 from app.predictions.spec import PREDICTION_ENTITY_TYPE
+from app.schemas.envelope import ResponseEnvelope, build_envelope
 from app.schemas.predictions import ExplanationRead, PredictionRead, PredictionRequest
-from app.services.authorization_service import authorization_service
 from app.services.permissions import Permission
 
 router = APIRouter(prefix="/intelligence/predictions", tags=["predictions"])
 
-
-def _authorize(db: Session, user_id: uuid.UUID, organization_id: uuid.UUID) -> None:
-    if not authorization_service.can(
-        db, user_id=user_id, permission=Permission.PREDICTION_READ, organization_id=organization_id
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Missing prediction:read permission in the requested organization.",
-        )
+_ENDPOINT_CREATE = "POST /intelligence/predictions"
 
 
 def _require_owned_site(db: Session, *, organization_id: uuid.UUID, site_id: uuid.UUID) -> Site:
@@ -92,21 +95,36 @@ def _to_read(prediction: Prediction) -> PredictionRead:
     )
 
 
-@router.post("", response_model=PredictionRead)
+@router.post(
+    "", response_model=PredictionRead, dependencies=[Depends(require_rate_limit(RateLimitClass.WRITE))]
+)
 def create_prediction(
     body: PredictionRequest,
     organization_id: uuid.UUID = Query(...),
-    user_id: uuid.UUID = Depends(get_dev_authenticated_user_id),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    context: RequestContext = Depends(require_context_permission(Permission.PREDICTION_READ)),
     db: Session = Depends(get_db),
 ) -> PredictionRead:
-    _authorize(db, user_id, organization_id)
     _require_owned_site(db, organization_id=organization_id, site_id=body.entity_id)
+
+    request_hash = compute_request_hash(body.model_dump_json().encode("utf-8"))
+    lookup = check_and_replay(
+        db,
+        endpoint=_ENDPOINT_CREATE,
+        idempotency_key=idempotency_key,
+        request_hash=request_hash,
+        organization_id=organization_id,
+        api_client_id=context.api_client_id,
+        user_id=context.user_id,
+    )
+    if lookup.is_replay:
+        return PredictionRead.model_validate(lookup.response_body)
 
     as_of = body.as_of or utcnow()
     model = model_registry.get_deployed_model(db, organization_id=organization_id, entity_type=PREDICTION_ENTITY_TYPE)
     if model is None:
         prediction = abstain_no_deployed_model(
-            db, organization_id=organization_id, site_id=body.entity_id, as_of=as_of, user_id=user_id
+            db, organization_id=organization_id, site_id=body.entity_id, as_of=as_of, user_id=context.user_id
         )
     else:
         prediction = predict_as_of(
@@ -116,19 +134,32 @@ def create_prediction(
             as_of=as_of,
             model=model,
             require_deployed=True,
-            user_id=user_id,
+            user_id=context.user_id,
         )
-    return _to_read(prediction)
+    result = _to_read(prediction)
+    store_response(
+        db,
+        endpoint=_ENDPOINT_CREATE,
+        idempotency_key=idempotency_key,
+        request_hash=request_hash,
+        response_status_code=status.HTTP_200_OK,
+        response_body=result.model_dump(mode="json"),
+        organization_id=organization_id,
+        api_client_id=context.api_client_id,
+        user_id=context.user_id,
+    )
+    return result
 
 
-@router.get("/{entity_id}", response_model=PredictionRead)
+@router.get(
+    "/{entity_id}", response_model=PredictionRead, dependencies=[Depends(require_rate_limit(RateLimitClass.READ))]
+)
 def get_latest_prediction(
     entity_id: uuid.UUID,
     organization_id: uuid.UUID = Query(...),
-    user_id: uuid.UUID = Depends(get_dev_authenticated_user_id),
+    context: RequestContext = Depends(require_context_permission(Permission.PREDICTION_READ)),
     db: Session = Depends(get_db),
 ) -> PredictionRead:
-    _authorize(db, user_id, organization_id)
     _require_owned_site(db, organization_id=organization_id, site_id=entity_id)
 
     prediction = db.execute(
@@ -144,3 +175,49 @@ def get_latest_prediction(
     if prediction is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No prediction recorded for this entity yet.")
     return _to_read(prediction)
+
+
+@router.get(
+    "/{entity_id}/history",
+    response_model=ResponseEnvelope[list[PredictionRead]],
+    dependencies=[Depends(require_rate_limit(RateLimitClass.READ))],
+)
+def get_prediction_history(
+    entity_id: uuid.UUID,
+    organization_id: uuid.UUID = Query(...),
+    limit: int = Query(default=20, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    context: RequestContext = Depends(require_context_permission(Permission.PREDICTION_READ)),
+    request_id: str | None = Depends(get_request_id),
+    db: Session = Depends(get_db),
+) -> ResponseEnvelope[list[PredictionRead]]:
+    """Every recorded prediction for this entity, newest first — both
+    `PREDICTED` and abstained `NO_PREDICTION` rows (an abstention is
+    itself a real, audited outcome; see `app/predictions/predictor.py`'s
+    own docstring — this history is never filtered down to only the
+    "successful" predictions). Paginated (`limit`/`offset`); an empty
+    result at `offset=0` means no prediction has ever been recorded for
+    this entity, not an error.
+
+    The first endpoint in this codebase to use the standard response
+    envelope (item 10) — a genuinely new response shape, so wrapping it
+    breaks no existing consumer (see `app/schemas/envelope.py`'s own
+    docstring for why existing endpoints keep their unwrapped shape)."""
+    _require_owned_site(db, organization_id=organization_id, site_id=entity_id)
+
+    predictions = db.execute(
+        select(Prediction)
+        .where(
+            Prediction.organization_id == organization_id,
+            Prediction.entity_type == PREDICTION_ENTITY_TYPE,
+            Prediction.entity_id == entity_id,
+        )
+        .order_by(Prediction.prediction_time.desc(), Prediction.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+    ).scalars().all()
+    return build_envelope(
+        [_to_read(p) for p in predictions],
+        request_id=request_id,
+        provenance={"organization_id": str(organization_id), "entity_id": str(entity_id), "entity_type": PREDICTION_ENTITY_TYPE},
+    )

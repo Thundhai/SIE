@@ -62,6 +62,15 @@ class ApiClient(UUIDPrimaryKeyMixin, OrganizationScopedMixin, TimestampMixin, Ba
     rotated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # Optional (Intelligence Platform Integration v0.1, item 25's "expiration
+    # where appropriate") -- NULL means "does not expire", never a magic
+    # sentinel date. `ApiClientService.authenticate()` treats a client whose
+    # `expires_at` has passed exactly like a revoked one (rejected, not a
+    # partial/soft-expired state) but leaves `status` and `revoked_at`
+    # alone -- expiry and revocation are recorded as two distinct, honest
+    # reasons a credential stopped working, not conflated into one field.
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     organization: Mapped["Organization"] = relationship()  # noqa: F821
 
     def __repr__(self) -> str:  # pragma: no cover

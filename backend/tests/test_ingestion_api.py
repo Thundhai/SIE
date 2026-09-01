@@ -17,7 +17,14 @@ def create_org(client, name="Acme Industrial"):
     return client.post("/api/v1/organizations", json={"name": name}).json()
 
 
-def create_org_source(client, organization_id, name="Internal Procedure"):
+def create_org_source(client, db_session, organization_id, name="Internal Procedure"):
+    # Knowledge source creation itself now requires authentication (see
+    # app/api/v1/knowledge.py's own docstring) -- a throwaway org admin
+    # exists here purely to stand up test fixture data; the tests below
+    # exercise a *different*, deliberately chosen identity for the
+    # ingestion call itself.
+    creator = make_user(db_session, f"{uuid.uuid4().hex}@example.com")
+    make_membership(db_session, user_id=creator.id, organization_id=uuid.UUID(organization_id), role="ORG_ADMIN")
     return client.post(
         "/api/v1/knowledge/sources",
         json={
@@ -27,10 +34,12 @@ def create_org_source(client, organization_id, name="Internal Procedure"):
             "name": name,
             "source_type": "internal_procedure",
         },
+        headers=dev_auth_headers(creator.id),
     ).json()
 
 
-def create_global_source(client, name="29 CFR 1910"):
+def create_global_source(client, db_session, name="29 CFR 1910"):
+    creator = make_user(db_session, f"{uuid.uuid4().hex}@example.com", platform_role=PLATFORM_ADMIN)
     return client.post(
         "/api/v1/knowledge/sources",
         json={
@@ -39,6 +48,7 @@ def create_global_source(client, name="29 CFR 1910"):
             "name": name,
             "source_type": "regulation",
         },
+        headers=dev_auth_headers(creator.id),
     ).json()
 
 
@@ -74,9 +84,9 @@ def upload(client, *, headers, source_id, organization_id=None, document_id=None
     )
 
 
-def test_ingestion_endpoint_requires_authentication(client):
+def test_ingestion_endpoint_requires_authentication(client, db_session):
     org = create_org(client)
-    source = create_org_source(client, org["id"])
+    source = create_org_source(client, db_session, org["id"])
 
     response = upload(
         client, headers={}, source_id=source["id"], organization_id=org["id"], title="X"
@@ -90,7 +100,7 @@ def test_ingestion_endpoint_requires_authentication(client):
 
 def test_org_member_with_knowledge_manage_can_ingest(client, db_session):
     org = create_org(client)
-    source = create_org_source(client, org["id"])
+    source = create_org_source(client, db_session, org["id"])
     user = make_user(db_session, "manager@example.com")
     make_membership(
         db_session, user_id=user.id, organization_id=uuid.UUID(org["id"]), role="HSE_MANAGER"
@@ -113,7 +123,7 @@ def test_org_member_with_knowledge_manage_can_ingest(client, db_session):
 
 def test_org_member_without_knowledge_manage_cannot_ingest(client, db_session):
     org = create_org(client)
-    source = create_org_source(client, org["id"])
+    source = create_org_source(client, db_session, org["id"])
     viewer = make_user(db_session, "viewer@example.com")
     make_membership(
         db_session, user_id=viewer.id, organization_id=uuid.UUID(org["id"]), role="VIEWER"
@@ -132,7 +142,7 @@ def test_org_member_without_knowledge_manage_cannot_ingest(client, db_session):
 
 def test_non_member_cannot_ingest_into_an_organization(client, db_session):
     org = create_org(client)
-    source = create_org_source(client, org["id"])
+    source = create_org_source(client, db_session, org["id"])
     outsider = make_user(db_session, "outsider@example.com")
     # No membership created for outsider in org at all.
 
@@ -153,7 +163,7 @@ def test_non_member_cannot_ingest_into_an_organization(client, db_session):
 def test_org_a_member_cannot_ingest_into_org_b(client, db_session):
     org_a = create_org(client, "Org A")
     org_b = create_org(client, "Org B")
-    source_b = create_org_source(client, org_b["id"], name="Org B Procedure")
+    source_b = create_org_source(client, db_session, org_b["id"], name="Org B Procedure")
     admin_a = make_user(db_session, "admina@example.com")
     make_membership(
         db_session, user_id=admin_a.id, organization_id=uuid.UUID(org_a["id"]), role="ORG_ADMIN"
@@ -177,7 +187,7 @@ def test_asserting_a_different_organization_than_the_sources_own_is_rejected(cli
     exercised through the ingestion endpoint."""
     org_a = create_org(client, "Org A")
     org_b = create_org(client, "Org B")
-    source_a = create_org_source(client, org_a["id"], name="Org A Procedure")
+    source_a = create_org_source(client, db_session, org_a["id"], name="Org A Procedure")
     admin_b = make_user(db_session, "adminb@example.com")
     make_membership(
         db_session, user_id=admin_b.id, organization_id=uuid.UUID(org_b["id"]), role="ORG_ADMIN"
@@ -201,7 +211,7 @@ def test_asserting_a_different_organization_than_the_sources_own_is_rejected(cli
 
 
 def test_platform_admin_can_ingest_global_knowledge(client, db_session):
-    source = create_global_source(client)
+    source = create_global_source(client, db_session)
     admin = make_user(db_session, "platformadmin@example.com", platform_role=PLATFORM_ADMIN)
 
     response = upload(
@@ -220,7 +230,7 @@ def test_ordinary_org_admin_cannot_ingest_global_knowledge_by_omitting_organizat
     knowledge — it requires platform-wide access, which an ordinary
     (non-platform-admin) org admin does not have, even in their own org."""
     org = create_org(client)
-    source = create_global_source(client)
+    source = create_global_source(client, db_session)
     org_admin = make_user(db_session, "orgadmin@example.com")
     make_membership(
         db_session, user_id=org_admin.id, organization_id=uuid.UUID(org["id"]), role="ORG_ADMIN"
@@ -234,7 +244,7 @@ def test_ordinary_org_admin_cannot_ingest_global_knowledge_by_omitting_organizat
 
 
 def test_unaffiliated_user_cannot_ingest_global_knowledge(client, db_session):
-    source = create_global_source(client)
+    source = create_global_source(client, db_session)
     user = make_user(db_session, "plainuser@example.com")
 
     response = upload(client, headers=dev_auth_headers(user.id), source_id=source["id"], title="X")
@@ -246,7 +256,7 @@ def test_unaffiliated_user_cannot_ingest_global_knowledge(client, db_session):
 
 
 def test_unsupported_file_type_returns_415(client, db_session):
-    source = create_global_source(client)
+    source = create_global_source(client, db_session)
     admin = make_user(db_session, "admin415@example.com", platform_role=PLATFORM_ADMIN)
 
     response = client.post(
@@ -266,7 +276,7 @@ def test_unsupported_file_type_returns_415(client, db_session):
 
 
 def test_ingestion_response_does_not_include_extracted_content(client, db_session):
-    source = create_global_source(client)
+    source = create_global_source(client, db_session)
     admin = make_user(db_session, "admin2@example.com", platform_role=PLATFORM_ADMIN)
 
     response = upload(client, headers=dev_auth_headers(admin.id), source_id=source["id"], title="X")

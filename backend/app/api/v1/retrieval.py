@@ -1,44 +1,51 @@
 """Semantic retrieval API — the one HTTP entry point onto
 `RetrievalService`.
 
-    authenticated user -> [organization_id requested?]
-        -> authorization_service.can(KNOWLEDGE_READ) -> allowed scope
+    human OR machine caller -> RequestContext -> [organization_id requested?]
+        -> authorize_context(KNOWLEDGE_READ) -> allowed scope
         -> RetrievalService -> RetrievalResponse
 
-Mirrors `app/api/v1/ingestion.py`'s own authorization shape (calling
-`authorization_service.can()` directly rather than the path-based
-`require_permission` dependency, since — like ingestion — this route has
-no `{organization_id}` URL segment: a search can target GLOBAL knowledge
-alone, which has no organization at all) with one deliberate difference,
-spelled out because it departs from that precedent:
+Mirrors `app/api/v1/ingestion.py`'s own authorization shape (calling the
+authorization check directly rather than a path-based dependency, since
+— like ingestion — this route has no `{organization_id}` URL segment: a
+search can target GLOBAL knowledge alone, which has no organization at
+all) with one deliberate difference, spelled out because it departs from
+that precedent:
 
-  * **Every request must be authenticated** (`get_dev_authenticated_user_id`),
-    even a GLOBAL-only search with no `organization_id` — per the
-    milestone's own "for global-only search, authorization rules must
-    still apply" instruction. `POST /api/v1/knowledge/retrieval/search`
-    therefore requires authentication where the sibling *read* routes in
-    `app/api/v1/knowledge.py` currently do not (a known, documented gap
-    there — see the README's "Known gaps" section).
+  * **Every request must be authenticated**, even a GLOBAL-only search
+    with no `organization_id` — per the milestone's own "for
+    global-only search, authorization rules must still apply"
+    instruction.
   * **`filters.organization_id`, if present, must be authorized before
-    it is trusted.** `authorization_service.can(..., permission=KNOWLEDGE_READ,
-    organization_id=...)` is called exactly as ingestion.py calls it for
-    `KNOWLEDGE_MANAGE` — the caller must have an ACTIVE membership in
-    that organization whose role grants `knowledge:read`, or the request
-    is rejected with 403. This is what makes "Do NOT allow the client to
+    it is trusted.** `app.api.deps_context.authorize_context(...,
+    permission=KNOWLEDGE_READ, organization_id=...)` is called exactly as
+    ingestion.py calls `authorization_service.can()` for
+    `KNOWLEDGE_MANAGE` — a human caller must have an ACTIVE membership in
+    that organization whose role grants `knowledge:read`; a machine
+    caller must be scoped to that exact organization (never overridable,
+    item 36) and hold the `knowledge:read` scope — or the request is
+    rejected with 403. This is what makes "Do NOT allow the client to
     bypass authorization by passing another organization_id" true: the
     value only ever reaches `RetrievalService` after this check passes,
     never before.
   * **`filters.organization_id` omitted -> GLOBAL-only, no organization
-    authorization check.** This is a deliberate, narrower rule than
-    `authorization_service.can()`'s own "no organization_id -> only a
-    PLATFORM_ADMIN succeeds" behavior — that behavior is tuned for
-    *writing* GLOBAL knowledge (see ingestion.py), a meaningfully more
-    privileged action than *reading* already-published GLOBAL knowledge.
-    `authorization_service.py`'s own docstring already states this
-    explicitly: "Global-knowledge reads are deliberately never routed
-    through this method at all." Requiring only authentication (not
-    platform-admin) for a GLOBAL-only search follows that stated design
-    intent rather than the write-path's stricter rule.
+    authorization check.** This is a deliberate, narrower rule than the
+    write path's own "no organization_id -> only a PLATFORM_ADMIN
+    succeeds" behavior (see `app/api/v1/ingestion.py`/`knowledge.py`'s
+    own `_authorize_manage()`) — that behavior is tuned for *writing*
+    GLOBAL knowledge, a meaningfully more privileged action than
+    *reading* already-published GLOBAL knowledge. Requiring only
+    authentication (not platform-admin, not any particular scope) for a
+    GLOBAL-only search follows that stated design intent rather than the
+    write path's stricter rule — see `app.api.deps_context.authorize_context()`'s
+    own docstring, which encodes this exact rule for both identity kinds.
+
+**Machine-client access (Intelligence Platform Integration & Enterprise
+API v0.1, items 16, 20, 38).** A machine client holding `knowledge:read`
+can now call this endpoint too — the same evidence-selection/sufficiency/
+privacy-gate pipeline `RetrievalService` already enforces for a human
+caller applies identically; nothing about that pipeline is bypassed or
+duplicated here (item 20).
 """
 
 import uuid
@@ -47,7 +54,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
-from app.api.deps_auth import get_dev_authenticated_user_id
+from app.api.deps_context import RequestContext, authorize_context, get_request_context
+from app.api.deps_rate_limit import RateLimitClass, require_rate_limit
 from app.retrieval.filters import RetrievalFilters
 from app.retrieval.results import RetrievalResponse
 from app.retrieval.retrieval_service import retrieval_service
@@ -57,26 +65,28 @@ from app.schemas.retrieval import (
     RetrievalSearchRequest,
     RetrievalSearchResponse,
 )
-from app.services.authorization_service import authorization_service
 from app.services.permissions import Permission
 
 router = APIRouter(prefix="/knowledge/retrieval", tags=["retrieval"])
 
 
-@router.post("/search", response_model=RetrievalSearchResponse)
+@router.post(
+    "/search",
+    response_model=RetrievalSearchResponse,
+    dependencies=[Depends(require_rate_limit(RateLimitClass.READ))],
+)
 def search_knowledge(
     payload: RetrievalSearchRequest,
-    user_id: uuid.UUID = Depends(get_dev_authenticated_user_id),
+    context: RequestContext = Depends(get_request_context),
     db: Session = Depends(get_db),
 ) -> RetrievalSearchResponse:
     organization_id = payload.filters.organization_id
-    if organization_id is not None and not authorization_service.can(
-        db, user_id=user_id, permission=Permission.KNOWLEDGE_READ, organization_id=organization_id
-    ):
+    if not authorize_context(db, context, permission=Permission.KNOWLEDGE_READ, organization_id=organization_id):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Missing knowledge:read permission in the requested organization.",
         )
+    _audit_knowledge_query(db, context=context, organization_id=organization_id, endpoint="retrieval_search")
 
     filters = RetrievalFilters(
         source_id=payload.filters.source_id,
@@ -144,4 +154,19 @@ def search_knowledge(
         result_count=result.result_count,
         filters_applied=result.filters_applied,
         search_metadata=result.search_metadata,
+    )
+
+
+def _audit_knowledge_query(
+    db: Session, *, context: RequestContext, organization_id: uuid.UUID | None, endpoint: str
+) -> None:
+    from app.services.audit_service import AuditAction, audit_service
+
+    audit_service.log(
+        db,
+        action=AuditAction.KNOWLEDGE_QUERY,
+        resource_type="KnowledgeRetrieval",
+        organization_id=organization_id,
+        user_id=context.user_id,
+        metadata={"endpoint": endpoint, "caller_kind": context.kind},
     )

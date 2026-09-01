@@ -46,9 +46,12 @@ def create_api_client(
     context: TenantContext = Depends(require_permission(Permission.USERS_MANAGE)),
     db: Session = Depends(get_db),
 ) -> ApiClientCreatedRead:
-    credential = api_client_service.create(
-        db, organization_id=organization_id, name=body.name, scopes=body.scopes
-    )
+    try:
+        credential = api_client_service.create(
+            db, organization_id=organization_id, name=body.name, scopes=body.scopes, expires_at=body.expires_at
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     return ApiClientCreatedRead(**_read_fields(credential.api_client), secret=credential.secret)
 
 
@@ -99,4 +102,5 @@ def _read_fields(api_client: ApiClient) -> dict:
         "last_used_at": api_client.last_used_at,
         "rotated_at": api_client.rotated_at,
         "revoked_at": api_client.revoked_at,
+        "expires_at": api_client.expires_at,
     }

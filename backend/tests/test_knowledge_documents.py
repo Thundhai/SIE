@@ -4,13 +4,15 @@ from app.schemas.knowledge_document import KnowledgeDocumentCreate
 from app.schemas.knowledge_source import KnowledgeSourceCreate
 from app.services.knowledge_document_service import knowledge_document_service
 from app.services.knowledge_source_service import knowledge_source_service
+from tests.conftest import dev_auth_headers
+from tests.intelligence_test_helpers import make_org_member, make_platform_admin_user
 
 
 def create_org(client, name="Acme Industrial"):
     return client.post("/api/v1/organizations", json={"name": name}).json()
 
 
-def create_global_source(client):
+def create_global_source(client, admin):
     return client.post(
         "/api/v1/knowledge/sources",
         json={
@@ -19,10 +21,11 @@ def create_global_source(client):
             "name": "29 CFR 1910",
             "source_type": "regulation",
         },
+        headers=dev_auth_headers(admin.id),
     ).json()
 
 
-def create_org_source(client, organization_id):
+def create_org_source(client, organization_id, member):
     return client.post(
         "/api/v1/knowledge/sources",
         json={
@@ -32,15 +35,18 @@ def create_org_source(client, organization_id):
             "name": "Internal LOTO Procedure",
             "source_type": "internal_procedure",
         },
+        headers=dev_auth_headers(member.id),
     ).json()
 
 
-def test_create_document_under_global_source(client):
-    source = create_global_source(client)
+def test_create_document_under_global_source(client, db_session):
+    admin = make_platform_admin_user(db_session)
+    source = create_global_source(client, admin)
 
     response = client.post(
         "/api/v1/knowledge/documents",
         json={"source_id": source["id"], "title": "1910.147", "document_type": "regulation_text"},
+        headers=dev_auth_headers(admin.id),
     )
 
     assert response.status_code == 201
@@ -50,9 +56,21 @@ def test_create_document_under_global_source(client):
     assert body["current_version_id"] is None
 
 
-def test_create_document_under_organization_source(client):
+def test_create_document_requires_authentication(client, db_session):
+    admin = make_platform_admin_user(db_session)
+    source = create_global_source(client, admin)
+
+    response = client.post(
+        "/api/v1/knowledge/documents",
+        json={"source_id": source["id"], "title": "1910.147", "document_type": "regulation_text"},
+    )
+    assert response.status_code == 401
+
+
+def test_create_document_under_organization_source(client, db_session):
     org = create_org(client)
-    source = create_org_source(client, org["id"])
+    member = make_org_member(db_session, uuid.UUID(org["id"]))
+    source = create_org_source(client, org["id"], member)
 
     response = client.post(
         "/api/v1/knowledge/documents",
@@ -62,6 +80,7 @@ def test_create_document_under_organization_source(client):
             "title": "LOTO Procedure v1",
             "document_type": "internal_procedure",
         },
+        headers=dev_auth_headers(member.id),
     )
 
     assert response.status_code == 201
@@ -69,22 +88,45 @@ def test_create_document_under_organization_source(client):
     assert body["organization_id"] == org["id"]
 
 
-def test_document_under_organization_source_requires_organization_id(client):
+def test_create_document_under_organization_source_requires_knowledge_manage_in_that_organization(client, db_session):
+    org_a = create_org(client, "Org A")
+    org_b = create_org(client, "Org B")
+    member_a = make_org_member(db_session, uuid.UUID(org_a["id"]))
+    member_b_only = make_org_member(db_session, uuid.UUID(org_b["id"]))
+    source = create_org_source(client, org_a["id"], member_a)
+
+    response = client.post(
+        "/api/v1/knowledge/documents",
+        json={
+            "source_id": source["id"],
+            "organization_id": org_a["id"],
+            "title": "LOTO Procedure v1",
+            "document_type": "internal_procedure",
+        },
+        headers=dev_auth_headers(member_b_only.id),
+    )
+    assert response.status_code == 403
+
+
+def test_document_under_organization_source_requires_organization_id(client, db_session):
     org = create_org(client)
-    source = create_org_source(client, org["id"])
+    member = make_org_member(db_session, uuid.UUID(org["id"]))
+    source = create_org_source(client, org["id"], member)
 
     response = client.post(
         "/api/v1/knowledge/documents",
         json={"source_id": source["id"], "title": "LOTO Procedure", "document_type": "procedure"},
+        headers=dev_auth_headers(member.id),
     )
 
     assert response.status_code == 400
 
 
-def test_document_cannot_be_attached_to_a_different_organization_than_its_source(client):
+def test_document_cannot_be_attached_to_a_different_organization_than_its_source(client, db_session):
     org_a = create_org(client, "Org A")
     org_b = create_org(client, "Org B")
-    source_a = create_org_source(client, org_a["id"])
+    member_a = make_org_member(db_session, uuid.UUID(org_a["id"]))
+    source_a = create_org_source(client, org_a["id"], member_a)
 
     response = client.post(
         "/api/v1/knowledge/documents",
@@ -94,14 +136,16 @@ def test_document_cannot_be_attached_to_a_different_organization_than_its_source
             "title": "LOTO Procedure",
             "document_type": "procedure",
         },
+        headers=dev_auth_headers(member_a.id),
     )
 
     assert response.status_code == 400
 
 
-def test_document_under_global_source_rejects_organization_id(client):
+def test_document_under_global_source_rejects_organization_id(client, db_session):
     org = create_org(client)
-    source = create_global_source(client)
+    admin = make_platform_admin_user(db_session)
+    source = create_global_source(client, admin)
 
     response = client.post(
         "/api/v1/knowledge/documents",
@@ -111,23 +155,28 @@ def test_document_under_global_source_rejects_organization_id(client):
             "title": "1910.147",
             "document_type": "regulation_text",
         },
+        headers=dev_auth_headers(admin.id),
     )
 
     assert response.status_code == 400
 
 
-def test_create_document_under_missing_source_returns_404(client):
+def test_create_document_under_missing_source_returns_404(client, db_session):
+    admin = make_platform_admin_user(db_session)
     response = client.post(
         "/api/v1/knowledge/documents",
         json={"source_id": str(uuid.uuid4()), "title": "Ghost", "document_type": "procedure"},
+        headers=dev_auth_headers(admin.id),
     )
     assert response.status_code == 404
 
 
-def test_get_document_requires_matching_organization_context(client):
+def test_get_document_requires_matching_organization_context(client, db_session):
     org_a = create_org(client, "Org A")
     org_b = create_org(client, "Org B")
-    source_a = create_org_source(client, org_a["id"])
+    member_a = make_org_member(db_session, uuid.UUID(org_a["id"]))
+    member_b = make_org_member(db_session, uuid.UUID(org_b["id"]))
+    source_a = create_org_source(client, org_a["id"], member_a)
     document = client.post(
         "/api/v1/knowledge/documents",
         json={
@@ -136,15 +185,26 @@ def test_get_document_requires_matching_organization_context(client):
             "title": "LOTO Procedure",
             "document_type": "procedure",
         },
+        headers=dev_auth_headers(member_a.id),
     ).json()
 
     # Org B cannot fetch org A's document, whether by omitting tenant
-    # context entirely or by asserting the wrong organization.
-    assert client.get(f"/api/v1/knowledge/documents/{document['id']}").status_code == 404
+    # context entirely or by asserting the wrong organization -- and
+    # omitting tenant context entirely now also requires *some*
+    # authenticated identity in the first place (item 48).
+    assert client.get(f"/api/v1/knowledge/documents/{document['id']}").status_code == 401
+    assert (
+        client.get(
+            f"/api/v1/knowledge/documents/{document['id']}",
+            headers=dev_auth_headers(member_a.id),
+        ).status_code
+        == 404
+    )
     assert (
         client.get(
             f"/api/v1/knowledge/documents/{document['id']}",
             params={"organization_id": org_b["id"]},
+            headers=dev_auth_headers(member_b.id),
         ).status_code
         == 404
     )
@@ -152,6 +212,7 @@ def test_get_document_requires_matching_organization_context(client):
         client.get(
             f"/api/v1/knowledge/documents/{document['id']}",
             params={"organization_id": org_a["id"]},
+            headers=dev_auth_headers(member_a.id),
         ).status_code
         == 200
     )

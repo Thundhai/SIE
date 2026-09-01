@@ -10,9 +10,11 @@ from app.services.knowledge_document_version_service import (
 )
 from app.services.knowledge_provenance_service import get_chunk_provenance
 from app.services.knowledge_source_service import knowledge_source_service
+from tests.conftest import dev_auth_headers
+from tests.intelligence_test_helpers import make_platform_admin_user
 
 
-def create_global_source(client):
+def create_global_source(client, admin):
     return client.post(
         "/api/v1/knowledge/sources",
         json={
@@ -21,18 +23,20 @@ def create_global_source(client):
             "name": "29 CFR 1910",
             "source_type": "regulation",
         },
+        headers=dev_auth_headers(admin.id),
     ).json()
 
 
-def create_document(client, source_id, **overrides):
+def create_document(client, source_id, admin, **overrides):
     payload = {"source_id": source_id, "title": "1910.147", "document_type": "regulation_text"}
     payload.update(overrides)
-    return client.post("/api/v1/knowledge/documents", json=payload).json()
+    return client.post("/api/v1/knowledge/documents", json=payload, headers=dev_auth_headers(admin.id)).json()
 
 
-def test_create_document_version(client):
-    source = create_global_source(client)
-    document = create_document(client, source["id"])
+def test_create_document_version(client, db_session):
+    admin = make_platform_admin_user(db_session)
+    source = create_global_source(client, admin)
+    document = create_document(client, source["id"], admin)
 
     response = client.post(
         f"/api/v1/knowledge/documents/{document['id']}/versions",
@@ -41,6 +45,7 @@ def test_create_document_version(client):
             "content_hash": "hash-1",
             "storage_reference": "placeholder://knowledge/1910.147/v1",
         },
+        headers=dev_auth_headers(admin.id),
     )
 
     assert response.status_code == 201
@@ -50,9 +55,10 @@ def test_create_document_version(client):
     assert body["superseded_at"] is None
 
 
-def test_new_version_becomes_current_and_supersedes_the_previous_one(client):
-    source = create_global_source(client)
-    document = create_document(client, source["id"])
+def test_new_version_becomes_current_and_supersedes_the_previous_one(client, db_session):
+    admin = make_platform_admin_user(db_session)
+    source = create_global_source(client, admin)
+    document = create_document(client, source["id"], admin)
 
     v1 = client.post(
         f"/api/v1/knowledge/documents/{document['id']}/versions",
@@ -61,6 +67,7 @@ def test_new_version_becomes_current_and_supersedes_the_previous_one(client):
             "content_hash": "hash-1",
             "storage_reference": "placeholder://v1",
         },
+        headers=dev_auth_headers(admin.id),
     ).json()
 
     v2 = client.post(
@@ -70,63 +77,85 @@ def test_new_version_becomes_current_and_supersedes_the_previous_one(client):
             "content_hash": "hash-2",
             "storage_reference": "placeholder://v2",
         },
+        headers=dev_auth_headers(admin.id),
     ).json()
 
-    refetched_document = client.get(f"/api/v1/knowledge/documents/{document['id']}").json()
+    refetched_document = client.get(
+        f"/api/v1/knowledge/documents/{document['id']}", headers=dev_auth_headers(admin.id)
+    ).json()
     assert refetched_document["current_version_id"] == v2["id"]
 
-    versions = client.get(f"/api/v1/knowledge/documents/{document['id']}/versions").json()
+    versions = client.get(
+        f"/api/v1/knowledge/documents/{document['id']}/versions", headers=dev_auth_headers(admin.id)
+    ).json()
     by_id = {v["id"]: v for v in versions}
     assert by_id[v1["id"]]["superseded_at"] is not None
     assert by_id[v2["id"]]["superseded_at"] is None
 
 
-def test_list_document_versions(client):
-    source = create_global_source(client)
-    document = create_document(client, source["id"])
+def test_list_document_versions(client, db_session):
+    admin = make_platform_admin_user(db_session)
+    source = create_global_source(client, admin)
+    document = create_document(client, source["id"], admin)
     client.post(
         f"/api/v1/knowledge/documents/{document['id']}/versions",
         json={"version_label": "v1", "content_hash": "hash-1", "storage_reference": "ref-1"},
+        headers=dev_auth_headers(admin.id),
     )
     client.post(
         f"/api/v1/knowledge/documents/{document['id']}/versions",
         json={"version_label": "v2", "content_hash": "hash-2", "storage_reference": "ref-2"},
+        headers=dev_auth_headers(admin.id),
     )
 
-    response = client.get(f"/api/v1/knowledge/documents/{document['id']}/versions")
+    response = client.get(
+        f"/api/v1/knowledge/documents/{document['id']}/versions", headers=dev_auth_headers(admin.id)
+    )
 
     assert response.status_code == 200
     assert len(response.json()) == 2
 
 
-def test_duplicate_content_hash_is_idempotent_not_duplicated(client):
-    source = create_global_source(client)
-    document = create_document(client, source["id"])
+def test_duplicate_content_hash_is_idempotent_not_duplicated(client, db_session):
+    admin = make_platform_admin_user(db_session)
+    source = create_global_source(client, admin)
+    document = create_document(client, source["id"], admin)
     payload = {
         "version_label": "v1",
         "content_hash": "same-hash",
         "storage_reference": "placeholder://v1",
     }
 
-    first = client.post(f"/api/v1/knowledge/documents/{document['id']}/versions", json=payload)
-    second = client.post(f"/api/v1/knowledge/documents/{document['id']}/versions", json=payload)
+    first = client.post(
+        f"/api/v1/knowledge/documents/{document['id']}/versions", json=payload, headers=dev_auth_headers(admin.id)
+    )
+    second = client.post(
+        f"/api/v1/knowledge/documents/{document['id']}/versions", json=payload, headers=dev_auth_headers(admin.id)
+    )
 
     assert first.status_code == 201
     assert second.status_code == 201
     assert first.json()["id"] == second.json()["id"]
 
-    versions = client.get(f"/api/v1/knowledge/documents/{document['id']}/versions").json()
+    versions = client.get(
+        f"/api/v1/knowledge/documents/{document['id']}/versions", headers=dev_auth_headers(admin.id)
+    ).json()
     assert len(versions) == 1
 
 
-def test_different_documents_may_share_a_content_hash(client):
-    source = create_global_source(client)
-    doc_a = create_document(client, source["id"], title="Doc A")
-    doc_b = create_document(client, source["id"], title="Doc B")
+def test_different_documents_may_share_a_content_hash(client, db_session):
+    admin = make_platform_admin_user(db_session)
+    source = create_global_source(client, admin)
+    doc_a = create_document(client, source["id"], admin, title="Doc A")
+    doc_b = create_document(client, source["id"], admin, title="Doc B")
     payload = {"version_label": "v1", "content_hash": "shared-hash", "storage_reference": "ref"}
 
-    response_a = client.post(f"/api/v1/knowledge/documents/{doc_a['id']}/versions", json=payload)
-    response_b = client.post(f"/api/v1/knowledge/documents/{doc_b['id']}/versions", json=payload)
+    response_a = client.post(
+        f"/api/v1/knowledge/documents/{doc_a['id']}/versions", json=payload, headers=dev_auth_headers(admin.id)
+    )
+    response_b = client.post(
+        f"/api/v1/knowledge/documents/{doc_b['id']}/versions", json=payload, headers=dev_auth_headers(admin.id)
+    )
 
     assert response_a.status_code == 201
     assert response_b.status_code == 201

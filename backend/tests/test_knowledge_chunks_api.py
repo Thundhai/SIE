@@ -15,7 +15,8 @@ from app.models.enums import ScopeType
 from app.schemas.knowledge_source import KnowledgeSourceCreate
 from app.services.ingestion_service import ingestion_service
 from app.services.knowledge_source_service import knowledge_source_service
-from tests.conftest import load_fixture
+from tests.conftest import dev_auth_headers, load_fixture
+from tests.intelligence_test_helpers import make_org_member, make_platform_admin_user
 
 
 def create_org(client, name="Acme Industrial"):
@@ -60,9 +61,11 @@ def ingest(db_session, source, organization_id=None, filename="sample_procedure.
 def test_list_chunks_for_a_global_document_version(client, db_session):
     source = make_global_source(db_session)
     outcome = ingest(db_session, source)
+    admin = make_platform_admin_user(db_session)
 
     response = client.get(
-        f"/api/v1/knowledge/documents/{outcome.document.id}/versions/{outcome.version_id}/chunks"
+        f"/api/v1/knowledge/documents/{outcome.document.id}/versions/{outcome.version_id}/chunks",
+        headers=dev_auth_headers(admin.id),
     )
 
     assert response.status_code == 200
@@ -90,10 +93,12 @@ def test_list_chunks_for_an_organization_document_requires_the_right_organizatio
     org = create_org(client)
     source = make_org_source(db_session, org["id"])
     outcome = ingest(db_session, source, organization_id=org["id"])
+    member = make_org_member(db_session, uuid.UUID(org["id"]))
 
     ok = client.get(
         f"/api/v1/knowledge/documents/{outcome.document.id}/versions/{outcome.version_id}/chunks",
         params={"organization_id": org["id"]},
+        headers=dev_auth_headers(member.id),
     )
     assert ok.status_code == 200
     assert len(ok.json()) == outcome.chunk_count
@@ -103,9 +108,11 @@ def test_list_chunks_404s_without_organization_id_for_an_org_scoped_document(cli
     org = create_org(client)
     source = make_org_source(db_session, org["id"])
     outcome = ingest(db_session, source, organization_id=org["id"])
+    member = make_org_member(db_session, uuid.UUID(org["id"]))
 
     response = client.get(
-        f"/api/v1/knowledge/documents/{outcome.document.id}/versions/{outcome.version_id}/chunks"
+        f"/api/v1/knowledge/documents/{outcome.document.id}/versions/{outcome.version_id}/chunks",
+        headers=dev_auth_headers(member.id),
     )
     assert response.status_code == 404
 
@@ -118,10 +125,12 @@ def test_list_chunks_404s_for_a_different_organizations_id(client, db_session):
     org_b = create_org(client, name="Globex Corp")
     source = make_org_source(db_session, org_a["id"])
     outcome = ingest(db_session, source, organization_id=org_a["id"])
+    member_b = make_org_member(db_session, uuid.UUID(org_b["id"]))
 
     response = client.get(
         f"/api/v1/knowledge/documents/{outcome.document.id}/versions/{outcome.version_id}/chunks",
         params={"organization_id": org_b["id"]},
+        headers=dev_auth_headers(member_b.id),
     )
     assert response.status_code == 404
 
@@ -130,18 +139,32 @@ def test_list_chunks_404s_for_a_version_belonging_to_a_different_document(client
     source = make_global_source(db_session)
     outcome_a = ingest(db_session, source, filename="sample_ppe_policy.txt")
     outcome_b = ingest(db_session, source, filename="sample_evacuation.rtf")
+    admin = make_platform_admin_user(db_session)
 
     # document_a's id, but version_b's id — must not leak document_b's
     # version/chunks just because both belong to the same source.
     response = client.get(
         "/api/v1/knowledge/documents/"
-        f"{outcome_a.document.id}/versions/{outcome_b.version_id}/chunks"
+        f"{outcome_a.document.id}/versions/{outcome_b.version_id}/chunks",
+        headers=dev_auth_headers(admin.id),
     )
     assert response.status_code == 404
 
 
-def test_list_chunks_404s_for_an_unknown_document(client):
+def test_list_chunks_404s_for_an_unknown_document(client, db_session):
+    admin = make_platform_admin_user(db_session)
     response = client.get(
-        f"/api/v1/knowledge/documents/{uuid.uuid4()}/versions/{uuid.uuid4()}/chunks"
+        f"/api/v1/knowledge/documents/{uuid.uuid4()}/versions/{uuid.uuid4()}/chunks",
+        headers=dev_auth_headers(admin.id),
     )
     assert response.status_code == 404
+
+
+def test_list_chunks_requires_authentication(client, db_session):
+    source = make_global_source(db_session)
+    outcome = ingest(db_session, source)
+
+    response = client.get(
+        f"/api/v1/knowledge/documents/{outcome.document.id}/versions/{outcome.version_id}/chunks"
+    )
+    assert response.status_code == 401

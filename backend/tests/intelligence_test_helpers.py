@@ -15,7 +15,10 @@ from app.models.organization import Organization
 from app.models.safety_event import SafetyEvent
 from app.models.site import Site
 from app.models.user import User
+from app.schemas.organization_membership import OrganizationMembershipCreate
 from app.schemas.user import UserCreate
+from app.services.membership_service import membership_service
+from app.services.permissions import PLATFORM_ADMIN, OrganizationRole
 from app.services.user_service import user_service
 
 
@@ -76,6 +79,27 @@ def make_reviewer_user(db_session: Session, name: str = "Reviewer") -> User:
     `reject()`, which require a genuine `reviewer_user_id` (milestone item
     23: the model can never approve itself) — not just any UUID."""
     return user_service.create(db_session, obj_in=UserCreate(email=f"{uuid.uuid4().hex}@example.com", name=name))
+
+
+def make_platform_admin_user(db_session: Session, name: str = "Platform Admin") -> User:
+    """A `User` with `platform_role == PLATFORM_ADMIN` — the one identity
+    that can write GLOBAL knowledge (see `app/api/v1/knowledge.py`'s own
+    docstring, mirroring `app/api/v1/ingestion.py`'s established rule)."""
+    user = user_service.create(db_session, obj_in=UserCreate(email=f"{uuid.uuid4().hex}@example.com", name=name))
+    return user_service.set_platform_role(db_session, user=user, platform_role=PLATFORM_ADMIN)
+
+
+def make_org_member(
+    db_session: Session, organization_id: uuid.UUID, *, role: OrganizationRole = OrganizationRole.ORG_ADMIN, name: str = "Member"
+) -> User:
+    """A `User` with an ACTIVE `OrganizationMembership` in `organization_id`
+    under `role` — the general-purpose "an authenticated, authorized human
+    caller" fixture every HTTP-layer test in this suite needs."""
+    user = user_service.create(db_session, obj_in=UserCreate(email=f"{uuid.uuid4().hex}@example.com", name=name))
+    membership_service.create(
+        db_session, organization_id=organization_id, obj_in=OrganizationMembershipCreate(user_id=user.id, role=role)
+    )
+    return user
 
 
 def make_raw_payload(**overrides) -> RawSafetyEventPayload:
