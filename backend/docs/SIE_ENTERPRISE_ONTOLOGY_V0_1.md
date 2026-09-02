@@ -252,6 +252,44 @@ platform-admin review this whole module gates, exactly like a
 `TerminologyMappingDecision.rationale` string's own quality is never
 algorithmically checked, only gated by authorization.
 
+**Durable artifact application & semantic conflict detection** (corrective
+commit: "Ontology Artifact Semantic Conflict Detection v0.1").
+`backend/config/enterprise_ontology_concepts_v1.json` is applied through
+`app/services/ontology_concept_artifact_service.py`, which drives every
+`APPROVED` entry through this exact `propose_concept()`/`approve_concept()`
+lifecycle — never a second, parallel system. Re-running the apply
+function is safe, but safety here means something specific:
+
+> **Artifact application is idempotent only when an existing approved
+> concept matches the artifact's semantic definition. A same-key concept
+> with conflicting semantic content raises an explicit artifact conflict
+> and is not overwritten.**
+
+A same `(layer, parent_domain, concept_key)` scope key is never, by
+itself, treated as proof of a same ontology meaning:
+
+- **same key + same meaning** — an existing `APPROVED` concept whose
+  `definition`, `ontology_version`, and justification content match the
+  artifact entry — a genuine no-op, counted as `already_satisfied`,
+  never re-approved, never duplicated;
+- **same key + conflicting meaning** — an existing concept at that same
+  scope key that is not `APPROVED` (still `PROPOSED`, or terminally
+  `REJECTED`/`DEPRECATED`), or is `APPROVED` but whose `definition`,
+  `ontology_version`, or justification content differs from the
+  artifact — raises `OntologyConceptArtifactConflictError` immediately.
+  The existing database row is always left completely untouched: this
+  is never resolved automatically in either direction ("database wins"
+  and "artifact wins" are both refused) — a human platform administrator
+  must resolve the conflict explicitly through the governance service.
+
+This mirrors `terminology_decision_artifact_service.py`'s own
+`TerminologyDecisionArtifactConflictError` pattern for the identical
+reason: fail loudly rather than silently reinterpret, overwrite, or
+bypass an already-governed decision. See
+`tests/test_ontology_concept_artifact.py`'s own semantic-conflict,
+version-conflict, and REJECTED/DEPRECATED-lifecycle-protection tests for
+the verified behavior.
+
 ## 6. Versioning
 
 - **`ontology_version`** (an `int` on every `OntologyConcept` row)

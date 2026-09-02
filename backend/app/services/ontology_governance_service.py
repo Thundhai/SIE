@@ -328,6 +328,25 @@ def deprecate_concept(db: Session, *, concept_id: uuid.UUID, acting_user_id: uui
     return concept
 
 
+def get_concept_by_scope(db: Session, *, layer: str, parent_domain: str | None, concept_key: str) -> OntologyConcept | None:
+    """Returns the concept at `(layer, parent_domain, concept_key)`,
+    whatever its status -- unlike `is_valid_concept()`, which only
+    answers whether an `APPROVED` concept exists there. Used by
+    `ontology_concept_artifact_service.py` to distinguish "same scope
+    key, same semantic meaning" (an existing `APPROVED` concept whose
+    definition/version genuinely matches the durable artifact) from
+    "same scope key, conflicting meaning" (an existing row of ANY status
+    whose content does not) -- a same scope key alone is never
+    sufficient to treat a re-application of the artifact as a no-op."""
+    return db.execute(
+        select(OntologyConcept).where(
+            OntologyConcept.layer == layer,
+            OntologyConcept.parent_domain == parent_domain,
+            OntologyConcept.concept_key == concept_key,
+        )
+    ).scalar_one_or_none()
+
+
 def is_valid_concept(db: Session, *, layer: str, parent_domain: str | None, concept_key: str) -> bool:
     """Whether `(layer, parent_domain, concept_key)` is currently an
     `APPROVED` ontology concept -- the one boolean a *future*
@@ -372,6 +391,7 @@ __all__ = [
     "OntologyConceptStateError",
     "approve_concept",
     "deprecate_concept",
+    "get_concept_by_scope",
     "is_valid_concept",
     "list_concepts",
     "propose_concept",

@@ -33,14 +33,45 @@ one of these newly-approved concepts is explicitly deferred to a future
 milestone (see `docs/SIE_ENTERPRISE_ONTOLOGY_V0_1.md`'s own "Terminology
 mapping relationship" section).
 
-**Idempotent.** Re-running this function is safe: `propose_concept()`
-itself raises `OntologyConceptConflictError` for a scope key that
-already has a row (whatever its status), which this function catches
-per-entry and treats as "already applied" -- an `APPROVED` concept
-already matching the artifact is left untouched, never re-approved,
-never duplicated. A conflicting existing concept (same scope key, a
-genuinely different definition/status) still raises loudly, exactly
-like the terminology decision artifact's own conflict handling.
+**Idempotent -- semantically, not merely by key.** Re-running this
+function is safe, but "safe" here means something specific: a same
+scope key does not, by itself, mean a same ontology meaning. For every
+`APPROVED` artifact entry, this function looks up any existing concept
+at that entry's exact `(layer, parent_domain, concept_key)` scope
+(`ontology_governance_service.get_concept_by_scope()`, which -- unlike
+`is_valid_concept()` -- returns a row of ANY status) and applies:
+
+  * **no existing row** -- proposed and approved fresh, via
+    `propose_concept()`/`approve_concept()`, exactly as a human platform
+    administrator would call them by hand;
+  * **an existing `APPROVED` row whose semantic content matches** the
+    artifact entry (`definition`, `ontology_version`, and the artifact's
+    own justification text as a substring of the persisted
+    justification -- see `_verify_matches_or_conflict()`) -- a genuine
+    no-op, counted as `already_satisfied`, never re-approved, never
+    duplicated;
+  * **an existing `APPROVED` row whose semantic content differs** (a
+    different `definition` or `ontology_version`, or a justification
+    that no longer contains the artifact's own text) -- raises
+    `OntologyConceptArtifactConflictError` immediately. The existing
+    database row is left completely untouched: this function never
+    resolves such a conflict itself, in either direction (never "database
+    wins", never "artifact wins") -- a human platform administrator must
+    resolve it explicitly through the governance service;
+  * **an existing `REJECTED` or `DEPRECATED` row** -- also raises
+    `OntologyConceptArtifactConflictError`, never silently reinterpreted
+    as if it were an `APPROVED` match and never re-approved/recreated;
+    governance already decided this scope key's fate and that decision
+    is never bypassed merely because the artifact says `APPROVED`;
+  * **an existing `PROPOSED` row** (e.g. from an interrupted prior
+    application) -- also raises `OntologyConceptArtifactConflictError`;
+    resuming a partial application is a deliberate governance act, not
+    something this function silently completes on its own.
+
+This exactly mirrors `terminology_decision_artifact_service.py`'s own
+`TerminologyDecisionArtifactConflictError`/`_verify_matches_or_raise()`
+pattern, for the identical reason: fail loudly rather than silently
+reinterpret, overwrite, or bypass an already-governed decision.
 
 **Authorization.** Delegates entirely to `ontology_governance_service.py`'s
 own platform-admin-only enforcement (`GOVERNANCE_MANAGE`,
@@ -59,6 +90,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.models.ontology_concept import OntologyConcept, OntologyConceptStatus
 from app.services import ontology_governance_service as ogs
 
 #: `backend/config/enterprise_ontology_concepts_v1.json` -- resolved
@@ -70,6 +102,24 @@ DEFAULT_ARTIFACT_PATH = Path(__file__).resolve().parents[2] / "config" / "enterp
 
 class OntologyConceptArtifactFormatError(ValueError):
     """Raised for a structurally invalid artifact file."""
+
+
+class OntologyConceptArtifactConflictError(ValueError):
+    """Raised when an existing `OntologyConcept` row at an artifact
+    entry's exact `(layer, parent_domain, concept_key)` scope does not
+    represent the same ontology meaning as the artifact declares --
+    either because it is not `APPROVED` (a `REJECTED`, `DEPRECATED`, or
+    still-`PROPOSED` row can never silently stand in for the artifact's
+    `APPROVED` entry) or because an `APPROVED` row's own semantic
+    content (`definition`, `ontology_version`, or justification) differs
+    from what the artifact declares for that same key. Same scope key
+    does not mean same ontology meaning -- this is deliberately never
+    resolved automatically in either direction (never "database wins",
+    never "artifact wins"); the existing database row is always left
+    completely untouched, and a human platform administrator must
+    resolve the conflict explicitly through the governance service. The
+    message identifies the scope key and the conflicting field(s) only
+    -- never the full persisted row and never any PII."""
 
 
 @dataclass
@@ -105,6 +155,50 @@ def _load_artifact(path: Path) -> dict[str, Any]:
     return data
 
 
+def _verify_matches_or_conflict(
+    existing: OntologyConcept,
+    *,
+    layer: str,
+    parent_domain: str | None,
+    concept_key: str,
+    definition: str,
+    justification: str,
+    ontology_version: int,
+) -> None:
+    """Raises `OntologyConceptArtifactConflictError` unless `existing` is
+    an `APPROVED` concept whose semantic content matches the artifact
+    entry -- see this module's own docstring ("Idempotent -- semantically,
+    not merely by key") for the full rationale. Never mutates `existing`;
+    a conflict here is reported, never repaired."""
+    scope = f"layer={layer!r} parent_domain={parent_domain!r} concept_key={concept_key!r}"
+
+    if existing.status != OntologyConceptStatus.APPROVED:
+        raise OntologyConceptArtifactConflictError(
+            f"Ontology artifact conflict: {scope} -- existing concept {existing.id} is "
+            f"{existing.status}, not APPROVED. The artifact declares this scope APPROVED, but a "
+            "REJECTED, DEPRECATED, or still-PROPOSED concept can never silently satisfy an APPROVED "
+            "artifact entry merely because the scope key matches; governance already decided this "
+            "concept's fate and that decision is never bypassed here."
+        )
+
+    conflicting_fields: list[str] = []
+    if existing.definition != definition:
+        conflicting_fields.append("definition")
+    if existing.ontology_version != ontology_version:
+        conflicting_fields.append("ontology_version")
+    if justification and justification not in (existing.justification or ""):
+        conflicting_fields.append("justification")
+
+    if conflicting_fields:
+        raise OntologyConceptArtifactConflictError(
+            f"Ontology artifact conflict: {scope} -- existing APPROVED concept {existing.id} has "
+            f"different semantic content than the durable artifact declares for this same scope key "
+            f"(conflicting field(s): {', '.join(conflicting_fields)}). Same scope key does not mean "
+            "same ontology meaning -- refusing to silently accept or overwrite the existing concept; "
+            "resolve manually through ontology governance."
+        )
+
+
 def apply_ontology_concept_artifact(
     db: Session, *, acting_user_id: uuid.UUID, artifact_path: str | Path | None = None,
 ) -> OntologyArtifactApplyResult:
@@ -134,22 +228,27 @@ def apply_ontology_concept_artifact(
             result.documented_no_concept += 1
             continue
 
-        if ogs.is_valid_concept(db, layer=layer, parent_domain=parent_domain, concept_key=concept_key):
+        definition: str = entry.get("definition") or ""
+        justification: str = entry.get("why_new_concept_required") or ""
+
+        existing = ogs.get_concept_by_scope(db, layer=layer, parent_domain=parent_domain, concept_key=concept_key)
+
+        if existing is not None:
+            # Same scope key does not mean same ontology meaning --
+            # raises OntologyConceptArtifactConflictError unless
+            # `existing` is APPROVED and semantically identical to this
+            # artifact entry. Never mutates `existing` either way.
+            _verify_matches_or_conflict(
+                existing, layer=layer, parent_domain=parent_domain, concept_key=concept_key,
+                definition=definition, justification=justification, ontology_version=ontology_version,
+            )
             result.already_satisfied += 1
-            existing = ogs.list_concepts(db, layer=layer, parent_domain=parent_domain, status="APPROVED")
-            match = next(c for c in existing if c.concept_key == concept_key)
-            result.concept_ids[scope_key] = match.id
+            result.concept_ids[scope_key] = existing.id
             continue
 
-        # A row already exists at this scope but is not (yet, or ever)
-        # APPROVED -- e.g. PROPOSED from an interrupted prior
-        # application, or REJECTED/DEPRECATED -- surfaces here as
-        # OntologyConceptConflictError, propagated as-is: never silently
-        # reinterpreted, the caller sees the existing row's own state.
         proposed = ogs.propose_concept(
             db, layer=layer, parent_domain=parent_domain, concept_key=concept_key,
-            definition=entry.get("definition") or "", justification=entry.get("why_new_concept_required") or "",
-            acting_user_id=acting_user_id,
+            definition=definition, justification=justification, acting_user_id=acting_user_id,
         )
 
         approved = ogs.approve_concept(
@@ -164,6 +263,7 @@ def apply_ontology_concept_artifact(
 __all__ = [
     "DEFAULT_ARTIFACT_PATH",
     "OntologyArtifactApplyResult",
+    "OntologyConceptArtifactConflictError",
     "OntologyConceptArtifactFormatError",
     "apply_ontology_concept_artifact",
 ]
