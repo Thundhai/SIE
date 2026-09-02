@@ -451,11 +451,16 @@ def _evaluate_predictive_readiness(
     horizon_closed = (as_of + timedelta(days=horizon_days)) <= reference_now
 
     for site_id in site_ids:
-        earliest = db.execute(
-            select(func.min(SafetyEvent.event_time)).where(
-                SafetyEvent.organization_id == organization_id, SafetyEvent.site_id == site_id
-            )
-        ).scalar_one()
+        # Point-in-time correct, not just event_time-filtered: reuses
+        # events_as_of()'s own `ingestion_time <= as_of` guarantee
+        # (app/intelligence/temporal.py, UNCHANGED) rather than querying
+        # SafetyEvent directly, so a site's earliest-known-history and
+        # eligibility both describe what was actually knowable to SIE as
+        # of `as_of` -- never a historical event that only became known
+        # later (see this milestone's own retrospective-vs-point-in-time
+        # distinction, TemporalIntegrityReport's own note).
+        visible_at_as_of = events_as_of(organization_id=organization_id, as_of=as_of, site_id=site_id).subquery()
+        earliest = db.execute(select(func.min(visible_at_as_of.c.event_time))).scalar_one()
         if earliest is None:
             report.excluded_sites += 1
             report.exclusion_reasons["NO_HISTORICAL_DATA"] = report.exclusion_reasons.get("NO_HISTORICAL_DATA", 0) + 1
@@ -476,12 +481,13 @@ def _evaluate_predictive_readiness(
         coverage_days = (as_of.replace(tzinfo=None) - earliest.replace(tzinfo=None)).total_seconds() / 86400
         report.historical_time_coverage_days[str(site_id)] = round(coverage_days, 1)
 
-        qualifying = db.execute(
-            select(func.count()).select_from(SafetyEvent).where(
-                SafetyEvent.organization_id == organization_id, SafetyEvent.site_id == site_id,
-                SafetyEvent.event_type == QUALIFYING_EVENT_TYPE, SafetyEvent.event_time <= as_of,
-            )
-        ).scalar_one()
+        # Same point-in-time guarantee as `earliest` above -- a qualifying
+        # incident that happened before `as_of` but was only ingested
+        # afterward must not be counted as knowable at `as_of` either.
+        qualifying_at_as_of = events_as_of(
+            organization_id=organization_id, as_of=as_of, site_id=site_id, event_type=QUALIFYING_EVENT_TYPE
+        ).subquery()
+        qualifying = db.execute(select(func.count()).select_from(qualifying_at_as_of)).scalar_one()
         report.qualifying_incidents += qualifying
 
         if example.label == 1:
@@ -659,6 +665,17 @@ def _distinct_site_ids(db: Session, organization_id: uuid.UUID, result: Enterpri
 # --- Item 8: queuing this harness's own findings for HSE expert review ------------------------
 
 
+class ReportOrganizationMismatchError(ValueError):
+    """Raised by `queue_review_candidates()` when the caller's
+    `organization_id` does not match the `organization_id` the supplied
+    `report` was actually generated for. Rejecting this immediately,
+    before any row is written, is the tenant-boundary guarantee every
+    other resource in this codebase already enforces — a report from one
+    organization must never be usable to write `HseExpertReview` rows
+    into another's queue, even though the underlying service-layer reads/
+    writes are themselves correctly tenant-scoped."""
+
+
 def queue_review_candidates(
     db: Session,
     *,
@@ -676,7 +693,20 @@ def queue_review_candidates(
     **evaluation mechanism only** — this function only ever creates
     pending (`outcome=None`) rows; nothing reads them back and changes
     ingestion, mapping, or intelligence behavior (see
-    `app/models/hse_expert_review.py`'s own docstring)."""
+    `app/models/hse_expert_review.py`'s own docstring).
+
+    Raises `ReportOrganizationMismatchError` immediately, before any
+    review row is created, if `report.organization_id` does not match
+    `organization_id` — a caller must never be able to queue one
+    organization's provenance/findings under another organization's
+    review queue (see that exception's own docstring)."""
+    if report.organization_id != organization_id:
+        raise ReportOrganizationMismatchError(
+            f"report.organization_id ({report.organization_id!s}) does not match the "
+            f"organization_id this call was made for ({organization_id!s}) -- refusing to "
+            "queue any review candidates."
+        )
+
     queued = []
 
     for entry in report.terminology_entries:
@@ -696,9 +726,16 @@ def queue_review_candidates(
             )
         )
 
+    # organization_id constrained explicitly here too (defense in depth,
+    # on top of the whole-report check above) -- EnterpriseIngestionRecord
+    # carries its own organization_id (denormalized, also reachable via
+    # batch_id -> batch.organization_id; see that model's own docstring),
+    # so this query's tenant ownership never depends on batch_id alone.
     quarantined_records = db.execute(
         select(EnterpriseIngestionRecord).where(
-            EnterpriseIngestionRecord.batch_id == report.batch_id, EnterpriseIngestionRecord.quality_state == "QUARANTINED",
+            EnterpriseIngestionRecord.batch_id == report.batch_id,
+            EnterpriseIngestionRecord.organization_id == organization_id,
+            EnterpriseIngestionRecord.quality_state == "QUARANTINED",
         )
     ).scalars().all()
     for record in quarantined_records:

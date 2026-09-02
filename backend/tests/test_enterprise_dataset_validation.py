@@ -20,11 +20,18 @@ the identical, already-established rationale.
 
 import dataclasses
 
+import pytest
+
+from app.intelligence.enterprise_ingestion import enterprise_ingestion_service
+from app.intelligence.schemas import RawSafetyEventPayload
 from app.intelligence.terminology_review import TerminologyReviewStatus
 from app.models.organization import Organization
+from app.models.safety_event import SafetyEvent
 from app.models.site import Site
 from app.services import hse_review_service
 from app.validation.enterprise_dataset_validation import (
+    ReportOrganizationMismatchError,
+    _evaluate_predictive_readiness,
     queue_review_candidates,
     run_enterprise_dataset_validation,
 )
@@ -351,3 +358,134 @@ def test_report_renders_cleanly_and_never_claims_predictive_accuracy(pg_session)
     payload = to_dict(report)
     assert payload["label"] == report.label
     assert isinstance(payload["terminology_entries"], list)
+
+
+# --- Audit correction 1: predictive readiness must preserve point-in-time semantics ----------
+
+
+@requires_postgres
+def test_predictive_readiness_never_reflects_events_ingested_after_the_requested_as_of(pg_session):
+    """The audit's own worked example: (1) an event with an old
+    event_time, (2) whose ingestion_time is later, (3) evaluated at an
+    as_of between the two. Proves genuine point-in-time behavior at TWO
+    different as_of values -- not merely the final, current-time result:
+    at the earlier as_of the late-ingested event must not move historical
+    coverage backward or count toward qualifying incidents; only once
+    as_of >= its own ingestion_time does it become visible."""
+    from datetime import datetime, timezone
+
+    org_id, site_id = _make_org_and_site(pg_session, "Milestone3 - Predictive Readiness Point-in-Time")
+
+    # Promptly ingested -- knowable well before either as_of below.
+    known_payload = RawSafetyEventPayload(
+        event_type="INCIDENT", event_time="2020-01-20T00:00:00Z", site_id=site_id,
+        source_system="pit-test", source_record_id="KNOWN-001",
+    )
+    known_result = enterprise_ingestion_service.ingest_batch(
+        pg_session, organization_id=org_id, source_id=None, payloads=[known_payload]
+    )
+    known_event = pg_session.get(SafetyEvent, known_result.records[0].canonical_event_id)
+    known_event.ingestion_time = datetime(2020, 1, 21, tzinfo=timezone.utc)
+    pg_session.commit()
+
+    # The audit's own scenario: event_time is older than KNOWN's, but
+    # this record only reaches SIE much later -- a real, if extreme,
+    # late-arriving report.
+    late_payload = RawSafetyEventPayload(
+        event_type="INCIDENT", event_time="2020-01-05T00:00:00Z", site_id=site_id,
+        source_system="pit-test", source_record_id="LATE-001",
+    )
+    late_result = enterprise_ingestion_service.ingest_batch(
+        pg_session, organization_id=org_id, source_id=None, payloads=[late_payload]
+    )
+    late_event = pg_session.get(SafetyEvent, late_result.records[0].canonical_event_id)
+    late_event.ingestion_time = datetime(2020, 2, 15, tzinfo=timezone.utc)
+    pg_session.commit()
+
+    as_of_between = datetime(2020, 2, 1, tzinfo=timezone.utc)  # after LATE's event_time, before its ingestion_time
+    as_of_after = datetime(2020, 2, 20, tzinfo=timezone.utc)  # after LATE's ingestion_time too
+
+    report_between = _evaluate_predictive_readiness(
+        pg_session, organization_id=org_id, site_ids=[site_id], as_of=as_of_between
+    )
+    # LATE is not yet knowable: only KNOWN counts, and KNOWN's own
+    # event_time (the later of the two) is what coverage is measured from.
+    assert report_between.eligible_sites == 1
+    assert report_between.qualifying_incidents == 1
+    assert report_between.historical_time_coverage_days[str(site_id)] == pytest.approx(12.0, abs=0.1)
+
+    report_after = _evaluate_predictive_readiness(
+        pg_session, organization_id=org_id, site_ids=[site_id], as_of=as_of_after
+    )
+    # LATE has now been ingested (as_of_after >= its ingestion_time):
+    # both count, and coverage now correctly reaches back to LATE's own,
+    # earlier event_time.
+    assert report_after.eligible_sites == 1
+    assert report_after.qualifying_incidents == 2
+    assert report_after.historical_time_coverage_days[str(site_id)] == pytest.approx(46.0, abs=0.1)
+
+
+@requires_postgres
+def test_a_site_visible_only_via_a_not_yet_ingested_event_is_excluded_at_the_earlier_as_of(pg_session):
+    """Site eligibility itself must follow the same point-in-time rule:
+    a site whose only event has not yet been ingested as of the
+    requested as_of must be excluded (NO_HISTORICAL_DATA), not treated
+    as eligible with zero coverage."""
+    from datetime import datetime, timezone
+
+    org_id, site_id = _make_org_and_site(pg_session, "Milestone3 - Site Eligibility Point-in-Time")
+
+    payload = RawSafetyEventPayload(
+        event_type="INCIDENT", event_time="2020-01-05T00:00:00Z", site_id=site_id,
+        source_system="pit-test", source_record_id="ONLY-001",
+    )
+    result = enterprise_ingestion_service.ingest_batch(
+        pg_session, organization_id=org_id, source_id=None, payloads=[payload]
+    )
+    event = pg_session.get(SafetyEvent, result.records[0].canonical_event_id)
+    event.ingestion_time = datetime(2020, 2, 15, tzinfo=timezone.utc)
+    pg_session.commit()
+
+    as_of_before_ingestion = datetime(2020, 2, 1, tzinfo=timezone.utc)
+    report_before = _evaluate_predictive_readiness(
+        pg_session, organization_id=org_id, site_ids=[site_id], as_of=as_of_before_ingestion
+    )
+    assert report_before.eligible_sites == 0
+    assert report_before.excluded_sites == 1
+    assert report_before.exclusion_reasons.get("NO_HISTORICAL_DATA") == 1
+
+    as_of_after_ingestion = datetime(2020, 2, 20, tzinfo=timezone.utc)
+    report_after = _evaluate_predictive_readiness(
+        pg_session, organization_id=org_id, site_ids=[site_id], as_of=as_of_after_ingestion
+    )
+    assert report_after.eligible_sites == 1
+    assert report_after.excluded_sites == 0
+
+
+# --- Audit correction 2: queue_review_candidates() must enforce a report/org match -----------
+
+
+@requires_postgres
+def test_queue_review_candidates_rejects_a_report_from_a_different_organization(pg_session):
+    org_a, site_a = _make_org_and_site(pg_session, "Milestone3 - Mismatch Org A")
+    org_b, _site_b = _make_org_and_site(pg_session, "Milestone3 - Mismatch Org B")
+
+    dataset_a = build_messy_dataset(primary_site_id=site_a)
+    report_a = run_enterprise_dataset_validation(
+        pg_session, organization_id=org_a, payloads=dataset_a.events, label=SYNTHETIC_LABEL
+    )
+    assert report_a.organization_id == org_a
+
+    with pytest.raises(ReportOrganizationMismatchError):
+        queue_review_candidates(pg_session, organization_id=org_b, report=report_a)
+
+    # Zero rows created for B -- and since none were created at all for
+    # this rejected call, none of A's provenance/findings can appear
+    # anywhere under B either.
+    assert hse_review_service.list_reviews(pg_session, organization_id=org_b) == []
+    assert hse_review_service.list_reviews(pg_session, organization_id=org_a) == []
+
+    # Legitimate same-organization behavior is unaffected by the check.
+    queued = queue_review_candidates(pg_session, organization_id=org_a, report=report_a)
+    assert len(queued) > 0
+    assert all(r.organization_id == org_a for r in queued)
