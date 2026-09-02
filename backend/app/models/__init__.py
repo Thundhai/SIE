@@ -14,6 +14,7 @@ from app.models.embedding import KnowledgeChunkEmbedding
 from app.models.enterprise_ingestion_batch import EnterpriseIngestionBatch
 from app.models.enterprise_ingestion_record import EnterpriseIngestionRecord
 from app.models.feature_snapshot import FeatureSnapshot
+from app.models.hse_expert_review import HseExpertReview
 from app.models.idempotency_key import IdempotencyKey
 from app.models.identity import Identity
 from app.models.ingested_file import IngestedFile
@@ -42,6 +43,7 @@ __all__ = [
     "EnterpriseIngestionBatch",
     "EnterpriseIngestionRecord",
     "FeatureSnapshot",
+    "HseExpertReview",
     "IdempotencyKey",
     "Identity",
     "IngestedFile",

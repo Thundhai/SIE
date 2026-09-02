@@ -3863,6 +3863,115 @@ production alerting, no automated safety decisions. See ["Known gaps /
 next phase"](#known-gaps--next-phase) for this milestone's own genuine,
 as-built limitations.
 
+## Real Enterprise Dataset Validation Foundation Architecture
+
+    RawSafetyEventPayload[] (a fixture today; a real, anonymized enterprise
+    dataset in a future step, unchanged call shape)
+        -> EnterpriseIngestionService.ingest_batch()   (UNCHANGED, reused)
+        -> IngestionSummary + DataQualitySummary        (item 2)
+        -> TerminologyReviewEntry[] + summary            (item 3, app/intelligence/terminology_review.py)
+        -> TemporalIntegrityReport                        (item 4)
+        -> ProvenanceValidationReport                      (item 5, extends the chain to FEATURE/INDICATOR
+                                                              and PREDICTIVE DATASET)
+        -> IntelligenceReadinessReport                      (item 6)
+        -> PredictiveReadinessReport                         (item 7)
+        -> EnterpriseDatasetValidationReport                  (assembled, item 10's OBSERVED/MAPPED/
+                                                                 QUARANTINED/REJECTED/UNAVAILABLE rendering)
+    + queue_review_candidates() -> HseExpertReview rows        (item 8, evaluation-only)
+
+This is the Real Enterprise Dataset Validation Foundation v0.1
+milestone — the direct successor to Real-World Data Validation &
+Intelligence Calibration v0.1 (above). **It builds a reusable
+framework, not a validation result.** No confidential/customer data is
+loaded in this milestone; `tests/fixtures/messy_enterprise_dataset.py`
+is a clearly-labeled, deterministic, *synthetic* enterprise-shaped
+fixture, and every report this framework generates carries that label
+explicitly. See
+[`docs/ENTERPRISE_DATASET_VALIDATION_GUIDE.md`](docs/ENTERPRISE_DATASET_VALIDATION_GUIDE.md)
+for the full guide — how a future real dataset should be supplied,
+required/optional fields, and the explicit statement that passing this
+harness against the synthetic fixture does not constitute validation
+against real customer data.
+
+**The governing rule this milestone was held to, again: do not redesign
+the existing SIE intelligence architecture.** `app/validation/enterprise_dataset_validation.py`
+orchestrates the exact, unmodified `EnterpriseIngestionService`,
+`SafetyEventIngestionService`, `events_as_of()`/`bucketed_counts()`,
+`compute_summary()`/`compute_trend()`, `risk_signal_service`,
+`detect_anomaly()`, `get_or_build_feature_snapshot()`, and
+`build_training_example()`/`generate_label()` prior milestones already
+built — this is production code (`app/`, not `tests/`, unlike Milestone
+2's own calibration harness), because it is explicitly meant to be run
+again, unchanged, against a real dataset once one is supplied.
+
+### Terminology review structure
+
+`app/intelligence/terminology_review.py` builds the item-3 `SOURCE_TERM
+→ PROPOSED_CANONICAL_TERM → STATUS → REASON` structure entirely over
+`terminology_mapping.py`'s existing, unmodified `map_event_type()`/
+`map_event_subtype()`/`map_training_status()`/`map_maintenance_status()`
+— no new matching logic anywhere. `TerminologyReviewStatus` carries the
+underlying `MAPPED`/`UNKNOWN`/`AMBIGUOUS` outcome through unchanged, plus
+an additional `REVIEW_REQUIRED`/`requires_review` flag set on every
+non-`MAPPED` entry, so a reviewer can filter "everything that needs a
+human" without knowing the underlying mapping vocabulary. An
+`UNKNOWN`/`AMBIGUOUS` entry's proposed canonical term is always `None` —
+never guessed.
+
+### HSE expert review — evaluation only, never automated approval
+
+`HseExpertReview` (`app/models/hse_expert_review.py`, migration `0012`)
+is a new, tenant-scoped, persisted table for a future human HSE expert
+to review terminology mappings, quarantined records, unexpected
+classifications, representative intelligence outputs, and risk
+indicators — `target_type`/`target_reference`/`provenance` describe
+*what*, `outcome` (`CORRECT`/`INCORRECT`/`PARTIALLY_CORRECT`/
+`NOT_ENOUGH_INFORMATION`, nullable = pending) and `reviewer_comment`
+describe the human's judgment, once given.
+`app/services/hse_review_service.py` is the one read/write path
+(`queue_for_review()`/`submit_review()`/`list_reviews()`), and
+`queue_review_candidates()` in the validation module turns a completed
+report's own `requires_review` terminology entries and quarantined
+records into pending rows automatically. **Nothing in this codebase
+reads `outcome` and changes ingestion, mapping, or intelligence
+behavior** — the exact same non-automation boundary `ModelReviewFlag`
+(Predictive Model Validation & Governance v0.1) already draws for
+model-performance review, applied here to a different target;
+`tests/test_hse_expert_review.py` asserts this structurally (neither the
+ingestion nor the mapping module imports this review mechanism at all).
+
+### A second real finding: batch-level accounting vs. canonical-row accounting
+
+Building the provenance and data-quality sections against realistic
+messy data surfaced a second genuine subtlety (the first was Milestone
+2's own bulk-backfill finding, reconfirmed unchanged above):
+`EnterpriseIngestionBatch.accepted_records` counts *ingestion record
+outcomes* whose own `quality_state` resolved to `VALID` — including a
+duplicate resend, a stale version, or a version conflict that *resolved
+against* an already-valid existing row without creating or changing a
+canonical event. That is a different, equally legitimate thing from "how
+many distinct canonical rows carry the content this specific record
+describes." `ProvenanceValidationReport`'s own content-hash check
+accounts for this directly: only the *last* content-bearing
+(`CREATED`/`UPDATED`/exact-replay `SKIPPED_IDEMPOTENT`) record for a
+given canonical event is checked against that row's current content —
+an earlier `CREATED` record later superseded by a correction, or a
+`SKIPPED_STALE_VERSION`/`REJECTED_VERSION_CONFLICT` record whose whole
+point is that its content was never applied, correctly does *not* have
+its own content_hash compared against the row's current state.
+
+### What this milestone deliberately does not add
+
+No production ML training, no model retraining, no autonomous agents,
+no LLM-based classification, no automated safety decisions, no automated
+intervention recommendations, no Kafka, no Redis, no production event
+streaming, no unnecessary background workers, no Safelytic-specific
+coupling, no customer-specific hard-coded mappings, no production
+deployment infrastructure. See
+[`docs/ENTERPRISE_DATASET_VALIDATION_GUIDE.md`](docs/ENTERPRISE_DATASET_VALIDATION_GUIDE.md)
+for the full guide and ["Known gaps / next phase"](#known-gaps--next-phase)
+for this milestone's own genuine, as-built limitations.
+
 ## Configuration
 
 All configuration is environment-based (`app/core/config.py`, backed by
@@ -3994,7 +4103,20 @@ and [`docs/CALIBRATION_METHODOLOGY.md`](docs/CALIBRATION_METHODOLOGY.md).
 This milestone deliberately adds no new intelligence capability — see
 that section's own "What this milestone deliberately does not add" — and
 its results are explicitly **not** evidence of production accuracy on
-real customer data.
+real customer data. **As of Real Enterprise Dataset Validation
+Foundation v0.1, a reusable, production-code harness
+(`app/validation/`) can evaluate any dataset shaped like SIE's
+enterprise ingestion contract — terminology review, temporal integrity,
+end-to-end provenance (through feature/indicator and predictive-dataset
+stages), intelligence readiness, and predictive-dataset readiness — plus
+a structured, evaluation-only HSE expert review mechanism
+(`HseExpertReview`)** — see [Real Enterprise Dataset Validation
+Foundation Architecture](#real-enterprise-dataset-validation-foundation-architecture)
+and [`docs/ENTERPRISE_DATASET_VALIDATION_GUIDE.md`](docs/ENTERPRISE_DATASET_VALIDATION_GUIDE.md).
+No confidential or customer data is loaded in this milestone — every
+dataset this repository evaluates is a clearly-labeled synthetic
+fixture, and passing this harness against it is explicitly **not**
+validation against real customer data.
 
 ## Known gaps / next phase
 
@@ -4388,3 +4510,34 @@ real customer data.
     (labels are computed with full hindsight from already-collected
     historical data, not as a live "as of now" query) confirmed, not
     changed, by this milestone's predictive-readiness tests.
+* **Real Enterprise Dataset Validation Foundation v0.1's own genuine
+  limitations:**
+  * **No real, anonymized customer dataset has been evaluated yet.**
+    This milestone builds and validates the reusable framework itself
+    against a synthetic, clearly-labeled fixture only — see
+    `docs/ENTERPRISE_DATASET_VALIDATION_GUIDE.md` §12. Running it
+    against a real dataset, and everything that finding might surface,
+    is genuinely future work.
+  * **The terminology review structure covers exactly the domains
+    `terminology_mapping.py` already covers** (event type, event
+    subtype, training status, maintenance status) — a status field on a
+    `CORRECTIVE_ACTION` or other event type outside that set is not
+    walked by `extract_term_observations()`; extending it means adding a
+    new alias table to `terminology_mapping.py` first, not something
+    this module invents on its own.
+  * **`HseExpertReview` has no HTTP API yet** — only a service-layer
+    read/write path (`app/services/hse_review_service.py`). Adding
+    `POST/GET/PATCH` routes for it (with the same
+    `RequestContext`/`authorize_context()` authorization every other
+    resource uses) is a natural, small future extension, not built here
+    to keep this milestone's scope to the validation framework itself.
+  * **`PredictiveReadinessReport`'s exclusion reasons are coarse**
+    (`NO_HISTORICAL_DATA`, or a caught exception's own class name) —
+    real datasets may surface exclusion patterns worth their own named
+    category; the harness reports whatever it actually observes rather
+    than pre-guessing every possible real-world failure mode.
+  * **Late-arriving-record detection uses a fixed 24-hour threshold**
+    (`_LATE_ARRIVAL_THRESHOLD_HOURS` in
+    `app/validation/enterprise_dataset_validation.py`) — a simple,
+    documented default, not a value calibrated against any real
+    integration's actual reporting cadence.

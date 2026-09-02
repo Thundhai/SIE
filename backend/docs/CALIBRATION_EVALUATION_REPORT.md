@@ -2,7 +2,7 @@
 
 **Prototype / controlled-scenario calibration only — not a production benchmark.**
 
-Generated 2026-09-02T00:42:03.623285+00:00 by `tests/evaluation/test_calibration_evaluation.py`, running `tests/evaluation/calibration_harness.py::run_calibration_evaluation()` against real PostgreSQL. See that module's own docstring and `docs/CALIBRATION_METHODOLOGY.md` for what this is and is not: five controlled, synthetic, known-ground-truth scenarios exercising real, unmodified SIE ingestion/analytics/predictions code — never a production accuracy or performance claim, and never evidence this system behaves this way on a real customer's data.
+Generated 2026-09-02T02:07:47.665295+00:00 by `tests/evaluation/test_calibration_evaluation.py`, running `tests/evaluation/calibration_harness.py::run_calibration_evaluation()` against real PostgreSQL. See that module's own docstring and `docs/CALIBRATION_METHODOLOGY.md` for what this is and is not: five controlled, synthetic, known-ground-truth scenarios exercising real, unmodified SIE ingestion/analytics/predictions code — never a production accuracy or performance claim, and never evidence this system behaves this way on a real customer's data.
 
 ## Scenario calibration results
 

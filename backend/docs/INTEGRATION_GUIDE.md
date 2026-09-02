@@ -651,6 +651,17 @@ and `tests/test_terminology_mapping.py` for the current alias tables per
 domain — extend those tables directly if your source's own terminology
 isn't yet covered.
 
+Before a real integration goes live, run its own sample data through
+`app/validation/enterprise_dataset_validation.py::run_enterprise_dataset_validation()`
+(Real Enterprise Dataset Validation Foundation v0.1) — a reusable
+harness that reports ingestion outcomes, a `SOURCE_TERM →
+PROPOSED_CANONICAL_TERM → STATUS → REASON` terminology review table,
+temporal integrity, end-to-end provenance, and intelligence/predictive
+dataset readiness, all in one pass. See
+`docs/ENTERPRISE_DATASET_VALIDATION_GUIDE.md` for the full guide,
+including which fields are required/optional and how to interpret a
+report's OBSERVED/MAPPED/QUARANTINED/REJECTED/UNAVAILABLE sections.
+
 ### Provenance
 
 Every canonical event created through this endpoint traces back to: the
