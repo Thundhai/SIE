@@ -347,6 +347,35 @@ def get_concept_by_scope(db: Session, *, layer: str, parent_domain: str | None, 
     ).scalar_one_or_none()
 
 
+def find_concepts_by_key(db: Session, *, concept_key: str) -> list[OntologyConcept]:
+    """Every concept row with this exact `concept_key`, across ALL
+    layers and parent domains, of ANY status -- ordered deterministically
+    (`layer`, then `parent_domain`) so a caller iterating the result gets
+    a stable, reproducible order. Used by
+    `ontology_terminology_integration_service.validate_canonical_target()`
+    to distinguish a genuinely nonexistent concept key (`NOT_FOUND`) from
+    one that exists, but under a different layer (`WRONG_LAYER`) or a
+    different parent domain at the same layer (`WRONG_PARENT_DOMAIN`),
+    when an exact `(layer, parent_domain, concept_key)` match
+    (`get_concept_by_scope()`) is not found. Deliberately never used by
+    itself to decide whether a *specific* scope is governed -- `(layer,
+    parent_domain, concept_key)` together remains the real, namespaced
+    scope key (see `_validate_layer_and_parent_domain()`'s own docstring
+    for why `observation_topic` may deliberately reuse a name that exists
+    at a different layer/domain, e.g. the top-level `ENVIRONMENTAL`
+    `SafetyEventType`, which has no `OntologyConcept` row at all under
+    `layer='event_type'`); this function only helps produce an
+    *informative* diagnostic for a caller that already knows no exact
+    match exists."""
+    return list(
+        db.execute(
+            select(OntologyConcept)
+            .where(OntologyConcept.concept_key == concept_key)
+            .order_by(OntologyConcept.layer, OntologyConcept.parent_domain)
+        ).scalars().all()
+    )
+
+
 def is_valid_concept(db: Session, *, layer: str, parent_domain: str | None, concept_key: str) -> bool:
     """Whether `(layer, parent_domain, concept_key)` is currently an
     `APPROVED` ontology concept -- the one boolean a *future*
@@ -391,6 +420,7 @@ __all__ = [
     "OntologyConceptStateError",
     "approve_concept",
     "deprecate_concept",
+    "find_concepts_by_key",
     "get_concept_by_scope",
     "is_valid_concept",
     "list_concepts",

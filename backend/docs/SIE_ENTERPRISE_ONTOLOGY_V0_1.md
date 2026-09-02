@@ -316,19 +316,112 @@ the verified behavior.
   `is_valid_concept()`-eligible for a *new* terminology-mapping
   decision to target, but nothing retroactively touches any decision or
   event that already used it (there are none yet, in this milestone).
+- **Milestone 16 traceability decision — no new column.** A NEW
+  `TerminologyMappingDecision` whose canonical target is validated
+  against an exact-scope `OntologyConcept` records that concept's `id`
+  and `ontology_version` on the decision's existing `provenance` JSON
+  column, not a new schema field: `provenance` already carries exactly
+  this kind of "which specific governed thing resolved this decision"
+  fact (`target_event_subtype`, from the prior milestone), so a second,
+  redundant version column would only duplicate that pattern for no
+  behavioral gain. **No Alembic migration was required for Milestone
+  16** — see §7.
 
 ## 7. Terminology mapping relationship
 
-`ontology_governance_service.is_valid_concept(db, layer=..., parent_domain=...,
-concept_key=...)` is the one function a *future* terminology-mapping
-validation (extending `terminology_calibration_service._canonical_terms_for()`/
-`_valid_compound_subtype_for()`) would call before letting a human
-reviewer target one of these new concepts with a real
-`TerminologyMappingDecision`. **This milestone deliberately does not
-wire it in.** Remapping any of the 15 real-dataset rejected terms
-against a newly-approved concept is explicitly the *next* milestone's
-decision, made deliberately, not automatically inherited from this
-one's own concept approvals.
+**Before Milestone 16:**
+
+```
+Terminology mapping
+    ↓
+static canonical vocabulary   (SafetyEventType / _SUBTYPE_ALIASES /
+                                TRAINING_STATUS_TARGET_FIELDS /
+                                MAINTENANCE_STATUS_TARGET_FIELDS --
+                                _canonical_terms_for(), unchanged)
+```
+
+**After Milestone 16 ("Governed Ontology-to-Terminology Integration &
+Controlled Remapping Foundation v0.1"):**
+
+```
+Terminology mapping
+    ↓
+governed APPROVED OntologyConcept   (when one exists at the decision's
+    ↓                                 exact scope -- authoritative)
+    ↓  (falls back when no exact match exists)
+static canonical vocabulary          (unchanged, for every pre-existing
+                                       term the ontology does not govern)
+```
+
+`app/services/ontology_terminology_integration_service.py::validate_canonical_target(db,
+layer=..., parent_domain=..., concept_key=...)` is the deterministic
+contract this milestone adds: it answers "is this proposed canonical
+mapping target valid against the currently `APPROVED` SIE ontology?"
+with exactly one of `VALID` / `NOT_APPROVED` / `NOT_FOUND` /
+`WRONG_LAYER` / `WRONG_PARENT_DOMAIN` / `INVALID` — never a bare
+boolean, never fuzzy/LLM/semantic inference, every answer an exact-match
+lookup against governed `OntologyConcept` rows.
+
+- **Layer semantics (unchanged from §3).** `event_type`,
+  `event_subtype`, and `observation_topic` remain three distinct
+  dimensions. `PPE_COMPLIANCE` validates at `observation_topic`/
+  `OBSERVATION` (`VALID`) and fails at `event_subtype`/`OBSERVATION`
+  (`WRONG_LAYER`) — the exact same concept_key, two different answers,
+  because the scope key is the triple, never `concept_key` alone.
+- **Approval requirement, enforced centrally.** Only
+  `OntologyConceptStatus.APPROVED` ever validates. `PROPOSED`,
+  `REJECTED`, and `DEPRECATED` concepts at an otherwise-matching scope
+  all resolve to `NOT_APPROVED` — never silently treated as usable
+  merely because a row exists.
+- **Cross-domain protection.** A concept_key that was never governed
+  anywhere (e.g. a bare top-level type name reused as a bogus
+  event_subtype, like `event_subtype`/`INCIDENT`/`OBSERVATION`) resolves
+  `NOT_FOUND` — it was never created, because
+  `ontology_governance_service._validate_layer_and_parent_domain()`
+  already refuses to let such a concept be *proposed* in the first
+  place (§3/§5). `WRONG_LAYER`/`WRONG_PARENT_DOMAIN` catch the case
+  where a *legitimately governed* concept_key is requested at the wrong
+  scope.
+- **Wired into `terminology_calibration_service.approve_mapping()`**,
+  for `event_type`/`event_subtype`-domain decisions only
+  (`_ontology_scope_for_decision()` maps a decision's `(domain,
+  context)` onto the corresponding ontology `(layer, parent_domain)`;
+  `training_status`/`maintenance_status` decisions target a
+  `SafetyEvent.attributes` field name, not a canonical concept, and stay
+  governed by `_canonical_terms_for()` alone, unchanged). The rule
+  applied there: if — and only if — an `OntologyConcept` row exists at
+  the decision's EXACT scope, that row is authoritative (must be
+  `APPROVED`, and the pre-existing static vocabulary is never
+  consulted for that term); otherwise, validation falls back to
+  `_canonical_terms_for()` exactly as before this milestone.
+- **Historical compatibility.** This exact-scope-only rule is what
+  keeps a term like the top-level `SafetyEventType` `ENVIRONMENTAL`
+  approvable exactly as before, even though a *different*,
+  `observation_topic`/`OBSERVATION`-scoped `ENVIRONMENTAL` concept also
+  exists: `event_type`/`None`/`ENVIRONMENTAL` has no exact-scope
+  `OntologyConcept` row, so it is never treated as ontology-governed —
+  the static vocabulary remains authoritative for it, unmutated,
+  unreinterpreted. No historical, already-terminal
+  `TerminologyMappingDecision` is touched, rewritten, or reinterpreted
+  by this milestone in any way; "historically valid under ontology
+  version X" is a fact about a row's own frozen history, never
+  retroactively recomputed.
+- **Ontology version traceability.** When a NEW decision's target *is*
+  governed by an exact-scope `OntologyConcept`, `approve_mapping()`
+  records that concept's `id` and `ontology_version` (plus `layer` and
+  `parent_domain`) onto `decision.provenance` — the same existing JSON
+  column `target_event_subtype` already uses, not a new schema column
+  (see §6; no migration was required for this milestone). This
+  completes the full provenance chain: source term → terminology
+  decision → canonical ontology concept → ontology version.
+- **Real-enterprise remapping remains deferred.** This milestone makes
+  the 10 Milestone 15 concepts *usable* as mapping targets in principle
+  — it does not map anything to them. None of the 15 real-dataset terms
+  that remain `REJECTED` in
+  `backend/config/real_enterprise_terminology_decisions_v1.json` (byte-
+  for-byte unchanged by this milestone) are remapped, reopened, or
+  auto-approved here. That remains a deliberate, separate, future human
+  decision — see §8.
 
 ## 8. Rejected terminology treatment (this milestone changes nothing here)
 

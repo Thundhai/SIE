@@ -69,6 +69,39 @@ read-only hint for whoever calls `propose_mapping()` — it never sets
 `proposed_canonical_term` itself. Every `propose_mapping()` call requires
 an explicit, caller-supplied term (or `None` — "preferable to guessing",
 item 6's own words).
+
+**Governed ontology integration (Milestone 16 — "Governed
+Ontology-to-Terminology Integration & Controlled Remapping Foundation
+v0.1").** `approve_mapping()` now consults
+`ontology_terminology_integration_service.validate_canonical_target()`
+before `_canonical_terms_for()`'s own pre-existing static-vocabulary
+check, for `event_type`- and `event_subtype`-domain decisions only (see
+`_ontology_scope_for_decision()`): if — and only if — an
+`OntologyConcept` row exists at the EXACT `(layer, parent_domain,
+concept_key)` scope this decision's `(domain, context,
+proposed_canonical_term)` maps to, that row is authoritative and the
+decision may be approved only when it is `APPROVED`; the pre-existing
+static vocabulary is never consulted for that term. When no such exact
+match exists — the ordinary case for every canonical term that predates
+Milestone 15 (`NEAR_MISS`, `UNSAFE_ACT`, ...), and also for a
+`concept_key` that merely happens to share a name with a concept
+governed under a *different* layer/domain (e.g. the top-level
+`SafetyEventType` `ENVIRONMENTAL` vs. the governed `observation_topic`
+concept of the same name) — validation falls back to
+`_canonical_terms_for()` exactly as before this milestone: **no
+historical decision, and no term not yet migrated into the governed
+ontology, changes behavior.** An `APPROVED` decision whose target was
+governed by an ontology concept has that concept's identity and
+`ontology_version` recorded in `decision.provenance` (never a new
+column — see `docs/SIE_ENTERPRISE_ONTOLOGY_V0_1.md`'s own
+"Terminology mapping relationship" section for why this reuses the same
+`provenance` JSON pattern `target_event_subtype` already established,
+rather than a schema change). This module still never creates,
+approves, or rejects an `OntologyConcept`, never remaps any of the 15
+real-dataset terms that remain `REJECTED` in
+`backend/config/real_enterprise_terminology_decisions_v1.json`, and
+never reprocesses a `SafetyEvent` — the ontology becomes *usable* as a
+mapping target here; nothing is mapped to it automatically.
 """
 
 from __future__ import annotations
@@ -98,6 +131,7 @@ from app.models.terminology_mapping_decision import (
     TerminologyMappingDecisionStatus,
 )
 from app.services import hse_review_service
+from app.services import ontology_terminology_integration_service as oti
 from app.services.audit_service import AuditAction, audit_service
 from app.services.authorization_service import authorization_service
 from app.services.permissions import Permission
@@ -133,6 +167,25 @@ def _canonical_terms_for(domain: str, context: str | None) -> frozenset[str] | N
         return frozenset(TRAINING_STATUS_TARGET_FIELDS.keys())
     if domain == TerminologyMappingDecisionDomain.MAINTENANCE_STATUS:
         return frozenset(MAINTENANCE_STATUS_TARGET_FIELDS.keys())
+    return None
+
+
+def _ontology_scope_for_decision(domain: str, context: str | None) -> tuple[str, str | None] | None:
+    """Maps a `TerminologyMappingDecision`'s own `(domain, context)` to
+    the corresponding governed `OntologyConcept` `(layer, parent_domain)`
+    scope -- Milestone 16's own integration point. Returns `None` for a
+    domain that has no ontology-layer counterpart at all
+    (`training_status`/`maintenance_status` decisions target a
+    `SafetyEvent.attributes` field name, never a canonical concept --
+    `_canonical_terms_for()` alone continues to govern those,
+    unchanged). `event_subtype`'s own `context` (the already-resolved
+    parent `event_type`) maps directly onto `OntologyConcept.parent_domain`
+    -- the two fields already mean exactly the same thing (see both
+    models' own docstrings)."""
+    if domain == TerminologyMappingDecisionDomain.EVENT_TYPE:
+        return ("event_type", None)
+    if domain == TerminologyMappingDecisionDomain.EVENT_SUBTYPE:
+        return ("event_subtype", context)
     return None
 
 
@@ -406,7 +459,25 @@ def approve_mapping(
     never against an invented value -- before approval, for the same
     reason: an authorized reviewer's compound classification still
     cannot make an arbitrary subtype string eligible for canonical
-    classification."""
+    classification.
+
+    **Governed ontology integration (Milestone 16).** Before falling
+    back to `_canonical_terms_for()`'s pre-existing static-vocabulary
+    check, this looks for an EXACT `OntologyConcept` match at the scope
+    `_ontology_scope_for_decision(decision.domain, decision.context)`
+    maps to (`event_type`/`event_subtype` domains only). If one exists,
+    it is authoritative: the decision may be approved only when that
+    concept's status is `APPROVED` (see
+    `ontology_terminology_integration_service.validate_canonical_target()`);
+    the static vocabulary is never consulted for that term, and a
+    `PROPOSED`/`REJECTED`/`DEPRECATED` concept at that exact scope can
+    never validate a mapping regardless of what the static vocabulary
+    itself would have said. If no exact match exists -- including a
+    `concept_key` that merely shares a name with a concept governed
+    under a *different* layer or parent domain -- validation falls back
+    to `_canonical_terms_for()` exactly as before this milestone (see
+    this module's own docstring for why this preserves 100%
+    backward compatibility)."""
     authorization_service.require(db, user_id=acting_user_id, permission=_APPROVAL_PERMISSION, organization_id=organization_id)
 
     decision = _require_owned_decision(db, organization_id=organization_id, decision_id=decision_id)
@@ -418,13 +489,36 @@ def approve_mapping(
         raise TerminologyMappingDecisionStateError(
             f"Decision {decision_id} has no proposed_canonical_term -- refusing to approve nothing."
         )
-    valid_terms = _canonical_terms_for(decision.domain, decision.context)
-    if valid_terms is not None and decision.proposed_canonical_term not in valid_terms:
-        raise InvalidCanonicalTermError(
-            f"{decision.proposed_canonical_term!r} is not a valid SIE canonical term for "
-            f"domain={decision.domain!r} context={decision.context!r}. Valid terms: {sorted(valid_terms) or 'none'}. "
-            "Refusing to approve -- the decision remains PROPOSED."
+
+    ontology_result: oti.OntologyValidationResult | None = None
+    ontology_scope = _ontology_scope_for_decision(decision.domain, decision.context)
+    if ontology_scope is not None:
+        layer, parent_domain = ontology_scope
+        candidate_result = oti.validate_canonical_target(
+            db, layer=layer, parent_domain=parent_domain, concept_key=decision.proposed_canonical_term,
         )
+        if candidate_result.is_exact_scope_match:
+            # An OntologyConcept row exists at this EXACT scope -- it is
+            # authoritative for this term; the static vocabulary is
+            # never consulted (see this function's own docstring).
+            ontology_result = candidate_result
+
+    if ontology_result is not None:
+        if not ontology_result.is_valid:
+            raise InvalidCanonicalTermError(
+                f"{decision.proposed_canonical_term!r} is governed by the SIE ontology at "
+                f"layer={ontology_result.layer!r} parent_domain={ontology_result.parent_domain!r}, but is not "
+                f"currently a valid mapping target ({ontology_result.outcome}: {ontology_result.detail}). "
+                "Refusing to approve -- the decision remains PROPOSED."
+            )
+    else:
+        valid_terms = _canonical_terms_for(decision.domain, decision.context)
+        if valid_terms is not None and decision.proposed_canonical_term not in valid_terms:
+            raise InvalidCanonicalTermError(
+                f"{decision.proposed_canonical_term!r} is not a valid SIE canonical term for "
+                f"domain={decision.domain!r} context={decision.context!r}. Valid terms: {sorted(valid_terms) or 'none'}. "
+                "Refusing to approve -- the decision remains PROPOSED."
+            )
     target_subtype = (decision.provenance or {}).get("target_event_subtype")
     if decision.domain == TerminologyMappingDecisionDomain.EVENT_TYPE and target_subtype is not None:
         valid_subtypes = _valid_compound_subtype_for(decision.proposed_canonical_term)
@@ -440,6 +534,22 @@ def approve_mapping(
     decision.decided_at = datetime.now(timezone.utc)
     if notes:
         decision.rationale = f"{decision.rationale or ''}\n[APPROVED] {notes}".strip()
+    if ontology_result is not None and ontology_result.concept is not None:
+        # Ontology version traceability (Milestone 16, item 11/14):
+        # source term -> this decision -> the exact governed
+        # OntologyConcept -> the ontology_version that concept was
+        # approved under. Stored in the existing `provenance` JSON
+        # column -- the same established pattern
+        # `target_event_subtype` already uses -- never a new column
+        # (see this module's own docstring for why).
+        concept = ontology_result.concept
+        decision.provenance = {
+            **(decision.provenance or {}),
+            "ontology_concept_id": str(concept.id),
+            "ontology_version": concept.ontology_version,
+            "ontology_layer": concept.layer,
+            "ontology_parent_domain": concept.parent_domain,
+        }
     db.commit()
     db.refresh(decision)
 
