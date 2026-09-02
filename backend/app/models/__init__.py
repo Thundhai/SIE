@@ -26,6 +26,7 @@ from app.models.knowledge_source import KnowledgeSource
 from app.models.model_approval import ModelApproval
 from app.models.model_registry_entry import ModelRegistryEntry
 from app.models.model_review_flag import ModelReviewFlag
+from app.models.ontology_concept import OntologyConcept
 from app.models.organization import Organization
 from app.models.organization_membership import OrganizationMembership
 from app.models.prediction import Prediction
@@ -57,6 +58,7 @@ __all__ = [
     "ModelApproval",
     "ModelRegistryEntry",
     "ModelReviewFlag",
+    "OntologyConcept",
     "Organization",
     "OrganizationMembership",
     "Prediction",

@@ -83,6 +83,15 @@ class AuditAction:
     TERMINOLOGY_MAPPING_REJECTED = "TERMINOLOGY_MAPPING_REJECTED"
     TERMINOLOGY_MAPPING_NEW_VERSION_OPENED = "TERMINOLOGY_MAPPING_NEW_VERSION_OPENED"
     TERMINOLOGY_HISTORICAL_REPROCESSING_APPLIED = "TERMINOLOGY_HISTORICAL_REPROCESSING_APPLIED"
+    # SIE Enterprise Ontology & Data Model Expansion v0.1 --
+    # app/services/ontology_governance_service.py is the one write path
+    # for every one of these. Platform-wide (organization_id=None on the
+    # AuditLog row), mirroring KNOWLEDGE_SOURCE_CREATED's own GLOBAL-write
+    # precedent -- see that service's own docstring.
+    ONTOLOGY_CONCEPT_PROPOSED = "ONTOLOGY_CONCEPT_PROPOSED"
+    ONTOLOGY_CONCEPT_APPROVED = "ONTOLOGY_CONCEPT_APPROVED"
+    ONTOLOGY_CONCEPT_REJECTED = "ONTOLOGY_CONCEPT_REJECTED"
+    ONTOLOGY_CONCEPT_DEPRECATED = "ONTOLOGY_CONCEPT_DEPRECATED"
 
 
 class AuditService:

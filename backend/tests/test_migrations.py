@@ -65,7 +65,7 @@ def test_fresh_postgres_database_migrates_through_head_with_no_manual_interventi
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0013"
+            assert version == "0014"
 
             enum_types = {
                 row[0]
@@ -232,7 +232,7 @@ def test_downgrade_then_reupgrade_round_trips_cleanly(monkeypatch):
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0013"
+            assert version == "0014"
     finally:
         engine.dispose()
 
@@ -274,7 +274,7 @@ def test_intelligence_migration_downgrade_then_reupgrade_round_trips_cleanly(mon
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0013"
+            assert version == "0014"
 
             tables = {
                 row[0]
@@ -330,7 +330,7 @@ def test_predictive_modeling_migration_downgrade_then_reupgrade_round_trips_clea
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0013"
+            assert version == "0014"
 
             tables = {
                 row[0]
@@ -401,7 +401,7 @@ def test_governance_migration_downgrade_then_reupgrade_round_trips_cleanly(monke
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0013"
+            assert version == "0014"
 
             tables = {
                 row[0]
@@ -490,7 +490,7 @@ def test_enterprise_api_migration_downgrade_then_reupgrade_round_trips_cleanly(m
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0013"
+            assert version == "0014"
 
             tables = {
                 row[0]
@@ -598,7 +598,7 @@ def test_data_ingestion_migration_downgrade_then_reupgrade_round_trips_cleanly(m
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0013"
+            assert version == "0014"
 
             tables = {
                 row[0]
@@ -741,7 +741,7 @@ def test_real_enterprise_terminology_ontology_calibration_migration_downgrade_th
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0013"
+            assert version == "0014"
 
             tables = {
                 row[0]
@@ -774,5 +774,81 @@ def test_real_enterprise_terminology_ontology_calibration_migration_downgrade_th
             assert "reviewer_user_id" in decision_columns
             assert "hse_expert_review_id" in decision_columns
             assert "organization_id" in decision_columns
+    finally:
+        engine.dispose()
+
+
+def test_sie_enterprise_ontology_migration_downgrade_then_reupgrade_round_trips_cleanly(monkeypatch):
+    """0014's own downgrade/re-upgrade round trip, isolated from the
+    others above: `ontology_concepts` must disappear on downgrade to
+    0013 and reappear correctly on re-upgrade, with nothing 0013 or
+    earlier disturbed either way -- including `terminology_mapping_decisions`,
+    proving 0014 never touches the terminology-calibration tables it sits
+    on top of."""
+    engine = _fresh_schema_engine()
+    try:
+        monkeypatch.setattr("app.core.config.settings.DATABASE_URL", PG_TEST_DATABASE_URL)
+        config = _alembic_config()
+
+        command.upgrade(config, "head")
+        command.downgrade(config, "0013")
+
+        with engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version == "0013"
+
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT table_name FROM information_schema.tables "
+                        "WHERE table_schema = 'public'"
+                    )
+                ).all()
+            }
+            assert "ontology_concepts" not in tables
+            # Untouched by 0014's downgrade.
+            assert "terminology_mapping_decisions" in tables
+            assert "hse_expert_reviews" in tables
+            assert "safety_events" in tables
+
+        command.upgrade(config, "head")
+
+        with engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version == "0014"
+
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT table_name FROM information_schema.tables "
+                        "WHERE table_schema = 'public'"
+                    )
+                ).all()
+            }
+            assert "ontology_concepts" in tables
+
+            concept_columns = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = 'ontology_concepts'"
+                    )
+                ).all()
+            }
+            assert "layer" in concept_columns
+            assert "parent_domain" in concept_columns
+            assert "concept_key" in concept_columns
+            assert "definition" in concept_columns
+            assert "justification" in concept_columns
+            assert "status" in concept_columns
+            assert "ontology_version" in concept_columns
+            assert "proposed_by_user_id" in concept_columns
+            assert "reviewer_user_id" in concept_columns
+            # Not org-scoped -- see app/models/ontology_concept.py's own
+            # "Deliberately NOT OrganizationScopedMixin" docstring note.
+            assert "organization_id" not in concept_columns
     finally:
         engine.dispose()
