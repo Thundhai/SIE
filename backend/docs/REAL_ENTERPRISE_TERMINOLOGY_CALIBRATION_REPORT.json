@@ -2,7 +2,32 @@
   "report_type": "SIE_REAL_ENTERPRISE_TERMINOLOGY_ONTOLOGY_CALIBRATION_V0_1",
   "generated_at": "2026-09-02T11:24:36.622307+00:00",
   "updated_at": "2026-09-02T18:00:00+00:00",
-  "milestone": "SIE Real Enterprise Terminology Calibration -- Implement Approved HSE Terminology Decisions v0.1",
+  "corrective_commit_v2_note": "Independent audit found two blockers in commit 0505d8b, both fixed here: (1) the 18 decisions existed only in a throwaway database with no durable, version-controlled representation -- fixed by backend/config/real_enterprise_terminology_decisions_v1.json (PII-free, no real UUIDs) plus app/services/terminology_decision_artifact_service.py::apply_terminology_decision_artifact(), which reconstructs the same 18 governed decisions in any environment idempotently, never reprocessing anything; (2) compound subtype validation unioned with every top-level SafetyEventType (permitting e.g. INCIDENT+OBSERVATION) -- fixed by scoping it to INCIDENT's own curated subtype vocabulary plus one narrow, explicit, reviewed exception (NEAR_MISS). This repository does NOT contain the real enterprise database or workbook -- only the artifact. The historical_execution block below describes what already happened once in the (now-destroyed) throwaway database; it was NOT repeated by this corrective commit -- no additional real records were reprocessed.",
+  "durable_artifact": {
+    "path": "backend/config/real_enterprise_terminology_decisions_v1.json",
+    "apply_function": "app.services.terminology_decision_artifact_service.apply_terminology_decision_artifact",
+    "decision_count": 18,
+    "approved_count": 3,
+    "rejected_count": 15,
+    "pii_free": true,
+    "contains_real_database_uuids": false,
+    "idempotent": true,
+    "auto_reprocesses_records": false,
+    "authorization_required": "GOVERNANCE_MANAGE (same permission approve_mapping()/reject_mapping() already require -- no bypass, no backdoor)"
+  },
+  "historical_execution": {
+    "description": "What the prior milestone's own throwaway PostgreSQL execution (now destroyed) actually produced, once. Not reproducible from this repository alone -- the real workbook and that database are both gone by design. Kept for audit continuity, never re-run by this corrective commit.",
+    "total_records": 1045,
+    "quarantined_before": 450,
+    "decisions_persisted": 18,
+    "approved": 3,
+    "rejected": 15,
+    "records_reprocessed": 13,
+    "records_reprocessed_breakdown": {"NearMiss": 6, "PropertyDamage": 5, "VehicleAccident": 2},
+    "records_remaining_quarantined": 437,
+    "touched_by_this_corrective_commit": false
+  },
+  "milestone": "SIE Real Enterprise Terminology Calibration -- Implement Approved HSE Terminology Decisions v0.1 (corrective commit: durable decision artifact + strict compound subtype validation)",
   "prior_milestone_note": "This report supersedes the prior milestone's 'zero decided, mechanism-only' status below. All 18 terms are now explicitly decided (APPROVED/REJECTED) by an authorized reviewer through this codebase's own governed lifecycle. History (corrective_commit_note, is_synthetic_mechanism_demo's original meaning) is kept for audit continuity.",
   "corrective_commit_note": "An independent audit found the companion .md report's event_type/event_subtype SECTION HEADERS ('8 terms'/'10 terms') did not match the term tables/this file's own real_dataset_review_candidates list (7 and 11 respectively). Corrected to 7/11/18 -- the underlying data, real_dataset_review_candidates list, and records_affected counts in this file were never wrong.",
   "scope_note": "The 18 real-dataset terms have now each been explicitly PROPOSED and APPROVED or REJECTED by an authorized reviewer, using this codebase's own existing terminology_calibration_service lifecycle (propose_mapping/approve_mapping/reject_mapping), run once locally against a throwaway PostgreSQL database loaded from the real workbook (never committed -- see the .md report's 'Dataset boundary' note). No canonical value was invented to force an approval; a term with no genuinely exact pre-existing SIE canonical value was rejected, not approximated (see ppe_compliance_ontology_limitation below).",
@@ -232,13 +257,21 @@
   },
   "compound_event_subtype_mechanism": {
     "why_needed": "The real workbook's Incident sheet (app/validation/real_dataset_loader.py) has no subtype-bearing column at all -- only event_type is populated for Incident-sheet rows. Without a compound target, an event_type-only decision for NearMiss/PropertyDamage/VehicleAccident could only ever resolve event_type, collapsing all three (plus the already-MAPPED Injury term) into an indistinguishable event_type=INCIDENT.",
-    "how_it_works": "An event_type-domain TerminologyMappingDecision may declare provenance['target_event_subtype'], validated against the union of the existing INCIDENT subtype vocabulary and the top-level SafetyEventType names before approval (never an invented value). Applied by the adapter/reprocessing service ONLY when the record's own raw event_subtype is empty -- a genuine independent raw subtype value always takes precedence.",
-    "no_migration": "Rides entirely on TerminologyMappingDecision.provenance, the existing JSON column already used for version-supersession bookkeeping.",
-    "canonical_values_reused_not_invented": ["INCIDENT (existing SafetyEventType)", "NEAR_MISS (existing SafetyEventType, reused as a compound subtype target)", "PROPERTY_DAMAGE (existing INCIDENT subtype)", "VEHICLE_INCIDENT (existing INCIDENT subtype)"]
+    "how_it_works": "An event_type-domain TerminologyMappingDecision may declare provenance['target_event_subtype'], validated by _valid_compound_subtype_for() before approval. Applied by the adapter/reprocessing service ONLY when the record's own raw event_subtype is empty -- a genuine independent raw subtype value always takes precedence.",
+    "compound_validation_corrective_commit_v2": "_valid_compound_subtype_for(canonical_event_type) now returns EXACTLY that event_type's own curated subtype vocabulary (_SUBTYPE_ALIASES[canonical_event_type].values()) plus a narrow, explicit, one-pair-at-a-time exception list (_COMPOUND_SUBTYPE_SIBLING_EXCEPTIONS), seeded with exactly {INCIDENT: {NEAR_MISS}} -- the one pairing an actual governed decision requires. NEVER a union with all of SafetyEventType (the prior version's bug -- it let INCIDENT+OBSERVATION, INCIDENT+PERMIT, INCIDENT+TRAINING all incorrectly validate). PROPERTY_DAMAGE and VEHICLE_INCIDENT need no exception -- both are already in INCIDENT's own curated subtype vocabulary.",
+    "no_migration": "Rides entirely on TerminologyMappingDecision.provenance, the existing JSON column already used for version-supersession bookkeeping. The sibling-exceptions table lives in terminology_calibration_service.py (the governance/validation layer) -- terminology_mapping.py's own _SUBTYPE_ALIASES ontology table is never modified.",
+    "canonical_values_reused_not_invented": ["INCIDENT (existing SafetyEventType)", "NEAR_MISS (existing SafetyEventType, reused via the explicit sibling-exception list)", "PROPERTY_DAMAGE (existing INCIDENT subtype)", "VEHICLE_INCIDENT (existing INCIDENT subtype)"]
+  },
+  "test_counts": {
+    "tests/test_terminology_calibration.py": 51,
+    "tests/test_terminology_decision_artifact.py": 18,
+    "total_terminology_tests": 69
   },
   "synthetic_mechanism_test_summary": {
     "test_file": "tests/test_terminology_calibration.py",
     "covers": [
+      "corrective commit v2: INCIDENT+NEAR_MISS/PROPERTY_DAMAGE/VEHICLE_INCIDENT accepted; INCIDENT+OBSERVATION/PERMIT/TRAINING rejected with no mutation before failure",
+      "corrective commit v2: tightened validation does not break approve_mapping()/build_active_mapping_index()/CalibratedTerminologyMappingAdapter/reprocess_quarantined_records() for the 3 genuinely valid compound targets",
       "UNKNOWN -> REVIEW_CANDIDATE -> PROPOSED -> APPROVED",
       "PROPOSED -> REJECTED",
       "terminal decisions frozen (no further mutation)",
@@ -262,16 +295,38 @@
       "no arbitrary canonical value can become active; no ontology value created merely to force a mapping"
     ]
   },
+  "decision_artifact_test_summary": {
+    "test_file": "tests/test_terminology_decision_artifact.py",
+    "target": "the real, committed backend/config/real_enterprise_terminology_decisions_v1.json applied against a synthetic test organization",
+    "covers": [
+      "artifact contains exactly 18 decisions / 3 approved / 15 rejected",
+      "the three approved Incident decisions contain the correct compound subtype",
+      "all 11 Observation terms rejected; PPE Compliance rejected with the documented rationale",
+      "the two 'Others' decisions remain independently scoped in the artifact",
+      "artifact contains no real record IDs, PII, or database UUIDs",
+      "applying the artifact creates the expected 18 governed decisions",
+      "applying the artifact twice does not duplicate decisions (18, never 36)",
+      "an existing terminal decision that conflicts with the artifact raises loudly, never silently overwritten",
+      "a REJECTED decision is never flipped to APPROVED by reapplication",
+      "applying the artifact never creates a SafetyEvent row / never reprocesses",
+      "applying the artifact requires GOVERNANCE_MANAGE; a VIEWER is refused before any row is created",
+      "applying the artifact is tenant-scoped",
+      "a malformed artifact file fails loudly"
+    ]
+  },
   "architecture_limitations_discovered": [
     "A plain re-ingest can never re-trigger reclassification for content that has not changed (SafetyEventIngestionService idempotency compares the raw payload hash, not its resolution) -- reprocessing must call validate_and_normalize()/_apply() directly, not re-run ingest_batch().",
     "training_status/maintenance_status domains have no ingestion adapter that gates classification on them -- calibration approval for those domains has nothing to unlock; reprocessing refuses them.",
     "DataSourceAdapter.validate()/normalize() take no database session by design, so the calibration-aware adapter requires a precomputed active-mapping index rebuilt once per ingestion batch, not a live query.",
-    "The real workbook's Incident sheet provides no subtype-bearing raw column at all (this milestone's finding) -- addressed via the compound event_type+subtype target mechanism, never by modifying the ingestion format.",
-    "SIE's OBSERVATION canonical subtype vocabulary has no dedicated value for the broader 'PPE compliance' topic distinct from the narrower PPE_ISSUE (this milestone's finding) -- see ppe_compliance_ontology_limitation."
+    "The real workbook's Incident sheet provides no subtype-bearing raw column at all (prior milestone's finding) -- addressed via the compound event_type+subtype target mechanism, never by modifying the ingestion format.",
+    "SIE's OBSERVATION canonical subtype vocabulary has no dedicated value for the broader 'PPE compliance' topic distinct from the narrower PPE_ISSUE (prior milestone's finding) -- see ppe_compliance_ontology_limitation.",
+    "A governed decision persisted only in an ephemeral database is not durable by default (corrective-commit finding) -- fixed by the decision artifact; the general pattern (a governed decision needs an explicit, durable, version-controlled artifact to outlive the session that made it) generalizes to any future governed-decision mechanism.",
+    "A blanket union with an entire enum is a materially weaker guarantee than 'a genuine subtype of this specific event_type', even though both avoid inventing a brand-new canonical string (corrective-commit finding) -- fixed via a narrow, explicit, one-pair-at-a-time exception list instead of a type-system-wide union."
   ],
   "recommendations_for_next_milestone": [
     "A deliberate ontology-review milestone to decide whether OBSERVATION should gain a dedicated 'PPE compliance topic' canonical value, and whether any of the other 14 rejected terms warrant a genuinely new canonical value.",
     "A minimal API router (app/api/v1/terminology_calibration.py) so a real reviewer can drive the lifecycle from the product UI rather than a script.",
-    "The 437 records for the 15 rejected terms remain quarantined by design -- no further action expected unless a future ontology-review milestone changes the underlying vocabulary."
+    "The 437 records for the 15 rejected terms remain quarantined by design -- no further action expected unless a future ontology-review milestone changes the underlying vocabulary.",
+    "A real deployment wanting the same 13-record reprocessing outcome must itself apply the decision artifact and then separately, deliberately call reprocess_quarantined_records() against its own real quarantined records -- neither step is automatic and neither was performed against real data by this corrective commit."
   ]
 }

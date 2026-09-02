@@ -1,5 +1,50 @@
 # SIE Real Enterprise Terminology & Ontology Calibration Report v0.1
 
+**Corrective commit (Terminology Calibration v0.1, blockers 1 & 2) --
+read this section first.** An independent audit found two blockers in
+the prior milestone (`0505d8b`), both now fixed:
+
+1. **The 18 decisions were not durably reproducible.** They were
+   persisted only in a throwaway local PostgreSQL database, destroyed at
+   the end of that session — if it disappeared, the governed decision
+   set disappeared with it. Fixed: the repository now contains a
+   **durable, version-controlled, PII-free artifact**,
+   [`backend/config/real_enterprise_terminology_decisions_v1.json`](../config/real_enterprise_terminology_decisions_v1.json),
+   encoding all 18 decisions (source term, domain, context, occurrence
+   count, decision, canonical mapping, rationale — never a real record
+   ID, name, narrative, email, phone number, or database UUID), plus
+   `app/services/terminology_decision_artifact_service.py::apply_terminology_decision_artifact()`,
+   which applies it to any organization through the existing governed
+   lifecycle, idempotently, without reprocessing anything and without
+   loading the real workbook. **This repository does not contain the
+   real enterprise database or the real workbook** — only this
+   artifact, which lets a clean SIE environment reconstruct the same 18
+   governed decisions from source control.
+2. **Compound subtype validation was too permissive.** It unioned an
+   `event_type`'s curated subtype vocabulary with *every* top-level
+   `SafetyEventType` name, so `INCIDENT + OBSERVATION`/`PERMIT`/`TRAINING`
+   incorrectly validated as legitimate compound targets. Fixed: only
+   `INCIDENT`'s own curated subtype vocabulary, plus one narrow,
+   explicitly reviewed exception (`NEAR_MISS`, matching the actual
+   governed `NearMiss` decision below), is now valid — see
+   `app/services/terminology_calibration_service.py::_valid_compound_subtype_for()`.
+
+**Durable artifact vs. historical execution — do not conflate the two.**
+Everything in §3-§5 below describing "13 records reprocessed, 437
+remaining quarantined" is a report of **what already happened**, once,
+in the prior milestone's own throwaway PostgreSQL environment — a
+historical fact, not something this repository can currently reproduce
+against real data (the real workbook and that database are both gone,
+by design). The **durable artifact** is a separate thing: it lets the
+same 18 *decisions* (not the same *reprocessing run*) be reconstructed
+in any environment. Applying the artifact fresh, by itself, creates 18
+`TerminologyMappingDecision` rows and reprocesses nothing — a
+human/admin would still need to separately and deliberately call
+`reprocess_quarantined_records()` against that environment's own real
+quarantined records to repeat the 13-record outcome. This corrective
+commit does **not** do that -- no additional real records were
+reprocessed by it.
+
 **Status: human HSE review complete (Implement Approved HSE Terminology
 Decisions v0.1).** All 18 real-dataset terms surfaced by the prior
 milestones have now been explicitly decided by an authorized reviewer
@@ -206,14 +251,28 @@ for all 3 approved decisions a second time updated 0 records (nothing
 left in `QUARANTINED` state for those scope keys to re-examine) — safe
 to run more than once, no duplicate events, no conflicting provenance.
 
-## 6. Mechanism regression coverage (synthetic data only)
+## 6. Mechanism regression coverage
 
-Every new automated test in `tests/test_terminology_calibration.py`
-uses **fabricated** terminology and a synthetic test organization/user —
-never the real dataset — per this milestone's own testing requirements.
-See the test file itself for the full battery (decision lifecycle,
-reprocessing, rejection safety, provenance, tenant/source isolation,
-ontology safety).
+`tests/test_terminology_calibration.py` (51 tests) uses **fabricated**
+terminology and a synthetic test organization/user — never the real
+dataset — covering decision lifecycle, reprocessing, rejection safety,
+provenance, tenant/source isolation, and ontology safety, including the
+corrective commit's own tightened compound-subtype validation
+(`INCIDENT+NEAR_MISS`/`PROPERTY_DAMAGE`/`VEHICLE_INCIDENT` accepted;
+`INCIDENT+OBSERVATION`/`PERMIT`/`TRAINING` rejected, with no mutation
+before the failure).
+
+`tests/test_terminology_decision_artifact.py` (18 tests) exercises the
+**real, committed artifact file itself** — `backend/config/real_enterprise_terminology_decisions_v1.json`
+— against a synthetic test organization: exactly 18/3/15 decisions,
+the three compound subtypes, the two independently-scoped `Others`
+decisions, PII/UUID absence in the artifact file, idempotent
+application (18 decisions after applying twice, never 36), a conflicting
+terminal decision failing loudly rather than being silently overwritten,
+a `REJECTED` decision never flipping to `APPROVED` on reapplication, zero
+`SafetyEvent` rows created by applying the artifact, the
+`GOVERNANCE_MANAGE` authorization boundary, tenant scoping, and a
+malformed artifact file failing loudly.
 
 ## 7. Architecture limitations discovered (cumulative, including this milestone)
 
@@ -232,6 +291,25 @@ ontology safety).
 5. **SIE's `OBSERVATION` canonical subtype vocabulary has no dedicated
    "PPE compliance topic" value** distinct from the narrower `PPE_ISSUE`
    (new finding, this milestone) — see §4.
+6. **A governed decision, once persisted only in an ephemeral database,
+   is not durable by default** (corrective-commit finding) — building the
+   calibration mechanism and actually deciding the 18 real-dataset terms
+   is not the same as being able to reconstruct that decision set from
+   source control alone. Fixed by the decision artifact (see the
+   corrective-commit note at the top of this report); the general
+   pattern — a governed decision needs an explicit, durable,
+   version-controlled artifact if it must outlive the session that made
+   it — is worth keeping in mind for any future governed-decision
+   mechanism this codebase adds.
+7. **A blanket union with an entire enum is an easy, dangerous shortcut
+   for "reuse an existing value"** (corrective-commit finding) — the
+   prior milestone's own compound-subtype validation is a concrete
+   example: it correctly avoided *inventing* a new canonical value, but
+   achieved that by unioning with *every* top-level `SafetyEventType`,
+   which is a materially different and much weaker guarantee ("already
+   exists somewhere" vs. "already exists as a valid subtype of *this*
+   event_type"). Fixed via a narrow, explicit, one-pair-at-a-time
+   exception list instead.
 
 ## 8. Recommendations for the next milestone
 
@@ -247,6 +325,15 @@ ontology safety).
 3. The 437 still-quarantined records for the 15 rejected terms remain
    quarantined by design — no further action is expected on them unless
    a future ontology-review milestone changes the underlying vocabulary.
+4. A real deployment that wants the same 13-record reprocessing outcome
+   this report's §5 describes must, itself: (a) apply
+   `backend/config/real_enterprise_terminology_decisions_v1.json` via
+   `apply_terminology_decision_artifact()` against its own organization,
+   then (b) separately and deliberately call
+   `reprocess_quarantined_records()` for each of the 3 resulting
+   `APPROVED` decision IDs against its own real quarantined records —
+   neither step is automatic, and this corrective commit performs
+   neither against real data.
 
 ---
 

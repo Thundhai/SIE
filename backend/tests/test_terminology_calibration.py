@@ -1089,6 +1089,98 @@ def test_compound_target_invented_subtype_approval_fails_and_leaves_decision_pro
     assert still_proposed.status == "PROPOSED"
 
 
+# --- Corrective commit (blocker 2): compound subtype validation must be strictly scoped ----------
+# to the selected event_type's own canonical subtype vocabulary -- never a blanket union with
+# every top-level SafetyEventType value (which previously let e.g. INCIDENT+OBSERVATION validate
+# purely because OBSERVATION happens to exist *somewhere* in the enum).
+
+
+@requires_postgres
+@pytest.mark.parametrize(
+    ("term", "target_subtype"),
+    [("QuasiNearMissB2", "NEAR_MISS"), ("QuasiPropertyDamageB2", "PROPERTY_DAMAGE"), ("QuasiVehicleAccidentB2", "VEHICLE_INCIDENT")],
+)
+def test_incident_compound_target_the_three_genuine_incident_subtypes_are_accepted(pg_session, term, target_subtype):
+    org = make_org(pg_session, f"HSE Decisions - Compound Valid {target_subtype}")
+    admin = make_org_member(pg_session, org.id)
+    candidate = _compound_candidate(pg_session, organization_id=org.id, source_term=term)
+    approved = _approve_compound(
+        pg_session, organization_id=org.id, candidate=candidate, canonical_event_type="INCIDENT",
+        target_event_subtype=target_subtype, acting_user_id=admin.id,
+    )
+    assert approved.status == "APPROVED"
+    assert approved.provenance["target_event_subtype"] == target_subtype
+
+
+@requires_postgres
+@pytest.mark.parametrize("bogus_subtype", ["OBSERVATION", "PERMIT", "TRAINING"])
+def test_incident_compound_target_other_top_level_event_types_are_rejected(pg_session, bogus_subtype):
+    """Blocker 2's own explicit invariant: `INCIDENT + OBSERVATION`,
+    `INCIDENT + PERMIT`, and `INCIDENT + TRAINING` must all be refused --
+    each is a genuine top-level `SafetyEventType` value, but NONE of
+    them is itself a curated `INCIDENT` subtype, so none may validate as
+    a compound target merely because it exists somewhere in the enum."""
+    org = make_org(pg_session, f"HSE Decisions - Compound Invalid {bogus_subtype}")
+    admin = make_org_member(pg_session, org.id)
+    candidate = _compound_candidate(pg_session, organization_id=org.id, source_term=f"QuasiBogus{bogus_subtype}")
+    candidate.provenance = {"target_event_subtype": bogus_subtype}
+    pg_session.add(candidate)
+    pg_session.commit()
+    proposed = svc.propose_mapping(
+        pg_session, organization_id=org.id, decision_id=candidate.id, proposed_canonical_term="INCIDENT",
+        rationale="r", acting_user_id=admin.id,
+    )
+    with pytest.raises(InvalidCanonicalTermError):
+        svc.approve_mapping(pg_session, organization_id=org.id, decision_id=proposed.id, acting_user_id=admin.id)
+
+    pg_session.expire_all()
+    still_proposed = pg_session.query(TerminologyMappingDecision).filter(TerminologyMappingDecision.id == proposed.id).one()
+    assert still_proposed.status == "PROPOSED"  # no mutation happened before the failure
+    assert still_proposed.reviewer_user_id is None
+    assert still_proposed.decided_at is None
+    assert still_proposed.proposed_canonical_term == "INCIDENT"  # the proposal itself is untouched too
+
+
+@requires_postgres
+def test_tightened_compound_validation_does_not_break_the_active_mapping_index_or_adapter(pg_session):
+    """Traces the corrective commit's own required caller list --
+    approve_mapping() -> build_active_mapping_index() ->
+    CalibratedTerminologyMappingAdapter -- end to end for all three
+    genuinely-valid compound targets, proving the tightened validation
+    changed nothing about how an already-APPROVED compound decision is
+    read back and applied."""
+    org = make_org(pg_session, "HSE Decisions - Compound Tightened Still Resolves")
+    admin = make_org_member(pg_session, org.id)
+
+    specs = {
+        "QuasiNearMissC": ("INCIDENT", "NEAR_MISS"),
+        "QuasiPropertyDamageC": ("INCIDENT", "PROPERTY_DAMAGE"),
+        "QuasiVehicleAccidentC": ("INCIDENT", "VEHICLE_INCIDENT"),
+    }
+    for term, (canonical, subtype) in specs.items():
+        candidate = _compound_candidate(pg_session, organization_id=org.id, source_term=term)
+        _approve_compound(
+            pg_session, organization_id=org.id, candidate=candidate, canonical_event_type=canonical,
+            target_event_subtype=subtype, acting_user_id=admin.id,
+        )
+
+    index = svc.build_active_mapping_index(pg_session, organization_id=org.id, source_system="synthetic-hse-xlsx")
+    adapter = CalibratedTerminologyMappingAdapter(active_mappings=index)
+    for term, (canonical, subtype) in specs.items():
+        enterprise_ingestion_service.ingest_batch(
+            pg_session, organization_id=org.id,
+            payloads=[RawSafetyEventPayload(
+                event_type=term, event_time="2026-06-07T00:00:00Z", source_system="synthetic-hse-xlsx",
+                source_record_id=f"TIGHT-{term}",
+            )],
+            adapter=adapter, source_id=None,
+        )
+        event = pg_session.query(SafetyEvent).filter(SafetyEvent.source_record_id == f"TIGHT-{term}").one()
+        assert event.event_type == canonical
+        assert event.event_subtype == subtype
+        assert event.data_quality_status != "QUARANTINED"
+
+
 @requires_postgres
 def test_compound_target_reprocessing_applies_both_fields_with_exact_shared_provenance(pg_session):
     org = make_org(pg_session, "HSE Decisions - Compound Reprocessing")

@@ -136,25 +136,54 @@ def _canonical_terms_for(domain: str, context: str | None) -> frozenset[str] | N
     return None
 
 
+#: Corrective commit (Terminology Calibration v0.1 -- blocker 2). A
+#: narrow, explicitly reviewed exception list: a top-level
+#: `SafetyEventType` value that may ALSO serve as a compound
+#: `target_event_subtype` under one SPECIFIC parent `canonical_event_type`
+#: -- added deliberately, one reviewed pair at a time, exactly like
+#: `_SUBTYPE_ALIASES` itself is curated, NEVER derived automatically
+#: from the type system. This is the one, sole difference from a blanket
+#: union with `SafetyEventType` (the bug this corrective commit fixes:
+#: that union let ANY top-level type -- `OBSERVATION`, `PERMIT`,
+#: `TRAINING`, anything -- validate as a subtype of ANY other type,
+#: purely because it happened to exist somewhere in the enum). Seeded
+#: with exactly the one pairing an actual governed human decision
+#: requires: this organization's incident register files near-misses as
+#: an `INCIDENT`-type record with `subtype=NEAR_MISS`, reusing SIE's own
+#: pre-existing `NEAR_MISS` `SafetyEventType` value rather than inventing
+#: a new one (see `docs/REAL_ENTERPRISE_TERMINOLOGY_CALIBRATION_REPORT.md`).
+#: Lives here, in the governance/validation layer -- `terminology_mapping.py`'s
+#: own `_SUBTYPE_ALIASES` ontology table is never modified by this
+#: corrective commit or by adding an entry here.
+_COMPOUND_SUBTYPE_SIBLING_EXCEPTIONS: dict[str, frozenset[str]] = {
+    SafetyEventType.INCIDENT.value: frozenset({SafetyEventType.NEAR_MISS.value}),
+}
+
+
 def _valid_compound_subtype_for(canonical_event_type: str) -> frozenset[str]:
     """Valid `target_event_subtype` values an `event_type`-domain
     decision may declare in `provenance["target_event_subtype"]` (Real
     Enterprise Terminology Calibration — Implement Approved HSE
-    Terminology Decisions v0.1) -- the curated subtype vocabulary for
-    `canonical_event_type` (exactly `_canonical_terms_for(EVENT_SUBTYPE,
-    canonical_event_type)`'s own set) PLUS the top-level `SafetyEventType`
-    names themselves. The union is deliberate and narrow: a human
-    reviewer may legitimately decide their organization classifies a term
-    under a *broader* parent event_type while still recording SIE's own
-    pre-existing type concept it corresponds to (e.g. a source system's
-    `NearMiss` term filed under `event_type=INCIDENT` with
-    `subtype=NEAR_MISS`, reusing the already-existing `NEAR_MISS`
-    `SafetyEventType` value rather than inventing a new one). Used ONLY
-    for a compound `target_event_subtype` on an `event_type` decision --
+    Terminology Decisions v0.1) -- EXACTLY `canonical_event_type`'s own
+    curated subtype vocabulary (`_canonical_terms_for(EVENT_SUBTYPE,
+    canonical_event_type)`'s own set, i.e. `_SUBTYPE_ALIASES[canonical_event_type].values()`),
+    plus `_COMPOUND_SUBTYPE_SIBLING_EXCEPTIONS`'s own narrow, explicitly
+    reviewed additions for that event_type, if any.
+
+    **Corrective commit (blocker 2): never a blanket union with all of
+    `SafetyEventType`.** An earlier version of this function unioned with
+    every top-level `SafetyEventType` name, which meant `INCIDENT +
+    OBSERVATION`, `INCIDENT + PERMIT`, and `INCIDENT + TRAINING` all
+    incorrectly validated as legitimate compound targets -- purely
+    because each name happened to exist *somewhere* in the enum, not
+    because any of them is a genuine Incident subtype. That is fixed
+    here: only `canonical_event_type`'s own curated subtype vocabulary,
+    plus specific, reviewed exceptions, are ever valid. Used ONLY for a
+    compound `target_event_subtype` on an `event_type` decision --
     standalone `event_subtype`-domain decisions stay governed by
     `_canonical_terms_for()` alone, unwidened, exactly as before."""
     table = _SUBTYPE_ALIASES.get(canonical_event_type, {})
-    return frozenset(table.values()) | frozenset(t.value for t in SafetyEventType)
+    return frozenset(table.values()) | _COMPOUND_SUBTYPE_SIBLING_EXCEPTIONS.get(canonical_event_type, frozenset())
 
 
 class TerminologyMappingDecisionNotFoundError(ValueError):
