@@ -632,6 +632,25 @@ ordering protection, use a plain incrementing integer as
 `source_record_version` today, or contact SIE about extending this in a
 future milestone.
 
+### Terminology mapping for heterogeneous source vocabulary
+
+Real source systems rarely use SIE's own canonical vocabulary verbatim —
+one system's `"Near Miss"` is another's `"NM"` or `"Potential Incident"`.
+`app/intelligence/terminology_mapping.py` (Real-World Data Validation &
+Intelligence Calibration v0.1) is a small, deterministic (no LLM),
+table-driven mapping layer covering incident types, observation types,
+inspection types, audit findings, training status, and maintenance
+status, available as an opt-in `DataSourceAdapter` — pass it as this
+endpoint's `adapter` when integrating a source whose own terminology
+differs from SIE's canonical values, rather than pre-mapping every
+payload yourself before sending it. **It never guesses**: an ambiguous
+or unrecognized term is quarantined with an explicit issue, not silently
+mapped to the closest-looking canonical value. See
+`docs/CALIBRATION_METHODOLOGY.md` §4 for the full mapping methodology,
+and `tests/test_terminology_mapping.py` for the current alias tables per
+domain — extend those tables directly if your source's own terminology
+isn't yet covered.
+
 ### Provenance
 
 Every canonical event created through this endpoint traces back to: the
@@ -684,6 +703,16 @@ has no equivalent surface here to reappear on.
   canonical event to hold it); a `QUARANTINED`/`PARTIAL`/`VALID`
   record's payload lives on its canonical event instead, never
   duplicated.
+* **A one-time bulk historical backfill will make retrospective trend
+  analytics over that backfilled period look degenerate** (collapsed
+  into the single most recent period) until real-time-cadence data has
+  accumulated — a direct, correct consequence of SIE's point-in-time
+  leakage guarantee (`ingestion_time` is always stamped at real
+  wall-clock "now"), not a defect. If you are migrating years of
+  history in one ingestion run and need meaningful historical trend
+  reconstruction over that period immediately, see
+  `docs/CALIBRATION_METHODOLOGY.md` §5 for the full explanation and
+  what such an integration would need to account for.
 
 ### Future connector extension points
 

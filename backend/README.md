@@ -3651,6 +3651,218 @@ caller can currently observe. See
 ["Known gaps / next phase"](#known-gaps--next-phase) for this
 milestone's own genuine, as-built limitations.
 
+## Real-World Data Validation & Intelligence Calibration Architecture
+
+    5 controlled scenarios (tests/fixtures/enterprise_scenarios.py)
+        -> real EnterpriseIngestionService.ingest_batch()  (UNCHANGED, prior milestone's own service)
+            -> data-quality benchmark (accepted/partial/quarantined/rejected/duplicate/version-conflict rates)
+        -> real compute_summary/compute_trend/risk_signal_service/detect_anomaly  (all UNCHANGED)
+            -> compared against each scenario's own known-correct direction
+            -> EXPECTED / UNEXPECTED / INDETERMINATE calibration outcome
+    + provenance-chain validation, predictive-dataset-readiness validation,
+      multi-tenant isolation validation -- all against the same real, unmodified code paths
+
+This is the Real-World Data Validation & Intelligence Calibration v0.1
+milestone. **Its purpose is explicitly not to add intelligence
+capability.** It asks a different question: does the SIE data and
+intelligence architecture already built across every prior milestone
+behave correctly and meaningfully on data shaped like a real
+organization's safety/operational history, rather than on the narrow
+synthetic unit-test fixtures each earlier milestone's own tests used?
+**The governing rule this milestone was held to: do not redesign the
+existing SIE intelligence architecture.** Every ingestion, validation,
+normalization, analytics, signal, anomaly, and predictive-dataset call
+below is the exact, unmodified code prior milestones already built and
+tested — this milestone is validation, calibration, and evidence, not a
+new feature.
+
+### What already existed and was reused, not duplicated
+
+Inspection before writing any code (this milestone's own item 1) found
+every layer this calibration exercise needed already built and already
+tested in isolation: `safety_events`, the enterprise ingestion API and
+`EnterpriseIngestionService`/`SafetyEventIngestionService` (prior
+milestone), deterministic validation and normalization
+(`app/intelligence/validation.py`/`normalization.py`), the data-quality
+vocabulary (`DataQualityStatus`), `events_as_of()`'s point-in-time
+guarantee and `bucketed_counts()` (`app/intelligence/temporal.py`),
+descriptive intelligence and feature engineering
+(`app/intelligence/analytics.py`/`features.py`), leading/lagging
+indicators and trend classification (`indicators.py`/`trends.py`),
+anomaly detection (`anomaly.py`), risk signals (`signals.py`), predictive
+dataset construction (`app/predictions/dataset.py`), tenant isolation,
+and API authorization. Nothing in this list was changed by this
+milestone; every calibration result below is a real, previously-existing
+code path exercised against new, realistic test data — not new logic
+being validated for the first time.
+
+### Realistic scenario framework and five known-ground-truth scenarios
+
+`tests/fixtures/enterprise_scenarios.py` is a generic (no
+Safelytic-specific schema) fixture framework covering the milestone's own
+required domain vocabulary — incidents, near misses, observations,
+inspections, audits, permits, training, and maintenance/operational
+signals — built with deterministic, seeded (`random.Random(seed)`)
+relative-day-offset timing, the same convention
+`tests/fixtures/intelligence/synthetic_dataset.py` already established.
+Five scenarios (`tests/evaluation/calibration_harness.py`'s own
+`_SCENARIO_EVALUATORS`), each with an explicit, known-correct expected
+direction and careful non-causal language:
+
+| Scenario | Shape | Expected (never claimed as causal) |
+|---|---|---|
+| A — Stable / Low Concern | Flat activity across four consecutive 30-day periods | Stable trends, no risk signals |
+| B — Emerging Risk | Near misses/unsafe observations/overdue training/maintenance sharply up in the current 30 days against a quiet 90-day baseline; incidents stay flat | Leading indicators deteriorate; **no claim these factors caused an incident**, since none occurs |
+| C — Lagging Event Increase | Leading indicators identical to a stable 4-period baseline; a sudden high-potential incident cluster in the current window | Lagging/trend/anomaly signals fire where statistically justified |
+| D — Data Quality Degradation | Missing event dates, an invalid classification, an exact-duplicate resend, a same-version content conflict, missing identifiers, mixed with valid records | Degraded quality metrics; invalid/quarantined records excluded from analytics, never silently trusted |
+| E — Recovery | An elevated period improving into a recovered current 30 days | Leading/risk indicators improve; **improvement in indicators is never asserted as proof of actual safety improvement** |
+
+### A real calibration finding: point-in-time correctness and bulk-backfilled history
+
+Calibrating against these scenarios surfaced a genuine, previously
+unexercised interaction, not a bug: `events_as_of()`'s point-in-time
+guarantee (`ingestion_time <= as_of`, strict by default — see
+[Universal ingestion architecture](#universal-ingestion-architecture)'s
+temporal design) is checked **per bucket** by `bucketed_counts()`, using
+that bucket's own historical end date as `as_of`. A one-shot bulk
+historical backfill — every row's `ingestion_time` stamped at the same
+real "now" — is therefore, entirely correctly, invisible to every bucket
+whose own boundary predates that real ingestion moment: strict
+point-in-time correctness demands exactly this, since none of that
+history was actually knowable to the system at any of those earlier
+boundaries. The practical consequence: **retrospective trend
+reconstruction over a one-time bulk backfill will appear to collapse
+into the single most recent bucket** unless the data was ingested with a
+realistic, near-real-time cadence. This is not something this milestone
+changed in `app/intelligence/temporal.py` — redesigning that guarantee
+was explicitly out of scope. The calibration harness instead simulates
+the realistic case these scenarios describe (an organization operating
+day to day, not migrating history in one sitting) by directly backdating
+`ingestion_time` to track shortly after each event's own `event_time`
+(`_backdate_ingestion_time_near_event_time()`, never through the
+ingestion service, mirroring `tests/evaluation/intelligence_harness.py`'s
+own pre-existing `stale_data_org` backdating) — documented as a genuine
+limitation for real bulk-migration customers in
+`docs/CALIBRATION_METHODOLOGY.md`, not patched around silently.
+
+### Terminology mapping — the one new production capability
+
+`app/intelligence/terminology_mapping.py` is this milestone's only
+genuinely new production code — a small, deterministic (no LLM),
+opt-in alias-mapping layer for the milestone's own item 4: heterogeneous
+source terminology ("Near Miss"/"Near-Miss"/"NM"/"Potential Incident")
+mapped to SIE's canonical vocabulary for incident types, observation
+types, inspection types, audit findings, training status, and
+maintenance status. It integrates through the existing, pre-built
+`DataSourceAdapter` Protocol (`app/intelligence/adapters.py`) — exactly
+that Protocol's own documented extension point — as a second, opt-in
+implementation alongside the unchanged default `GenericJSONAdapter`,
+never modifying the core validate/normalize/upsert pipeline.
+**Ambiguous terminology is never guessed**: `map_event_type()`/
+`map_event_subtype()`/`map_training_status()`/`map_maintenance_status()`
+return an explicit `AMBIGUOUS` or `UNKNOWN` `MappingOutcome`, which
+`TerminologyMappingAdapter.validate()` turns into a blocking
+`ValidationIssue` — reusing `validate_and_normalize()`'s existing
+blocking-issue-to-`QUARANTINED` rule rather than inventing a second
+quarantine mechanism. The adapter preserves the "`source_value` is
+exactly what was received" invariant: the payload's true original
+terminology is preserved in `source_value` even though the canonical
+`event.event_type`/`event_subtype` are the mapped values.
+
+### Temporal validation, data-quality benchmarking, provenance, and calibration classification
+
+`tests/test_enterprise_temporal_calibration.py` (item 5) is additive to
+the pre-existing, mandatory 6-case `tests/test_temporal_leakage.py` —
+every case here goes through the real `EnterpriseIngestionService` end
+to end (never hand-seeded rows): the milestone's own worked example
+(an incident dated 2026-01-10 but only ingested 2026-02-05 must not
+appear in a 2026-01-31 snapshot), late-arriving historical batches, a
+version correction re-stamping `ingestion_time` and the resulting
+retroactive-visibility change this causes (a documented, asserted
+characteristic of a single-physical-row upsert, not a bug), a stale
+out-of-order version never disturbing already-applied newer content, a
+plausible future `event_time` (accepted, but correctly excluded until
+that time arrives), duplicate timestamps on genuinely distinct records,
+and out-of-order batch arrival.
+
+`DataQualityBenchmark` (`tests/evaluation/calibration_harness.py`, item
+6) computes total/valid/partial/quarantined/rejected/duplicate/stale/
+version-conflict/missing-timestamp/invalid-classification/missing-identifier
+counts and completeness/acceptance/rejection/quarantine/duplicate/
+temporal-validity rates directly from a real `EnterpriseIngestionResult`
+— schema-validity metrics only, **never presented as factual correctness
+of the underlying record** (the milestone's own explicit caution,
+restated verbatim in every generated report).
+
+`_validate_provenance()` (item 7) walks the full chain — external record
+→ `EnterpriseIngestionRecord` → `EnterpriseIngestionBatch` → `DataSource`
+→ canonical `SafetyEvent` — for every accepted record in a real ingested
+batch, confirming external record id, source system, content hash,
+normalization status, and schema version all survive intact.
+
+Calibration itself (items 8-9) compares each scenario's real
+`compute_trend`/`compute_summary`/`risk_signal_service.detect_all`/
+`detect_anomaly` output against that scenario's own known-correct
+direction, classified `EXPECTED`/`UNEXPECTED`/`INDETERMINATE` (never
+forced to a binary pass/fail when a method genuinely can't support one —
+e.g. anomaly detection below its minimum baseline period count).
+
+### Predictive dataset readiness
+
+`tests/test_predictive_dataset_readiness.py` (item 10) validates
+`app/predictions/dataset.py::build_training_examples()` against
+realistic, site-scoped scenario data: correct `(site, as_of)` keying, a
+feature vector that genuinely reflects real ingested activity, no future
+leakage (concretely — a snapshot built before a realistic escalation
+shows the quiet baseline, one built after shows the real elevated count),
+label construction using only events strictly after `as_of` within the
+horizon, missing-data handling for a site with no events, tenant
+isolation, and full reproducibility (byte-for-byte identical
+`TrainingExample`s on a second build). **This validates dataset
+construction correctness only — it does not improve, retrain, or claim
+any predictive accuracy for the model itself**; feature/label separation
+remains `tests/test_feature_label_separation.py`'s own, unmodified
+regression test.
+
+### Multi-tenant validation and reproducibility
+
+Every scenario, provenance check, and predictive-readiness check runs
+against a fresh, dedicated `Organization` per test; `_validate_tenant_isolation()`
+(item 12) additionally proves two organizations ingesting *different*
+scenarios in the same run never see each other's canonical events,
+quality metrics, or predictive datasets. Every scenario/mapping/fixture
+uses only deterministic, seeded randomness and relative time offsets
+(item 11/13) — `tests/evaluation/test_calibration_evaluation.py` asserts
+exact, seed-derived record counts per scenario (72/77/65/16/53) as a
+direct reproducibility check, and the full calibration run was confirmed
+byte-identical (aside from its own generation timestamp) across repeated
+executions.
+
+### Evaluation reports
+
+`tests/evaluation/test_calibration_evaluation.py` (item 14) writes both
+`docs/CALIBRATION_EVALUATION_REPORT.md` (human-readable) and
+`docs/CALIBRATION_EVALUATION_REPORT.json` (machine-readable), each
+stamped with the same label restated everywhere in this milestone:
+**"Prototype / controlled-scenario calibration only — not a production
+benchmark."** See
+[`docs/CALIBRATION_METHODOLOGY.md`](docs/CALIBRATION_METHODOLOGY.md) for
+the full methodology, how to run the evaluation, how to interpret its
+results, and this milestone's own limitations — including the explicit
+statement that these controlled scenarios do not establish production
+accuracy on any real customer's data.
+
+### What this milestone deliberately does not add
+
+No advanced ML, no deep learning, no model retraining, no autonomous
+agents, no autonomous interventions, no worker-level scoring, no
+LLM-based normalization or mapping (`terminology_mapping.py` is entirely
+deterministic, table-driven), no web crawling, no external intelligence
+feeds, no event streaming, no Redis queues, no distributed workers, no
+production alerting, no automated safety decisions. See ["Known gaps /
+next phase"](#known-gaps--next-phase) for this milestone's own genuine,
+as-built limitations.
+
 ## Configuration
 
 All configuration is environment-based (`app/core/config.py`, backed by
@@ -3771,7 +3983,18 @@ for the full design and that section's own "What this milestone
 deliberately does not add" for what remains genuinely out of scope
 (async/background processing, CSV/XLSX/webhook/database/event-stream
 connectors, and non-numeric source-record-version ordering in
-particular).
+particular). **As of Real-World Data Validation & Intelligence
+Calibration v0.1, the existing ingestion/validation/analytics/predictive
+pipeline has been calibrated against five controlled, realistic
+scenarios with known-correct expected outcomes, plus dedicated temporal,
+data-quality, provenance, predictive-dataset-readiness, and multi-tenant
+validation** — see [Real-World Data Validation & Intelligence Calibration
+Architecture](#real-world-data-validation--intelligence-calibration-architecture)
+and [`docs/CALIBRATION_METHODOLOGY.md`](docs/CALIBRATION_METHODOLOGY.md).
+This milestone deliberately adds no new intelligence capability — see
+that section's own "What this milestone deliberately does not add" — and
+its results are explicitly **not** evidence of production accuracy on
+real customer data.
 
 ## Known gaps / next phase
 
@@ -4126,3 +4349,42 @@ particular).
     row**, not archived anywhere else — if that row is ever deleted, the
     original content is gone; SIE does not currently prune these rows,
     so this is a future-maintenance consideration, not an immediate gap.
+* **Real-World Data Validation & Intelligence Calibration v0.1's own
+  genuine limitations:**
+  * **Retrospective trend reconstruction over a one-time bulk historical
+    backfill will appear degenerate** (collapsed into the single most
+    recent bucket) unless the data was ingested with a realistic,
+    near-real-time cadence — a direct, correct consequence of
+    `events_as_of()`'s per-bucket point-in-time guarantee, not something
+    this milestone changed. See this file's own ["A real calibration
+    finding"](#a-real-calibration-finding-point-in-time-correctness-and-bulk-backfilled-history)
+    section and `docs/CALIBRATION_METHODOLOGY.md` for the full
+    explanation and what a real bulk-migration integration would need to
+    account for (backdating `ingestion_time` realistically, or querying
+    with `strict_point_in_time=False` for that specific historical
+    reconstruction use case — neither built here, both out of scope).
+  * **Five controlled, synthetic scenarios are not a statistically
+    representative sample of any real organization**, and calibration
+    against them is not a precision/recall/accuracy metric against real
+    ground truth (there is none to measure against yet). An `EXPECTED`
+    calibration outcome means the existing code behaves as designed on
+    this scenario, nothing more.
+  * **Anomaly and signal thresholds calibrated here are this codebase's
+    existing, unmodified configuration** (`INTELLIGENCE_*` settings) —
+    calibration confirms they fire/don't fire as designed, not that
+    those specific threshold values are the right ones for any
+    particular real deployment.
+  * **The terminology-mapping vocabulary
+    (`app/intelligence/terminology_mapping.py`) covers a representative,
+    not exhaustive, set of real-world aliases** per domain. An
+    unrecognized term is quarantined/flagged, never guessed — by design
+    — but that means a real integration will likely need its alias
+    tables extended before go-live; there is no configuration UI or
+    per-tenant override for this yet, only the module's own Python
+    tables.
+  * **`generate_label()` (predictive dataset construction) does not
+    filter on `ingestion_time`**, unlike every other analytics/signal
+    call in this codebase — an existing, prior-milestone design choice
+    (labels are computed with full hindsight from already-collected
+    historical data, not as a live "as of now" query) confirmed, not
+    changed, by this milestone's predictive-readiness tests.
