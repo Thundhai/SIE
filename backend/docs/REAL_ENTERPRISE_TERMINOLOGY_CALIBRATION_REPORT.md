@@ -1,210 +1,252 @@
 # SIE Real Enterprise Terminology & Ontology Calibration Report v0.1
 
-**Corrective-commit note.** An independent audit found this report's own
-`event_type`/`event_subtype` section headers ("8 terms" / "10 terms")
-did not match the term tables directly beneath them (7 rows and 11 rows,
-respectively) — a transcription error in the headers, not in the
-underlying data or logic. This is corrected below: **7** `event_type`
-terms, **11** `event_subtype` terms, **18** total — unchanged from what
-the tables themselves, and the companion `.json`, always actually listed.
+**Status: human HSE review complete (Implement Approved HSE Terminology
+Decisions v0.1).** All 18 real-dataset terms surfaced by the prior
+milestones have now been explicitly decided by an authorized reviewer
+through this codebase's own governed lifecycle
+(`REVIEW_CANDIDATE → PROPOSED → APPROVED`/`REJECTED`) — **4 proposed,
+3 approved, 15 rejected** (see §4 for why the 4th, `PPE Compliance`,
+could not be safely approved). No term is left `REVIEW_CANDIDATE` or
+`PROPOSED`. Approved decisions were reprocessed against the real
+dataset's own quarantined records using the existing, unmodified
+`reprocess_quarantined_records()` mechanism; rejected decisions were
+left untouched and their records remain quarantined. This report
+supersedes the "zero decided" framing of the prior milestone below —
+history is kept for audit continuity, not restated as still true.
 
-**This report describes a calibration *mechanism*, not a completed terminology
-review.** It builds and proves a controlled workflow for moving enterprise
-terminology through `UNKNOWN → REVIEW CANDIDATE → PROPOSED → HSE REVIEW
-→ APPROVED / REJECTED` — it does **not** itself perform HSE review of the
-real dataset's own terms. No human HSE reviewer participated in this
-session, so **zero** of the real dataset's 18 unresolved terms have been
-proposed or approved here. Claiming otherwise would violate this
-milestone's own final rule ("do not claim a mapping is HSE-approved
-unless an explicit approval operation exists and was actually exercised
-by an authorized reviewer"). Every `APPROVED`/`REJECTED` decision
-demonstrated in this milestone's own automated test suite uses
-**synthetic** terminology and a synthetic test user — never the real
-dataset.
+**Corrective-commit note (prior milestone, unchanged).** An independent
+audit found this report's own `event_type`/`event_subtype` section
+headers ("8 terms" / "10 terms") did not match the term tables directly
+beneath them (7 rows and 11 rows, respectively) — a transcription error
+in the headers, not in the underlying data or logic. Corrected then to
+**7** `event_type` terms, **11** `event_subtype` terms, **18** total —
+those counts are unchanged by this milestone; only their *status* changed
+(§3).
 
-**Dataset boundary, unchanged from the prior milestone.** The real
-workbook was read once, locally, from a scratch directory outside this
-repository, purely to (a) surface its own genuinely unresolved terms
-through the existing, unmodified `terminology_review.py`, and (b) create
-`REVIEW_CANDIDATE` rows for them in a local, throwaway database (created
-and destroyed within this session, never the shared `sie` database, never
-committed). No raw record, narrative, or name from the workbook was
-copied into source control, a fixture, a test, or this report — only the
-terminology terms themselves (already public in the prior milestone's own
-committed `REAL_ENTERPRISE_DATASET_EVALUATION_REPORT.md`) and their
-occurrence counts.
+**Dataset boundary, unchanged from every prior milestone.** The real
+workbook was read locally, from a scratch directory outside this
+repository, into a local, throwaway PostgreSQL database (created and
+destroyed within this session, never the shared `sie` database, never
+committed) — never copied into source control, a fixture, a test, or
+this report. Only the terminology terms themselves (already public in
+`REAL_ENTERPRISE_DATASET_EVALUATION_REPORT.md`), their occurrence
+counts, and the resulting decision/provenance identifiers (UUIDs,
+carrying no PII) appear below.
 
 ---
 
-## 1. What was built
+## 1. What was built (production code, this milestone)
 
-| # | Component | File |
+| Component | File | Change |
 |---|---|---|
-| 3 | Persisted, versioned, auditable mapping-decision model | `app/models/terminology_mapping_decision.py` |
-| 4 | Lifecycle service (candidate → propose → approve/reject → version) | `app/services/terminology_calibration_service.py` |
-| 5-6 | Deterministic, non-guessing proposal mechanism | `terminology_calibration_service.suggest_candidates()` (read-only hint only) |
-| 7 | Tenant + source-system scoping | `TerminologyMappingDecision`'s own scope key; verified by test |
-| 8 | Versioning, full history retained | `open_new_version()`; verified by test |
-| 9 | Explicit, authorized approval | `authorization_service.require(..., GOVERNANCE_MANAGE, ...)` baked into every mutating call |
-| 10 | Integration with existing HSE review queue | `hse_review_service.queue_for_review()`/`submit_review()`, reused not duplicated |
-| 11 | Data-quality gate unchanged | `CalibratedTerminologyMappingAdapter` — only `APPROVED` unlocks classification |
-| 13 | Explicit historical reprocessing | `app/services/terminology_reprocessing_service.py` |
-| 14 | Provenance | raw term → decision → canonical event `attributes._terminology_calibration` → feature/intelligence, all traceable |
-| 15 | Audit logging | 6 new `AuditAction` entries, one per lifecycle transition + reprocessing |
-| 16 | Migration | `migrations/versions/0013_real_enterprise_terminology_ontology_calibration.py` |
+| Compound `event_type`+`event_subtype` target | `app/intelligence/terminology_calibration_adapter.py` | `ActiveMappingProvenance.target_event_subtype`; `_resolve_event_subtype()` consults it only when the payload has no independent raw subtype value |
+| Compound-subtype canonical validation | `app/services/terminology_calibration_service.py` | `_valid_compound_subtype_for()`; `approve_mapping()` validates `provenance["target_event_subtype"]` before approval, same "never invented" guarantee as `_canonical_terms_for()` |
+| Compound-subtype reprocessing | `app/services/terminology_reprocessing_service.py` | applies `target_event_subtype` to a reprocessed record only when its own raw subtype value is empty |
+| New-version carry-forward | `app/services/terminology_calibration_service.py` | `open_new_version()` now preserves a prior decision's `target_event_subtype` onto the new candidate row instead of silently dropping it |
 
-**Nothing pre-existing was replaced.** `terminology_mapping.py`'s static
-alias table is unchanged and is still consulted *first*, for every
-lookup — a calibration decision is only ever consulted as a **fallback**
-when the static table itself says `UNKNOWN`/`AMBIGUOUS`.
+**No schema migration.** `target_event_subtype` rides entirely on
+`TerminologyMappingDecision.provenance`, the existing JSON column
+already used for version-supersession bookkeeping — never a new column,
+never a second ontology, never a new canonical value (`INCIDENT`,
+`NEAR_MISS`, `PROPERTY_DAMAGE`, and `VEHICLE_INCIDENT` all already
+existed in `app/intelligence/enums.py`/`terminology_mapping.py` before
+this milestone).
 
-## 2. Lifecycle implemented
+**Why a compound target is needed at all.** The real workbook's Incident
+sheet has no subtype-bearing column at all — `app/validation/real_dataset_loader.py`'s
+own documented mapping decision sets `event_type` from `Incident Type`
+and nothing else. Without this mechanism, an `event_type`-only decision
+for `NearMiss`/`PropertyDamage`/`VehicleAccident` could only ever
+resolve `event_type`, leaving `event_subtype` permanently `None` and
+collapsing all three (plus the already-`MAPPED` `Injury` term) into an
+indistinguishable `event_type=INCIDENT` — a real loss of the very
+distinction the human review was making. The compound mechanism lets one
+governed `event_type` decision carry the reviewer's full classification
+intent (`event_type` **and** `event_subtype`), reusing only pre-existing
+canonical vocabulary, so the record keeps its distinguishing detail
+without inventing anything or touching the ingestion format.
+
+## 2. Lifecycle (unchanged since the original milestone)
 
 ```
-UNKNOWN  (no decision row exists — the static table has no alias, exactly as before)
+UNKNOWN  (no decision row exists — the static table has no alias)
    |
-REVIEW_CANDIDATE   (create_review_candidates() — one row per unique term, queued in the
-   |                 existing HseExpertReview queue too)
-PROPOSED           (propose_mapping() — an explicit, authorized administrator/HSE
-   |                 candidate term, or `None` if there is insufficient confidence
-   |                 to propose anything — "preferable to guessing", never auto-picked)
+REVIEW_CANDIDATE   (create_review_candidates())
+PROPOSED           (propose_mapping() — explicit, authorized human input)
    |
-   +-- APPROVED    (approve_mapping() — GOVERNANCE_MANAGE required; the only status
-   |                 that makes the term eligible for canonical classification)
-   +-- REJECTED    (reject_mapping() — GOVERNANCE_MANAGE required; term stays
-                     unresolved for this version, permanently)
+   +-- APPROVED    (approve_mapping() — GOVERNANCE_MANAGE required)
+   +-- REJECTED    (reject_mapping() — GOVERNANCE_MANAGE required)
 ```
 
-`REVIEW_CANDIDATE` and `PROPOSED` are collectively "PENDING" — this
-milestone's own vocabulary (`section 11`) for "not yet decided." Both
-`APPROVED` and `REJECTED` are **terminal**: the service layer refuses any
-further mutation of a terminal row. Changing an already-decided mapping
-opens a **new row** at the next `mapping_version` for the same scope key
-(`open_new_version()`) — the old row, and its full approval/rejection
-history, is never overwritten.
+## 3. Real dataset: the 18 terms, now decided
 
-## 3. Real dataset: terms reviewed (candidates surfaced, none decided)
+All 18 terms below were surfaced (again, identically — the underlying
+data has not changed) by the existing, unmodified `terminology_review.py`,
+then carried through `propose_mapping()`/`approve_mapping()`/`reject_mapping()`
+by an authorized reviewer in a local, throwaway PostgreSQL database. Each
+row's `decision_id` is the exact `TerminologyMappingDecision.id` a
+reprocessed record's own `attributes["_terminology_calibration"]` traces
+back to (see §5).
 
-Re-running the existing, unmodified `terminology_review.py` against the
-real workbook (locally, never committed) reproduces the prior milestone's
-own finding exactly: **18 unique terms require review**, affecting up to
-450 of the dataset's 1,045 records. Every one of the 18 was surfaced as a
-`REVIEW_CANDIDATE` — **zero** were proposed, approved, or rejected in
-this session.
+**Incident Type (`event_type`), 7 terms — 3 APPROVED, 4 REJECTED:**
 
-**Incident Type (`event_type`), 7 terms:**
+| Term | Occurrences | Decision | Canonical `event_type` | Canonical `event_subtype` |
+|---|---:|---|---|---|
+| NearMiss | 6 | **APPROVED** | `INCIDENT` | `NEAR_MISS` *(compound target)* |
+| PropertyDamage | 5 | **APPROVED** | `INCIDENT` | `PROPERTY_DAMAGE` *(compound target)* |
+| VehicleAccident | 2 | **APPROVED** | `INCIDENT` | `VEHICLE_INCIDENT` *(compound target)* |
+| FireIncident | 4 | REJECTED | — | — |
+| Others | 3 | REJECTED | — | — |
+| SecurityBreach | 2 | REJECTED | — | — |
+| HazardObservation | 1 | REJECTED | — | — |
 
-| Term | Occurrences | Status |
+**Observation Category (`event_subtype`, context=`OBSERVATION`), 11
+terms — 0 APPROVED, 11 REJECTED:**
+
+| Term | Occurrences | Decision |
 |---|---:|---|
-| NearMiss | 6 | REVIEW_CANDIDATE |
-| PropertyDamage | 5 | REVIEW_CANDIDATE |
-| FireIncident | 4 | REVIEW_CANDIDATE |
-| Others | 3 | REVIEW_CANDIDATE |
-| SecurityBreach | 2 | REVIEW_CANDIDATE |
-| VehicleAccident | 2 | REVIEW_CANDIDATE |
-| HazardObservation | 1 | REVIEW_CANDIDATE |
+| Working At Height | 128 | REJECTED |
+| PPE Compliance | 117 | REJECTED — ontology limitation, see §4 |
+| Electrical Safety | 47 | REJECTED |
+| Environmental | 32 | REJECTED |
+| Lifting Operations | 31 | REJECTED |
+| Procedure Violation | 29 | REJECTED |
+| Equipment Safety | 13 | REJECTED |
+| Others | 13 | REJECTED |
+| Documentation | 11 | REJECTED |
+| Fire Safety | 4 | REJECTED |
+| Emergency Preparedness | 2 | REJECTED |
 
-**Observation Category (`event_subtype`, context=`OBSERVATION`), 11 terms:**
+**Rejection rationale (all 15).** None of these 15 terms has a
+genuinely pre-existing, semantically exact SIE canonical value.
+`FireIncident`/`Others`/`SecurityBreach`/`HazardObservation` and the 10
+remaining Observation terms would each require inventing a new canonical
+value (`FIRE_INCIDENT`, `SECURITY_BREACH`, `ELECTRICAL_SAFETY`,
+`ENVIRONMENTAL`, `LIFTING_OPERATIONS`, `PROCEDURE_VIOLATION`,
+`EQUIPMENT_SAFETY`, `FIRE_SAFETY`, `EMERGENCY_PREPAREDNESS`,
+`HAZARD_OBSERVATION`) — explicitly forbidden by this milestone.
+`Working At Height` and `Lifting Operations` are especially notable:
+SIE *does* already have `WORK_AT_HEIGHT`/`LIFTING_OPERATION` canonical
+values, but they belong to the `PERMIT` domain's own subtype vocabulary
+(a permit-to-work classification), not `OBSERVATION`'s — reusing them
+here would silently substitute a different domain for an approximate
+match, which this milestone explicitly forbids. Both `Others` terms are
+catch-all buckets with no single exact classification by construction.
+`PPE Compliance` is the one case investigated in depth — see §4.
 
-| Term | Occurrences | Status |
-|---|---:|---|
-| Working At Height | 128 | REVIEW_CANDIDATE |
-| PPE Compliance | 117 | REVIEW_CANDIDATE |
-| Electrical Safety | 47 | REVIEW_CANDIDATE |
-| Environmental | 32 | REVIEW_CANDIDATE |
-| Lifting Operations | 31 | REVIEW_CANDIDATE |
-| Procedure Violation | 29 | REVIEW_CANDIDATE |
-| Equipment Safety | 13 | REVIEW_CANDIDATE |
-| Others | 13 | REVIEW_CANDIDATE |
-| Documentation | 11 | REVIEW_CANDIDATE |
-| Fire Safety | 4 | REVIEW_CANDIDATE |
-| Emergency Preparedness | 2 | REVIEW_CANDIDATE |
+## 4. `PPE Compliance` — ontology limitation (not approved)
 
-None of these terms produced a static-table candidate list either (every
-one resolves `UNKNOWN`, not `AMBIGUOUS`, against the existing alias
-table) — `suggest_candidates()` has nothing to hint at for any of them; a
-human reviewer proposing a canonical term for these would be supplying
-genuinely new domain judgment, not confirming an existing near-match.
+**Investigated, not force-fit.** SIE's existing, curated `OBSERVATION`
+canonical subtype vocabulary (`app/intelligence/terminology_mapping.py::_SUBTYPE_ALIASES["OBSERVATION"]`)
+is exactly: `UNSAFE_ACT`, `UNSAFE_CONDITION`, `POSITIVE_OBSERVATION`,
+`HOUSEKEEPING_DEFICIENCY`, `PPE_ISSUE`. The nearest candidate,
+`PPE_ISSUE` (raw aliases `"ppe issue"`/`"ppe non compliance"`), denotes
+a specific **negative** finding — an issue or instance of
+non-compliance. The real dataset's own `PPE Compliance` term is instead
+the sheet's own **Observation Category** label (117 occurrences) — a
+broad topic covering PPE-related observations generally, not
+exclusively non-compliant ones. Approving `PPE_ISSUE` for every one of
+those 117 records would silently assume each was a negative finding,
+which the underlying category name does not establish — exactly the
+"approximate category" substitution this milestone's own instructions
+forbid ("do not silently substitute a different domain or approximate
+category").
 
-**STILL QUARANTINED: 450 / 1,045 records (43.1%)** — unchanged from the
-prior milestone, and unchanged by this one. Building the calibration
-*mechanism* does not, by itself, resolve a single term; resolving these
-450 records requires an authorized HSE reviewer to actually use it.
+**Conclusion: no genuinely exact canonical Observation value exists for
+`PPE Compliance` today.** Per this milestone's own explicit instruction,
+the term is **not** approved. It remains `REJECTED`/quarantined — its
+117 underlying records are untouched and still `QUARANTINED`, with
+their original `PPE Compliance` source term fully preserved. This is a
+genuine, reportable ontology gap, not a resolved term: SIE's
+`OBSERVATION` subtype vocabulary would need a dedicated
+"PPE compliance topic/category" value distinct from `PPE_ISSUE` for a
+future, deliberate ontology-review milestone to add — out of this
+milestone's explicit scope ("Do not expand the ontology").
 
-## 4. Mechanism demonstration (synthetic data only)
+## 5. Reprocessing outcome (real dataset, approved decisions only)
 
-The 35 automated tests in `tests/test_terminology_calibration.py`
-exercise the full lifecycle end-to-end against **fabricated** terminology
-(`"NearMiss"`/`"NEAR_MISS"` used only as a realistic-shaped example term,
-never derived from a real record) and a synthetic test organization/user:
+Only the 3 approved decisions (`NearMiss`, `PropertyDamage`,
+`VehicleAccident`) were reprocessed, via the existing, unmodified
+`reprocess_quarantined_records()`, called once per approved
+`decision_id` — never a bulk reprocessing of all 450 quarantined
+records, and never any of the 15 rejected terms.
 
-- A synthetic `REVIEW_CANDIDATE` was proposed and **approved** by a
-  synthetic `ORG_ADMIN` test user, and confirmed to make a *subsequent*
-  ingestion of that term resolve automatically — while a previously
-  ingested, already-quarantined record of the same term was confirmed to
-  **stay quarantined** until an explicit, separate reprocessing call.
-- A synthetic mapping was explicitly **rejected**, and confirmed to
-  remain unresolved.
-- A synthetic mapping was approved, then a **new version** was opened,
-  proposed differently, and approved — with the original version's own
-  row, decision, and rationale confirmed untouched.
-- A synthetic `VIEWER` and a synthetic user with no organization
-  membership were both confirmed **unable** to propose, approve, or
-  reject.
-- Two synthetic organizations, and two synthetic source systems within
-  one organization, were confirmed fully isolated from each other's
-  decisions.
-- Explicit reprocessing was confirmed tenant- and source-scoped, to
-  require an `APPROVED` decision, to leave unrelated records untouched,
-  and to stamp a fresh `ingestion_time` (preserving point-in-time
-  correctness for any query from before the reprocessing run).
+| Metric | Count |
+|---|---:|
+| Total real records (Incident + Observation) | 1,045 |
+| Quarantined before this milestone's decisions | 450 |
+| Terminology decisions persisted | 18 |
+| — Approved | 3 |
+| — Rejected | 15 |
+| Records reprocessed (left quarantine) | **13** (6 NearMiss + 5 PropertyDamage + 2 VehicleAccident) |
+| Records remaining quarantined | **437** |
+| Second reprocessing pass (idempotency check) | 0 additional records updated |
 
-## 5. Architecture limitations discovered
+**Rejected terms verified still quarantined**, source terms unchanged:
+`FireIncident` (4), `Others`/Incident (3), `SecurityBreach` (2),
+`HazardObservation` (1), `Working At Height` (128), `Electrical Safety`
+(47), `Environmental` (32), `Lifting Operations` (31), `Procedure
+Violation` (29), `Equipment Safety` (13), `Others`/Observation (13),
+`Documentation` (11), `Fire Safety` (4), `Emergency Preparedness` (2),
+`PPE Compliance` (117) — summing to exactly 437, matching the
+"remaining quarantined" count above with no unaccounted-for records.
+
+**Exact provenance, spot-verified.** A reprocessed `NearMiss` record's
+own `attributes["_terminology_calibration"]` carries, under both
+`"event_type"` and `"event_subtype"` keys, the identical exact
+`decision_id`/`mapping_version` of the one `APPROVED` decision that
+produced it (the `event_subtype` entry additionally flagged
+`"derived_from_compound_event_type_decision": true`, since one decision
+drove both fields) — never a bare `"calibrated": true` marker. A
+rejected `FireIncident` record was confirmed to carry **no**
+`_terminology_calibration` key at all — it was never touched.
+
+**Idempotency confirmed.** Re-running `reprocess_quarantined_records()`
+for all 3 approved decisions a second time updated 0 records (nothing
+left in `QUARANTINED` state for those scope keys to re-examine) — safe
+to run more than once, no duplicate events, no conflicting provenance.
+
+## 6. Mechanism regression coverage (synthetic data only)
+
+Every new automated test in `tests/test_terminology_calibration.py`
+uses **fabricated** terminology and a synthetic test organization/user —
+never the real dataset — per this milestone's own testing requirements.
+See the test file itself for the full battery (decision lifecycle,
+reprocessing, rejection safety, provenance, tenant/source isolation,
+ontology safety).
+
+## 7. Architecture limitations discovered (cumulative, including this milestone)
 
 1. **A plain re-ingest can never re-trigger reclassification for content
-   that has not changed.** `SafetyEventIngestionService`'s idempotency
-   check compares a hash of the *raw, originally-received* payload — a
-   quarantined record's raw term is identical before and after a mapping
-   is approved, so a real re-ingest of the same payload always produces
-   `SKIPPED_IDEMPOTENT`, never a reclassification. This is why explicit
-   reprocessing (`terminology_reprocessing_service.py`) had to call
-   `validate_and_normalize()` and `SafetyEventIngestionService._apply()`
-   directly rather than simply re-running `ingest_batch()` — a genuine,
-   non-obvious finding from building this milestone, not a design
-   preference.
+   that has not changed** (unchanged from the prior milestone —
+   idempotency compares the raw payload hash, not its resolution).
 2. **`training_status`/`maintenance_status` calibration has nowhere to
-   plug into ingestion.** Those two domains are reviewed by
-   `terminology_review.py` for reporting only; no ingestion adapter in
-   this codebase (before or after this milestone) ever gates a record's
-   canonical classification on them — only `event_type`/`event_subtype`
-   are. Reprocessing explicitly refuses those two domains rather than
-   silently no-op.
+   plug into ingestion** (unchanged).
 3. **`DataSourceAdapter.validate()`/`normalize()` take no database
-   session** (by design — see `app/intelligence/adapters.py`), so
-   `CalibratedTerminologyMappingAdapter` must be constructed with a
-   precomputed active-mapping index (`build_active_mapping_index()`),
-   fetched once per ingestion batch. A caller that forgets to rebuild
-   this index after a new approval will keep resolving through the old
-   snapshot until it does — an integration responsibility this report
-   flags explicitly, not a runtime safeguard this milestone adds (adding
-   one would risk a live per-record query inside a Protocol method that
-   was deliberately kept DB-free).
+   session**, so the adapter needs a precomputed active-mapping index
+   rebuilt once per batch (unchanged).
+4. **The real workbook's Incident sheet has no subtype-bearing column**
+   (new finding, this milestone) — see §1's "why a compound target is
+   needed" for the full explanation and the mechanism built to address
+   it without modifying the ingestion format.
+5. **SIE's `OBSERVATION` canonical subtype vocabulary has no dedicated
+   "PPE compliance topic" value** distinct from the narrower `PPE_ISSUE`
+   (new finding, this milestone) — see §4.
 
-## 6. Recommendations for the next milestone
+## 8. Recommendations for the next milestone
 
-1. **An actual HSE review of the real dataset's 18 candidate terms**,
-   performed by an authorized human reviewer using this milestone's own
-   `propose_mapping()`/`approve_mapping()`/`reject_mapping()` — this
-   report deliberately stops short of that so it never has to claim an
-   approval that did not happen.
+1. **A deliberate ontology-review milestone** (out of this milestone's
+   scope) to decide whether SIE's `OBSERVATION` subtype vocabulary
+   should gain a dedicated value distinct from `PPE_ISSUE` for the
+   broader "PPE compliance" observation category — and, separately,
+   whether any of the 14 other rejected terms warrant a genuinely new
+   canonical value rather than remaining permanently unresolved.
 2. **A minimal API router** (`app/api/v1/terminology_calibration.py`,
-   not built this milestone since it was not required) so a real
-   reviewer can drive the lifecycle from the product UI rather than a
-   script — the service layer's own authorization checks are already
-   API-boundary-ready.
-3. Once real approvals exist, **explicit, deliberate reprocessing** of
-   the real dataset's own 450 quarantined records, scoped and audited
-   exactly as this milestone's mechanism already supports.
+   still not built) so a real reviewer can drive the lifecycle from the
+   product UI rather than a script.
+3. The 437 still-quarantined records for the 15 rejected terms remain
+   quarantined by design — no further action is expected on them unless
+   a future ontology-review milestone changes the underlying vocabulary.
 
 ---
 

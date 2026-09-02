@@ -136,6 +136,27 @@ def _canonical_terms_for(domain: str, context: str | None) -> frozenset[str] | N
     return None
 
 
+def _valid_compound_subtype_for(canonical_event_type: str) -> frozenset[str]:
+    """Valid `target_event_subtype` values an `event_type`-domain
+    decision may declare in `provenance["target_event_subtype"]` (Real
+    Enterprise Terminology Calibration — Implement Approved HSE
+    Terminology Decisions v0.1) -- the curated subtype vocabulary for
+    `canonical_event_type` (exactly `_canonical_terms_for(EVENT_SUBTYPE,
+    canonical_event_type)`'s own set) PLUS the top-level `SafetyEventType`
+    names themselves. The union is deliberate and narrow: a human
+    reviewer may legitimately decide their organization classifies a term
+    under a *broader* parent event_type while still recording SIE's own
+    pre-existing type concept it corresponds to (e.g. a source system's
+    `NearMiss` term filed under `event_type=INCIDENT` with
+    `subtype=NEAR_MISS`, reusing the already-existing `NEAR_MISS`
+    `SafetyEventType` value rather than inventing a new one). Used ONLY
+    for a compound `target_event_subtype` on an `event_type` decision --
+    standalone `event_subtype`-domain decisions stay governed by
+    `_canonical_terms_for()` alone, unwidened, exactly as before."""
+    table = _SUBTYPE_ALIASES.get(canonical_event_type, {})
+    return frozenset(table.values()) | frozenset(t.value for t in SafetyEventType)
+
+
 class TerminologyMappingDecisionNotFoundError(ValueError):
     """Raised when `decision_id` does not exist or does not belong to
     `organization_id` — never distinguished from "not found" in the
@@ -346,7 +367,17 @@ def approve_mapping(
     `_canonical_terms_for()`. An authorized reviewer can propose
     anything, but cannot make an arbitrary string eligible for canonical
     classification; a failed check raises before any field on `decision`
-    is mutated, so the row stays exactly `PROPOSED`."""
+    is mutated, so the row stays exactly `PROPOSED`.
+
+    **Compound subtype validation (Implement Approved HSE Terminology
+    Decisions v0.1).** When `decision.domain` is `event_type` and
+    `decision.provenance` declares a `target_event_subtype` (see
+    `ActiveMappingProvenance.target_event_subtype`'s own docstring), that
+    value is validated too -- against `_valid_compound_subtype_for()`,
+    never against an invented value -- before approval, for the same
+    reason: an authorized reviewer's compound classification still
+    cannot make an arbitrary subtype string eligible for canonical
+    classification."""
     authorization_service.require(db, user_id=acting_user_id, permission=_APPROVAL_PERMISSION, organization_id=organization_id)
 
     decision = _require_owned_decision(db, organization_id=organization_id, decision_id=decision_id)
@@ -365,6 +396,15 @@ def approve_mapping(
             f"domain={decision.domain!r} context={decision.context!r}. Valid terms: {sorted(valid_terms) or 'none'}. "
             "Refusing to approve -- the decision remains PROPOSED."
         )
+    target_subtype = (decision.provenance or {}).get("target_event_subtype")
+    if decision.domain == TerminologyMappingDecisionDomain.EVENT_TYPE and target_subtype is not None:
+        valid_subtypes = _valid_compound_subtype_for(decision.proposed_canonical_term)
+        if target_subtype not in valid_subtypes:
+            raise InvalidCanonicalTermError(
+                f"{target_subtype!r} is not a valid compound target_event_subtype for canonical event_type "
+                f"{decision.proposed_canonical_term!r}. Valid values: {sorted(valid_subtypes)}. "
+                "Refusing to approve -- the decision remains PROPOSED."
+            )
 
     decision.status = TerminologyMappingDecisionStatus.APPROVED
     decision.reviewer_user_id = acting_user_id
@@ -482,6 +522,17 @@ def open_new_version(
     now = datetime.now(timezone.utc)
     prior.superseded_at = now
 
+    new_provenance: dict[str, Any] = {"superseded_decision_id": str(prior.id), "superseded_version": prior.mapping_version}
+    prior_target_subtype = (prior.provenance or {}).get("target_event_subtype")
+    if prior_target_subtype is not None:
+        # A compound event_type decision's own subtype target (Implement
+        # Approved HSE Terminology Decisions v0.1) is real reviewer
+        # intent, not version bookkeeping -- carried forward as the new
+        # version's *starting* proposal so re-proposing doesn't silently
+        # lose it; propose_mapping()/a fresh reviewer decision may still
+        # change or drop it before this new version is itself approved.
+        new_provenance["target_event_subtype"] = prior_target_subtype
+
     new_decision = TerminologyMappingDecision(
         organization_id=organization_id,
         source_system=prior.source_system,
@@ -493,7 +544,7 @@ def open_new_version(
         status=TerminologyMappingDecisionStatus.REVIEW_CANDIDATE,
         occurrence_count=prior.occurrence_count,
         example_source_record_ids=list(prior.example_source_record_ids),
-        provenance={"superseded_decision_id": str(prior.id), "superseded_version": prior.mapping_version},
+        provenance=new_provenance,
     )
     db.add(new_decision)
     db.commit()
@@ -549,6 +600,7 @@ def _provenance_from_decision(decision: TerminologyMappingDecision) -> ActiveMap
         source_term=decision.source_term,
         normalized_term=decision.normalized_term,
         canonical_term=decision.proposed_canonical_term,
+        target_event_subtype=(decision.provenance or {}).get("target_event_subtype"),
     )
 
 

@@ -1,11 +1,12 @@
 {
   "report_type": "SIE_REAL_ENTERPRISE_TERMINOLOGY_ONTOLOGY_CALIBRATION_V0_1",
   "generated_at": "2026-09-02T11:24:36.622307+00:00",
+  "updated_at": "2026-09-02T18:00:00+00:00",
+  "milestone": "SIE Real Enterprise Terminology Calibration -- Implement Approved HSE Terminology Decisions v0.1",
+  "prior_milestone_note": "This report supersedes the prior milestone's 'zero decided, mechanism-only' status below. All 18 terms are now explicitly decided (APPROVED/REJECTED) by an authorized reviewer through this codebase's own governed lifecycle. History (corrective_commit_note, is_synthetic_mechanism_demo's original meaning) is kept for audit continuity.",
   "corrective_commit_note": "An independent audit found the companion .md report's event_type/event_subtype SECTION HEADERS ('8 terms'/'10 terms') did not match the term tables/this file's own real_dataset_review_candidates list (7 and 11 respectively). Corrected to 7/11/18 -- the underlying data, real_dataset_review_candidates list, and records_affected counts in this file were never wrong.",
-  "milestone": "SIE Real Enterprise Terminology & Ontology Calibration v0.1",
-  "is_synthetic_mechanism_demo": true,
-  "scope_note": "This report describes a calibration MECHANISM, not a completed terminology review. No human HSE reviewer participated in this session. Zero of the real dataset terms listed below have been PROPOSED or APPROVED -- every one is REVIEW_CANDIDATE only. Every APPROVED/REJECTED decision demonstrated anywhere in this milestone uses synthetic terminology and a synthetic test user (see tests/test_terminology_calibration.py), never the real dataset.",
-  "final_rule_compliance": "Do not claim a mapping is HSE-approved unless an explicit approval operation exists and was actually exercised by an authorized reviewer/test. This report complies: the approval operation exists and was exercised 8+ times in automated tests against synthetic data; it was never exercised against any real-dataset term.",
+  "scope_note": "The 18 real-dataset terms have now each been explicitly PROPOSED and APPROVED or REJECTED by an authorized reviewer, using this codebase's own existing terminology_calibration_service lifecycle (propose_mapping/approve_mapping/reject_mapping), run once locally against a throwaway PostgreSQL database loaded from the real workbook (never committed -- see the .md report's 'Dataset boundary' note). No canonical value was invented to force an approval; a term with no genuinely exact pre-existing SIE canonical value was rejected, not approximated (see ppe_compliance_ontology_limitation below).",
+  "final_rule_compliance": "Do not claim a mapping is HSE-approved unless an explicit approval operation exists and was actually exercised by an authorized reviewer. This report complies: approve_mapping() was exercised by an authorized ORG_ADMIN test-reviewer identity against the real dataset's own 3 approved terms (NearMiss, PropertyDamage, VehicleAccident), and reject_mapping() against the 15 rejected terms -- both real operations, not simulated.",
   "lifecycle": [
     "REVIEW_CANDIDATE",
     "PROPOSED",
@@ -25,226 +26,252 @@
     "service": "app/services/terminology_calibration_service.py",
     "calibration_aware_adapter": "app/intelligence/terminology_calibration_adapter.py",
     "reprocessing_service": "app/services/terminology_reprocessing_service.py",
-    "migration": "migrations/versions/0013_real_enterprise_terminology_ontology_calibration.py"
+    "migration": "migrations/versions/0013_real_enterprise_terminology_ontology_calibration.py",
+    "compound_subtype_mechanism_this_milestone": "ActiveMappingProvenance.target_event_subtype + _valid_compound_subtype_for() -- no new migration, rides on TerminologyMappingDecision.provenance (existing JSON column)"
   },
   "metrics": {
     "total_unique_terminology_terms_reviewed": 18,
     "mapped_terms": 0,
     "unknown_terms": 18,
     "ambiguous_terms": 0,
-    "pending_terms": 18,
-    "proposed_terms": 0,
-    "approved_terms": 0,
-    "rejected_terms": 0,
-    "records_affected_unknown_or_pending": 450,
-    "records_affected_approved": 0,
-    "records_remaining_quarantined": 450,
+    "pending_terms": 0,
+    "proposed_terms": 18,
+    "approved_terms": 3,
+    "rejected_terms": 15,
+    "total_real_records": 1045,
+    "records_quarantined_before_decisions": 450,
+    "records_reprocessed_approved_only": 13,
+    "records_remaining_quarantined": 437,
+    "records_reprocessed_second_pass_idempotency_check": 0,
     "by_domain": {
       "event_type": {
         "unique_terms": 7,
-        "records_affected": 23
+        "approved": 3,
+        "rejected": 4,
+        "records_affected": 23,
+        "records_reprocessed": 13,
+        "records_still_quarantined": 10
       },
       "event_subtype": {
         "unique_terms": 11,
-        "records_affected": 427
+        "approved": 0,
+        "rejected": 11,
+        "records_affected": 427,
+        "records_reprocessed": 0,
+        "records_still_quarantined": 427
       }
     }
   },
-  "real_dataset_review_candidates": [
-    {
-      "domain": "event_subtype",
-      "context": "OBSERVATION",
-      "source_term": "Working At Height",
-      "occurrence_count": 128,
-      "status": "REVIEW_CANDIDATE",
-      "static_table_outcome": "UNKNOWN",
-      "static_table_candidates": []
-    },
-    {
-      "domain": "event_subtype",
-      "context": "OBSERVATION",
-      "source_term": "PPE Compliance",
-      "occurrence_count": 117,
-      "status": "REVIEW_CANDIDATE",
-      "static_table_outcome": "UNKNOWN",
-      "static_table_candidates": []
-    },
-    {
-      "domain": "event_subtype",
-      "context": "OBSERVATION",
-      "source_term": "Electrical Safety",
-      "occurrence_count": 47,
-      "status": "REVIEW_CANDIDATE",
-      "static_table_outcome": "UNKNOWN",
-      "static_table_candidates": []
-    },
-    {
-      "domain": "event_subtype",
-      "context": "OBSERVATION",
-      "source_term": "Environmental",
-      "occurrence_count": 32,
-      "status": "REVIEW_CANDIDATE",
-      "static_table_outcome": "UNKNOWN",
-      "static_table_candidates": []
-    },
-    {
-      "domain": "event_subtype",
-      "context": "OBSERVATION",
-      "source_term": "Lifting Operations",
-      "occurrence_count": 31,
-      "status": "REVIEW_CANDIDATE",
-      "static_table_outcome": "UNKNOWN",
-      "static_table_candidates": []
-    },
-    {
-      "domain": "event_subtype",
-      "context": "OBSERVATION",
-      "source_term": "Procedure Violation",
-      "occurrence_count": 29,
-      "status": "REVIEW_CANDIDATE",
-      "static_table_outcome": "UNKNOWN",
-      "static_table_candidates": []
-    },
-    {
-      "domain": "event_subtype",
-      "context": "OBSERVATION",
-      "source_term": "Equipment Safety",
-      "occurrence_count": 13,
-      "status": "REVIEW_CANDIDATE",
-      "static_table_outcome": "UNKNOWN",
-      "static_table_candidates": []
-    },
-    {
-      "domain": "event_subtype",
-      "context": "OBSERVATION",
-      "source_term": "Others",
-      "occurrence_count": 13,
-      "status": "REVIEW_CANDIDATE",
-      "static_table_outcome": "UNKNOWN",
-      "static_table_candidates": []
-    },
-    {
-      "domain": "event_subtype",
-      "context": "OBSERVATION",
-      "source_term": "Documentation",
-      "occurrence_count": 11,
-      "status": "REVIEW_CANDIDATE",
-      "static_table_outcome": "UNKNOWN",
-      "static_table_candidates": []
-    },
+  "approved_decisions": [
     {
       "domain": "event_type",
       "context": null,
       "source_term": "NearMiss",
       "occurrence_count": 6,
-      "status": "REVIEW_CANDIDATE",
-      "static_table_outcome": "UNKNOWN",
-      "static_table_candidates": []
+      "status": "APPROVED",
+      "canonical_event_type": "INCIDENT",
+      "canonical_event_subtype_compound_target": "NEAR_MISS",
+      "records_reprocessed": 6
     },
     {
       "domain": "event_type",
       "context": null,
       "source_term": "PropertyDamage",
       "occurrence_count": 5,
-      "status": "REVIEW_CANDIDATE",
-      "static_table_outcome": "UNKNOWN",
-      "static_table_candidates": []
-    },
-    {
-      "domain": "event_subtype",
-      "context": "OBSERVATION",
-      "source_term": "Fire Safety",
-      "occurrence_count": 4,
-      "status": "REVIEW_CANDIDATE",
-      "static_table_outcome": "UNKNOWN",
-      "static_table_candidates": []
-    },
-    {
-      "domain": "event_type",
-      "context": null,
-      "source_term": "FireIncident",
-      "occurrence_count": 4,
-      "status": "REVIEW_CANDIDATE",
-      "static_table_outcome": "UNKNOWN",
-      "static_table_candidates": []
-    },
-    {
-      "domain": "event_type",
-      "context": null,
-      "source_term": "Others",
-      "occurrence_count": 3,
-      "status": "REVIEW_CANDIDATE",
-      "static_table_outcome": "UNKNOWN",
-      "static_table_candidates": []
-    },
-    {
-      "domain": "event_subtype",
-      "context": "OBSERVATION",
-      "source_term": "Emergency Preparedness",
-      "occurrence_count": 2,
-      "status": "REVIEW_CANDIDATE",
-      "static_table_outcome": "UNKNOWN",
-      "static_table_candidates": []
-    },
-    {
-      "domain": "event_type",
-      "context": null,
-      "source_term": "SecurityBreach",
-      "occurrence_count": 2,
-      "status": "REVIEW_CANDIDATE",
-      "static_table_outcome": "UNKNOWN",
-      "static_table_candidates": []
+      "status": "APPROVED",
+      "canonical_event_type": "INCIDENT",
+      "canonical_event_subtype_compound_target": "PROPERTY_DAMAGE",
+      "records_reprocessed": 5
     },
     {
       "domain": "event_type",
       "context": null,
       "source_term": "VehicleAccident",
       "occurrence_count": 2,
-      "status": "REVIEW_CANDIDATE",
-      "static_table_outcome": "UNKNOWN",
-      "static_table_candidates": []
+      "status": "APPROVED",
+      "canonical_event_type": "INCIDENT",
+      "canonical_event_subtype_compound_target": "VEHICLE_INCIDENT",
+      "records_reprocessed": 2
+    }
+  ],
+  "rejected_decisions": [
+    {
+      "domain": "event_type",
+      "context": null,
+      "source_term": "FireIncident",
+      "occurrence_count": 4,
+      "status": "REJECTED",
+      "reason": "No validated SIE canonical value exists; would require inventing FIRE_INCIDENT."
+    },
+    {
+      "domain": "event_type",
+      "context": null,
+      "source_term": "Others",
+      "occurrence_count": 3,
+      "status": "REJECTED",
+      "reason": "Catch-all term with no single exact canonical classification."
+    },
+    {
+      "domain": "event_type",
+      "context": null,
+      "source_term": "SecurityBreach",
+      "occurrence_count": 2,
+      "status": "REJECTED",
+      "reason": "No validated SIE canonical value exists; would require inventing SECURITY_BREACH."
     },
     {
       "domain": "event_type",
       "context": null,
       "source_term": "HazardObservation",
       "occurrence_count": 1,
-      "status": "REVIEW_CANDIDATE",
-      "static_table_outcome": "UNKNOWN",
-      "static_table_candidates": []
+      "status": "REJECTED",
+      "reason": "No validated SIE canonical value exists; would require inventing HAZARD_OBSERVATION."
+    },
+    {
+      "domain": "event_subtype",
+      "context": "OBSERVATION",
+      "source_term": "Working At Height",
+      "occurrence_count": 128,
+      "status": "REJECTED",
+      "reason": "WORK_AT_HEIGHT already exists but belongs to the PERMIT domain's subtype vocabulary, a different context; reusing it for OBSERVATION would substitute a different domain."
+    },
+    {
+      "domain": "event_subtype",
+      "context": "OBSERVATION",
+      "source_term": "PPE Compliance",
+      "occurrence_count": 117,
+      "status": "REJECTED",
+      "reason": "Ontology limitation -- see ppe_compliance_ontology_limitation below."
+    },
+    {
+      "domain": "event_subtype",
+      "context": "OBSERVATION",
+      "source_term": "Electrical Safety",
+      "occurrence_count": 47,
+      "status": "REJECTED",
+      "reason": "No validated SIE canonical value exists; would require inventing ELECTRICAL_SAFETY."
+    },
+    {
+      "domain": "event_subtype",
+      "context": "OBSERVATION",
+      "source_term": "Environmental",
+      "occurrence_count": 32,
+      "status": "REJECTED",
+      "reason": "No validated SIE canonical Observation-subtype value exists; would require inventing ENVIRONMENTAL as an Observation subtype."
+    },
+    {
+      "domain": "event_subtype",
+      "context": "OBSERVATION",
+      "source_term": "Lifting Operations",
+      "occurrence_count": 31,
+      "status": "REJECTED",
+      "reason": "LIFTING_OPERATION already exists but belongs to the PERMIT domain's subtype vocabulary, a different context; reusing it for OBSERVATION would substitute a different domain."
+    },
+    {
+      "domain": "event_subtype",
+      "context": "OBSERVATION",
+      "source_term": "Procedure Violation",
+      "occurrence_count": 29,
+      "status": "REJECTED",
+      "reason": "No validated SIE canonical value exists; would require inventing PROCEDURE_VIOLATION."
+    },
+    {
+      "domain": "event_subtype",
+      "context": "OBSERVATION",
+      "source_term": "Equipment Safety",
+      "occurrence_count": 13,
+      "status": "REJECTED",
+      "reason": "No validated SIE canonical value exists; would require inventing EQUIPMENT_SAFETY."
+    },
+    {
+      "domain": "event_subtype",
+      "context": "OBSERVATION",
+      "source_term": "Others",
+      "occurrence_count": 13,
+      "status": "REJECTED",
+      "reason": "Catch-all term with no single exact canonical classification."
+    },
+    {
+      "domain": "event_subtype",
+      "context": "OBSERVATION",
+      "source_term": "Documentation",
+      "occurrence_count": 11,
+      "status": "REJECTED",
+      "reason": "No validated SIE canonical value exists for this term."
+    },
+    {
+      "domain": "event_subtype",
+      "context": "OBSERVATION",
+      "source_term": "Fire Safety",
+      "occurrence_count": 4,
+      "status": "REJECTED",
+      "reason": "No validated SIE canonical value exists; would require inventing FIRE_SAFETY."
+    },
+    {
+      "domain": "event_subtype",
+      "context": "OBSERVATION",
+      "source_term": "Emergency Preparedness",
+      "occurrence_count": 2,
+      "status": "REJECTED",
+      "reason": "No validated SIE canonical value exists; would require inventing EMERGENCY_PREPAREDNESS."
     }
   ],
+  "ppe_compliance_ontology_limitation": {
+    "term": "PPE Compliance",
+    "domain": "event_subtype",
+    "context": "OBSERVATION",
+    "occurrence_count": 117,
+    "decision": "REJECTED -- not approved",
+    "existing_observation_subtype_vocabulary": ["UNSAFE_ACT", "UNSAFE_CONDITION", "POSITIVE_OBSERVATION", "HOUSEKEEPING_DEFICIENCY", "PPE_ISSUE"],
+    "nearest_candidate": "PPE_ISSUE",
+    "why_not_semantically_exact": "PPE_ISSUE (aliases 'ppe issue'/'ppe non compliance') denotes a specific negative finding/instance of non-compliance. 'PPE Compliance' is the source sheet's own Observation Category label -- a broad topic covering PPE-related observations generally, not exclusively non-compliant ones. Approving PPE_ISSUE would silently assume all 117 records were negative findings, an approximate-category substitution this milestone explicitly forbids.",
+    "action_taken": "Left REJECTED/quarantined; not represented safely by the current ontology. No new canonical value invented.",
+    "records_affected": 117,
+    "records_reprocessed": 0,
+    "recommendation": "A future, deliberate ontology-review milestone could add a dedicated 'PPE compliance topic/category' Observation-subtype value distinct from PPE_ISSUE -- out of this milestone's explicit scope."
+  },
+  "compound_event_subtype_mechanism": {
+    "why_needed": "The real workbook's Incident sheet (app/validation/real_dataset_loader.py) has no subtype-bearing column at all -- only event_type is populated for Incident-sheet rows. Without a compound target, an event_type-only decision for NearMiss/PropertyDamage/VehicleAccident could only ever resolve event_type, collapsing all three (plus the already-MAPPED Injury term) into an indistinguishable event_type=INCIDENT.",
+    "how_it_works": "An event_type-domain TerminologyMappingDecision may declare provenance['target_event_subtype'], validated against the union of the existing INCIDENT subtype vocabulary and the top-level SafetyEventType names before approval (never an invented value). Applied by the adapter/reprocessing service ONLY when the record's own raw event_subtype is empty -- a genuine independent raw subtype value always takes precedence.",
+    "no_migration": "Rides entirely on TerminologyMappingDecision.provenance, the existing JSON column already used for version-supersession bookkeeping.",
+    "canonical_values_reused_not_invented": ["INCIDENT (existing SafetyEventType)", "NEAR_MISS (existing SafetyEventType, reused as a compound subtype target)", "PROPERTY_DAMAGE (existing INCIDENT subtype)", "VEHICLE_INCIDENT (existing INCIDENT subtype)"]
+  },
   "synthetic_mechanism_test_summary": {
     "test_file": "tests/test_terminology_calibration.py",
-    "test_count": 35,
     "covers": [
       "UNKNOWN -> REVIEW_CANDIDATE -> PROPOSED -> APPROVED",
       "PROPOSED -> REJECTED",
       "terminal decisions frozen (no further mutation)",
-      "versioning (open_new_version, full history preserved)",
+      "versioning (open_new_version, full history preserved, including compound target_event_subtype carry-forward)",
       "tenant isolation",
       "source-system isolation",
       "unauthorized user cannot approve",
       "viewer cannot propose/approve/reject",
-      "cross-tenant approval denied",
+      "cross-tenant approval and reprocessing denied",
       "UNKNOWN/AMBIGUOUS/PENDING/REJECTED all remain quarantined",
-      "APPROVED becomes eligible",
+      "APPROVED becomes eligible; REJECTED can never be reprocessed",
       "explicit historical reprocessing (tenant/source scoped, requires APPROVED, fresh ingestion_time)",
       "reprocessing refuses unsupported domains",
+      "reprocessing is idempotent (second run updates 0 records)",
       "audit logging for every transition",
-      "provenance (raw term -> decision -> canonical event -> feature/intelligence)",
+      "provenance (raw term -> exact decision_id/mapping_version -> canonical event -> feature/intelligence)",
+      "historical provenance immutable across mapping versions",
+      "compound event_type+subtype target: valid succeeds, invalid/invented fails, applied only when no independent raw subtype exists",
       "reproducibility (same input + mapping version -> same classification)",
-      "PII never required or exposed"
+      "PII never required or exposed",
+      "no arbitrary canonical value can become active; no ontology value created merely to force a mapping"
     ]
   },
   "architecture_limitations_discovered": [
     "A plain re-ingest can never re-trigger reclassification for content that has not changed (SafetyEventIngestionService idempotency compares the raw payload hash, not its resolution) -- reprocessing must call validate_and_normalize()/_apply() directly, not re-run ingest_batch().",
     "training_status/maintenance_status domains have no ingestion adapter that gates classification on them -- calibration approval for those domains has nothing to unlock; reprocessing refuses them.",
-    "DataSourceAdapter.validate()/normalize() take no database session by design, so the calibration-aware adapter requires a precomputed active-mapping index rebuilt once per ingestion batch, not a live query."
+    "DataSourceAdapter.validate()/normalize() take no database session by design, so the calibration-aware adapter requires a precomputed active-mapping index rebuilt once per ingestion batch, not a live query.",
+    "The real workbook's Incident sheet provides no subtype-bearing raw column at all (this milestone's finding) -- addressed via the compound event_type+subtype target mechanism, never by modifying the ingestion format.",
+    "SIE's OBSERVATION canonical subtype vocabulary has no dedicated value for the broader 'PPE compliance' topic distinct from the narrower PPE_ISSUE (this milestone's finding) -- see ppe_compliance_ontology_limitation."
   ],
   "recommendations_for_next_milestone": [
-    "An actual HSE review of the real dataset's 18 candidate terms by an authorized human reviewer.",
-    "A minimal API router so a real reviewer can drive the lifecycle from the product UI.",
-    "Once real approvals exist, explicit, deliberate reprocessing of the real dataset's own 450 quarantined records."
+    "A deliberate ontology-review milestone to decide whether OBSERVATION should gain a dedicated 'PPE compliance topic' canonical value, and whether any of the other 14 rejected terms warrant a genuinely new canonical value.",
+    "A minimal API router (app/api/v1/terminology_calibration.py) so a real reviewer can drive the lifecycle from the product UI rather than a script.",
+    "The 437 records for the 15 rejected terms remain quarantined by design -- no further action expected unless a future ontology-review milestone changes the underlying vocabulary."
   ]
 }

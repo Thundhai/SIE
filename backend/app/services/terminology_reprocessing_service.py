@@ -189,6 +189,20 @@ def reprocess_quarantined_records(
         raw_payload = _raw_payload_from_source_value(source_value)
         setattr(raw_payload, field_name, decision.proposed_canonical_term)
 
+        # Compound event_type+subtype target (Implement Approved HSE
+        # Terminology Decisions v0.1) -- applied ONLY when this decision
+        # is event_type-domain, declares one, and the record has no
+        # independent raw subtype value of its own to preserve instead
+        # (mirrors CalibratedTerminologyMappingAdapter._resolve_event_subtype()'s
+        # own precedence rule exactly).
+        target_event_subtype = None
+        if decision.domain == TerminologyMappingDecisionDomain.EVENT_TYPE:
+            target_event_subtype = (decision.provenance or {}).get("target_event_subtype")
+            if target_event_subtype and not raw_payload.event_subtype:
+                raw_payload.event_subtype = target_event_subtype
+            else:
+                target_event_subtype = None  # nothing to record -- a real raw subtype value took precedence
+
         validation_result, normalized = validate_and_normalize(raw_payload, organization_id=organization_id)
         if normalized is None:
             result.records_still_unresolved += 1
@@ -209,12 +223,19 @@ def reprocess_quarantined_records(
             decision_id=decision.id, mapping_version=decision.mapping_version, organization_id=organization_id,
             source_system=decision.source_system, domain=decision.domain, context=decision.context,
             source_term=decision.source_term, normalized_term=decision.normalized_term,
-            canonical_term=decision.proposed_canonical_term,
+            canonical_term=decision.proposed_canonical_term, target_event_subtype=target_event_subtype,
         )
-        normalized.attributes = {
-            **normalized.attributes,
-            "_terminology_calibration": {field_name: provenance.as_attributes(raw_term=str(raw_term))},
-        }
+        calibration_info = {field_name: provenance.as_attributes(raw_term=str(raw_term))}
+        if target_event_subtype:
+            # Same decision, same exact decision_id/mapping_version --
+            # recorded distinctly under "event_subtype" with the applied
+            # compound value, never the type decision's own canonical_term.
+            calibration_info["event_subtype"] = {
+                **provenance.as_attributes(raw_term=str(raw_term)),
+                "canonical_term": target_event_subtype,
+                "derived_from_compound_event_type_decision": True,
+            }
+        normalized.attributes = {**normalized.attributes, "_terminology_calibration": calibration_info}
 
         content_hash = _content_hash(normalized.source_value)
         issues_json = [{"code": i.code, "message": i.message, "blocking": i.blocking} for i in validation_result.issues] or None

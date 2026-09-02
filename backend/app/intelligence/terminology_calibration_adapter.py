@@ -35,6 +35,19 @@ same existing JSON provenance surface `source_value`/`source_content_hash`/
 `ingestion_batch_id` already use for "what happened to this record and
 why" (see `app/models/safety_event.py`'s own docstring).
 
+**Compound event_type+subtype targets (Implement Approved HSE Terminology
+Decisions v0.1).** An `event_type`-domain decision may also carry a
+`target_event_subtype` (see `ActiveMappingProvenance` below) for a source
+system whose raw payload has no independent subtype field at all (e.g.
+the real workbook's Incident sheet — see
+`app/validation/real_dataset_loader.py`'s own documented finding). This
+is never a second ontology or a guess: `target_event_subtype` must
+already be a genuinely pre-existing SIE canonical value (validated by
+`terminology_calibration_service._valid_compound_subtype_for()` before
+the decision can become `APPROVED`), and is only ever consulted when the
+payload's own raw `event_subtype` is empty — a real independent raw
+subtype value always takes precedence and is resolved on its own terms.
+
 **Never automatically applied to historical records.** This adapter only
 ever sees the payloads a caller explicitly hands to `ingest_batch()`/
 `ingest_event()` for a *new* ingestion call — it has no path back to
@@ -100,6 +113,25 @@ class ActiveMappingProvenance:
     source_term: str
     normalized_term: str
     canonical_term: str
+    #: Real Enterprise Terminology Calibration — Implement Approved HSE
+    #: Terminology Decisions v0.1. An `event_type`-domain decision may
+    #: additionally carry a *compound* subtype target — the human
+    #: reviewer's own decision that this raw term should classify as
+    #: BOTH `event_type=canonical_term` AND `event_subtype=<this value>`
+    #: — used when the source system provides no independent raw
+    #: subtype value to resolve on its own (see
+    #: `app/validation/real_dataset_loader.py`'s own documented finding
+    #: that the real workbook's Incident sheet has no subtype-bearing
+    #: column). `None` for an ordinary, non-compound decision — never
+    #: set except by explicit reviewer intent recorded in the decision's
+    #: own `provenance["target_event_subtype"]` at candidate-creation
+    #: time (`TerminologyMappingDecision`'s own `provenance` JSON
+    #: column — no new schema). Applied by
+    #: `CalibratedTerminologyMappingAdapter._resolve_event_subtype()`
+    #: ONLY when the payload's own raw `event_subtype` is empty — a
+    #: genuine independent raw subtype value is always resolved on its
+    #: own terms first and this is never consulted.
+    target_event_subtype: str | None = None
 
     def as_attributes(self, *, raw_term: str) -> dict[str, Any]:
         """`raw_term` is the exact value *this* payload sent — kept
@@ -163,9 +195,25 @@ class CalibratedTerminologyMappingAdapter:
         return raw_event_type, None, [issue]
 
     def _resolve_event_subtype(
-        self, mapped_event_type: str | None, raw_event_subtype: str | None
+        self,
+        mapped_event_type: str | None,
+        raw_event_subtype: str | None,
+        *,
+        compound_provenance: ActiveMappingProvenance | None = None,
     ) -> tuple[str | None, ActiveMappingProvenance | None, list[ValidationIssue]]:
-        if mapped_event_type not in _SUBTYPE_ALIASES or not raw_event_subtype:
+        if not raw_event_subtype:
+            # No independent raw subtype value on this payload at all --
+            # the one legitimate source left is a *compound* event_type
+            # decision that itself declares a target_event_subtype (see
+            # ActiveMappingProvenance.target_event_subtype's own
+            # docstring). Never invented when no such decision exists;
+            # `compound_provenance` is `None` for every ordinary payload
+            # that simply has no subtype to give.
+            if compound_provenance is not None and compound_provenance.target_event_subtype:
+                return compound_provenance.target_event_subtype, compound_provenance, []
+            return raw_event_subtype, None, []
+
+        if mapped_event_type not in _SUBTYPE_ALIASES:
             return raw_event_subtype, None, []
 
         result = map_event_subtype(mapped_event_type, raw_event_subtype)
@@ -185,13 +233,28 @@ class CalibratedTerminologyMappingAdapter:
         self, raw: RawSafetyEventPayload
     ) -> tuple[RawSafetyEventPayload, list[ValidationIssue], dict[str, dict[str, Any]]]:
         mapped_type, type_provenance, type_issues = self._resolve_event_type(raw.event_type)
-        mapped_subtype, subtype_provenance, subtype_issues = self._resolve_event_subtype(mapped_type, raw.event_subtype)
+        mapped_subtype, subtype_provenance, subtype_issues = self._resolve_event_subtype(
+            mapped_type, raw.event_subtype, compound_provenance=type_provenance
+        )
 
         calibration_info: dict[str, dict[str, Any]] = {}
         if type_provenance is not None:
             calibration_info["event_type"] = type_provenance.as_attributes(raw_term=raw.event_type)
         if subtype_provenance is not None:
-            calibration_info["event_subtype"] = subtype_provenance.as_attributes(raw_term=raw.event_subtype)
+            if subtype_provenance is type_provenance:
+                # Compound: the SAME event_type decision also supplied the
+                # subtype (the payload had no independent raw subtype value
+                # at all) -- record the exact decision/version that drove
+                # it, same as any other calibration resolution, but with
+                # the *applied* subtype value as canonical_term rather than
+                # the type decision's own (which would be misleading here).
+                calibration_info["event_subtype"] = {
+                    **type_provenance.as_attributes(raw_term=raw.event_type),
+                    "canonical_term": type_provenance.target_event_subtype,
+                    "derived_from_compound_event_type_decision": True,
+                }
+            else:
+                calibration_info["event_subtype"] = subtype_provenance.as_attributes(raw_term=raw.event_subtype)
 
         mapped = RawSafetyEventPayload(
             event_type=mapped_type,
