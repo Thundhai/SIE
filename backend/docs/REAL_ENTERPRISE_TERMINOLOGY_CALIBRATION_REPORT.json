@@ -1,6 +1,7 @@
 {
   "report_type": "SIE_REAL_ENTERPRISE_TERMINOLOGY_ONTOLOGY_CALIBRATION_V0_1",
   "generated_at": "2026-09-02T11:24:36.622307+00:00",
+  "corrective_commit_note": "An independent audit found the companion .md report's event_type/event_subtype SECTION HEADERS ('8 terms'/'10 terms') did not match the term tables/this file's own real_dataset_review_candidates list (7 and 11 respectively). Corrected to 7/11/18 -- the underlying data, real_dataset_review_candidates list, and records_affected counts in this file were never wrong.",
   "milestone": "SIE Real Enterprise Terminology & Ontology Calibration v0.1",
   "is_synthetic_mechanism_demo": true,
   "scope_note": "This report describes a calibration MECHANISM, not a completed terminology review. No human HSE reviewer participated in this session. Zero of the real dataset terms listed below have been PROPOSED or APPROVED -- every one is REVIEW_CANDIDATE only. Every APPROVED/REJECTED decision demonstrated anywhere in this milestone uses synthetic terminology and a synthetic test user (see tests/test_terminology_calibration.py), never the real dataset.",
@@ -40,11 +41,11 @@
     "records_remaining_quarantined": 450,
     "by_domain": {
       "event_type": {
-        "unique_terms": 8,
+        "unique_terms": 7,
         "records_affected": 23
       },
       "event_subtype": {
-        "unique_terms": 10,
+        "unique_terms": 11,
         "records_affected": 427
       }
     }
@@ -215,7 +216,7 @@
   ],
   "synthetic_mechanism_test_summary": {
     "test_file": "tests/test_terminology_calibration.py",
-    "test_count": 27,
+    "test_count": 35,
     "covers": [
       "UNKNOWN -> REVIEW_CANDIDATE -> PROPOSED -> APPROVED",
       "PROPOSED -> REJECTED",

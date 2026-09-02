@@ -10,12 +10,30 @@ never automatically apply to historical records").
            (an organization+source_system's currently-APPROVED decisions,
            built ONCE per batch by
            `terminology_calibration_service.build_active_mapping_index()`)
-           -> a hit: resolved, annotated as calibration-sourced (never
-              silently indistinguishable from a static-table match — see
+           -> a hit: resolved, annotated with the exact `ActiveMappingProvenance`
+              that resolved it (never silently indistinguishable from a
+              static-table match, and never just "calibration=true" — see
               `normalize()`'s own `_terminology_calibration` attributes
               note below)
            -> no hit: UNKNOWN/AMBIGUOUS exactly as before, quarantined,
               never guessed
+
+**Exact provenance (corrective commit, audit item 1).** A calibration-
+resolved event's `attributes["_terminology_calibration"]` records, per
+domain resolved this way, the *exact* `TerminologyMappingDecision` that
+did it: `decision_id`, `mapping_version`, `organization_id`,
+`source_system`, `domain`, `context`, `source_term` (the decision's own
+recorded term), `normalized_term`, `canonical_term`, and `raw_term` (the
+actual value this specific payload sent — case/whitespace-equivalent to
+`source_term` by construction of the `normalized_term` lookup, but kept
+distinct since they need not be byte-identical). This is the one place
+that chain is captured — `ActiveMappingProvenance` below, produced by
+`terminology_calibration_service.build_active_mapping_index()`/
+`get_active_mapping()` and carried through unchanged. Never a second
+provenance system: this rides entirely on `SafetyEvent.attributes`, the
+same existing JSON provenance surface `source_value`/`source_content_hash`/
+`ingestion_batch_id` already use for "what happened to this record and
+why" (see `app/models/safety_event.py`'s own docstring).
 
 **Never automatically applied to historical records.** This adapter only
 ever sees the payloads a caller explicitly hands to `ingest_batch()`/
@@ -36,6 +54,8 @@ elsewhere (e.g. `real_dataset_evaluation.py`'s own site resolution)."""
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
+from typing import Any
 
 from app.intelligence.schemas import (
     NormalizedSafetyEvent,
@@ -59,6 +79,47 @@ _EVENT_TYPE_DOMAIN = "event_type"
 _EVENT_SUBTYPE_DOMAIN = "event_subtype"
 
 
+@dataclass(frozen=True)
+class ActiveMappingProvenance:
+    """Exactly which `TerminologyMappingDecision` resolved a term —
+    corrective-commit audit item 1's own required field list, verbatim.
+    Produced by `terminology_calibration_service.build_active_mapping_index()`/
+    `get_active_mapping()` from the real ORM row (never reconstructed or
+    guessed here) and carried, unchanged, into a resolved event's own
+    `attributes["_terminology_calibration"]` via `as_attributes()` below —
+    the one place this chain is captured, riding on the existing
+    `SafetyEvent.attributes` JSON provenance surface, not a second
+    provenance system."""
+
+    decision_id: uuid.UUID
+    mapping_version: int
+    organization_id: uuid.UUID
+    source_system: str
+    domain: str
+    context: str | None
+    source_term: str
+    normalized_term: str
+    canonical_term: str
+
+    def as_attributes(self, *, raw_term: str) -> dict[str, Any]:
+        """`raw_term` is the exact value *this* payload sent — kept
+        distinct from `source_term` (the decision's own recorded term)
+        since the two need only be `_normalize_key()`-equivalent, not
+        byte-identical (e.g. differing case/whitespace)."""
+        return {
+            "decision_id": str(self.decision_id),
+            "mapping_version": self.mapping_version,
+            "organization_id": str(self.organization_id),
+            "source_system": self.source_system,
+            "domain": self.domain,
+            "context": self.context,
+            "source_term": self.source_term,
+            "normalized_term": self.normalized_term,
+            "canonical_term": self.canonical_term,
+            "raw_term": raw_term,
+        }
+
+
 class CalibratedTerminologyMappingAdapter:
     """`DataSourceAdapter`-conforming, same four methods as
     `TerminologyMappingAdapter` (which this intentionally does not
@@ -70,25 +131,27 @@ class CalibratedTerminologyMappingAdapter:
 
     source_system_name = "terminology-mapped-calibrated"
 
-    def __init__(self, active_mappings: dict[tuple[str, str | None, str], str] | None = None):
-        #: `{(domain, context, normalized_term): canonical_term}` for
-        #: this organization+source_system's currently-APPROVED
+    def __init__(self, active_mappings: dict[tuple[str, str | None, str], ActiveMappingProvenance] | None = None):
+        #: `{(domain, context, normalized_term): ActiveMappingProvenance}`
+        #: for this organization+source_system's currently-APPROVED
         #: decisions only — see `build_active_mapping_index()`. An
         #: empty/omitted index makes this adapter behave *exactly* like
         #: the plain `TerminologyMappingAdapter` (no calibration
         #: decisions exist yet), never a behavior change by omission.
         self._active_mappings = active_mappings or {}
 
-    def _resolve_event_type(self, raw_event_type: str | None) -> tuple[str | None, str | None, list[ValidationIssue]]:
-        """Returns `(canonical_or_raw_value, calibration_source_term_if_used, issues)`."""
+    def _resolve_event_type(
+        self, raw_event_type: str | None
+    ) -> tuple[str | None, ActiveMappingProvenance | None, list[ValidationIssue]]:
+        """Returns `(canonical_or_raw_value, provenance_if_calibration_resolved, issues)`."""
         result = map_event_type(raw_event_type)
         if result.outcome == MappingOutcome.MAPPED:
             return result.canonical_value, None, []
 
         normalized = _normalize_key(str(raw_event_type)) if raw_event_type else None
-        approved = self._active_mappings.get((_EVENT_TYPE_DOMAIN, None, normalized)) if normalized else None
-        if approved:
-            return approved, raw_event_type, []
+        provenance = self._active_mappings.get((_EVENT_TYPE_DOMAIN, None, normalized)) if normalized else None
+        if provenance is not None:
+            return provenance.canonical_term, provenance, []
 
         code = "AMBIGUOUS_EVENT_TYPE_MAPPING" if result.outcome == MappingOutcome.AMBIGUOUS else "UNKNOWN_EVENT_TYPE_MAPPING"
         detail = (
@@ -101,7 +164,7 @@ class CalibratedTerminologyMappingAdapter:
 
     def _resolve_event_subtype(
         self, mapped_event_type: str | None, raw_event_subtype: str | None
-    ) -> tuple[str | None, str | None, list[ValidationIssue]]:
+    ) -> tuple[str | None, ActiveMappingProvenance | None, list[ValidationIssue]]:
         if mapped_event_type not in _SUBTYPE_ALIASES or not raw_event_subtype:
             return raw_event_subtype, None, []
 
@@ -110,9 +173,9 @@ class CalibratedTerminologyMappingAdapter:
             return result.canonical_value, None, []
 
         normalized = _normalize_key(str(raw_event_subtype))
-        approved = self._active_mappings.get((_EVENT_SUBTYPE_DOMAIN, mapped_event_type, normalized))
-        if approved:
-            return approved, raw_event_subtype, []
+        provenance = self._active_mappings.get((_EVENT_SUBTYPE_DOMAIN, mapped_event_type, normalized))
+        if provenance is not None:
+            return provenance.canonical_term, provenance, []
 
         code = "AMBIGUOUS_SUBTYPE_MAPPING" if result.outcome == MappingOutcome.AMBIGUOUS else "UNKNOWN_SUBTYPE_MAPPING"
         issue = ValidationIssue(code, f"event_subtype {raw_event_subtype!r} terminology mapping is unresolved.", True)
@@ -120,15 +183,15 @@ class CalibratedTerminologyMappingAdapter:
 
     def _mapped_payload_and_issues(
         self, raw: RawSafetyEventPayload
-    ) -> tuple[RawSafetyEventPayload, list[ValidationIssue], dict[str, str]]:
-        mapped_type, calibration_type_source, type_issues = self._resolve_event_type(raw.event_type)
-        mapped_subtype, calibration_subtype_source, subtype_issues = self._resolve_event_subtype(mapped_type, raw.event_subtype)
+    ) -> tuple[RawSafetyEventPayload, list[ValidationIssue], dict[str, dict[str, Any]]]:
+        mapped_type, type_provenance, type_issues = self._resolve_event_type(raw.event_type)
+        mapped_subtype, subtype_provenance, subtype_issues = self._resolve_event_subtype(mapped_type, raw.event_subtype)
 
-        calibration_info: dict[str, str] = {}
-        if calibration_type_source is not None:
-            calibration_info["event_type_resolved_via_calibration"] = calibration_type_source
-        if calibration_subtype_source is not None:
-            calibration_info["event_subtype_resolved_via_calibration"] = calibration_subtype_source
+        calibration_info: dict[str, dict[str, Any]] = {}
+        if type_provenance is not None:
+            calibration_info["event_type"] = type_provenance.as_attributes(raw_term=raw.event_type)
+        if subtype_provenance is not None:
+            calibration_info["event_subtype"] = subtype_provenance.as_attributes(raw_term=raw.event_subtype)
 
         mapped = RawSafetyEventPayload(
             event_type=mapped_type,

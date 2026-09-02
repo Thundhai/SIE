@@ -1,5 +1,13 @@
 # SIE Real Enterprise Terminology & Ontology Calibration Report v0.1
 
+**Corrective-commit note.** An independent audit found this report's own
+`event_type`/`event_subtype` section headers ("8 terms" / "10 terms")
+did not match the term tables directly beneath them (7 rows and 11 rows,
+respectively) — a transcription error in the headers, not in the
+underlying data or logic. This is corrected below: **7** `event_type`
+terms, **11** `event_subtype` terms, **18** total — unchanged from what
+the tables themselves, and the companion `.json`, always actually listed.
+
 **This report describes a calibration *mechanism*, not a completed terminology
 review.** It builds and proves a controlled workflow for moving enterprise
 terminology through `UNKNOWN → REVIEW CANDIDATE → PROPOSED → HSE REVIEW
@@ -84,7 +92,7 @@ own finding exactly: **18 unique terms require review**, affecting up to
 `REVIEW_CANDIDATE` — **zero** were proposed, approved, or rejected in
 this session.
 
-**Incident Type (`event_type`), 8 terms:**
+**Incident Type (`event_type`), 7 terms:**
 
 | Term | Occurrences | Status |
 |---|---:|---|
@@ -96,7 +104,7 @@ this session.
 | VehicleAccident | 2 | REVIEW_CANDIDATE |
 | HazardObservation | 1 | REVIEW_CANDIDATE |
 
-**Observation Category (`event_subtype`, context=`OBSERVATION`), 10 terms:**
+**Observation Category (`event_subtype`, context=`OBSERVATION`), 11 terms:**
 
 | Term | Occurrences | Status |
 |---|---:|---|
@@ -125,7 +133,7 @@ prior milestone, and unchanged by this one. Building the calibration
 
 ## 4. Mechanism demonstration (synthetic data only)
 
-The 27 automated tests in `tests/test_terminology_calibration.py`
+The 35 automated tests in `tests/test_terminology_calibration.py`
 exercise the full lifecycle end-to-end against **fabricated** terminology
 (`"NearMiss"`/`"NEAR_MISS"` used only as a realistic-shaped example term,
 never derived from a real record) and a synthetic test organization/user:

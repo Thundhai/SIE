@@ -68,6 +68,7 @@ from app.intelligence.ingestion_service import (
     safety_event_ingestion_service,
 )
 from app.intelligence.schemas import RawSafetyEventPayload
+from app.intelligence.terminology_calibration_adapter import ActiveMappingProvenance
 from app.intelligence.terminology_mapping import _normalize_key
 from app.intelligence.validation import validate_and_normalize
 from app.models.safety_event import SafetyEvent
@@ -197,6 +198,24 @@ def reprocess_quarantined_records(
         # originally received, never this reprocessing's own resolution.
         normalized.source_value["event_type"] = source_value.get("event_type")
         normalized.source_value["event_subtype"] = source_value.get("event_subtype")
+
+        # Exact mapping provenance (corrective-commit audit item 1) --
+        # the same ActiveMappingProvenance shape the calibration-aware
+        # adapter attaches at ingestion time, so a reprocessed event is
+        # traceable back to precisely this decision/version exactly like
+        # a freshly-ingested one, never a bare "calibration=true" flag.
+        # Never overwrites an existing attributes key.
+        provenance = ActiveMappingProvenance(
+            decision_id=decision.id, mapping_version=decision.mapping_version, organization_id=organization_id,
+            source_system=decision.source_system, domain=decision.domain, context=decision.context,
+            source_term=decision.source_term, normalized_term=decision.normalized_term,
+            canonical_term=decision.proposed_canonical_term,
+        )
+        normalized.attributes = {
+            **normalized.attributes,
+            "_terminology_calibration": {field_name: provenance.as_attributes(raw_term=str(raw_term))},
+        }
+
         content_hash = _content_hash(normalized.source_value)
         issues_json = [{"code": i.code, "message": i.message, "blocking": i.blocking} for i in validation_result.issues] or None
 

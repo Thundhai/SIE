@@ -30,6 +30,37 @@ approval (`app/api/v1/model_governance.py`), and `ROLE_PERMISSIONS`
 already withholds it from `VIEWER`/`HSE_USER`/`HSE_ANALYST` — see
 `app/services/permissions.py`.
 
+**Permission architecture review (corrective commit, audit item 4).**
+Re-inspected `app/services/permissions.py`, `app/services/authorization_service.py`,
+`app/api/v1/model_governance.py`'s own `GOVERNANCE_MANAGE`/`GOVERNANCE_READ`
+usage, and `app/services/hse_review_service.py` specifically to answer
+whether `GOVERNANCE_MANAGE` is *intentionally* appropriate here, not just
+reused by default. Conclusion: **yes, unchanged** --
+`propose_mapping()`/`approve_mapping()`/`reject_mapping()`/
+`open_new_version()`/`reprocess_quarantined_records()` all keep
+`GOVERNANCE_MANAGE`. `hse_review_service.py` itself enforces no
+permission at all (it has no API router yet, exactly like this module
+before this milestone) -- there is no pre-existing, more specific
+"HSE review" permission anywhere in the codebase to prefer instead.
+`GOVERNANCE_MANAGE`/`GOVERNANCE_READ` is the one permission pair this
+codebase already uses for "decide what a governed artifact's canonical,
+trusted state becomes" (`model_governance.py`'s approve/reject/deploy/
+rollback/undeploy), which is exactly what deciding a term's canonical
+ontology membership is. `ROLE_PERMISSIONS` grants it only to `ORG_ADMIN`
+(and `PLATFORM_ADMIN` via `ALL_PERMISSIONS`) -- `HSE_MANAGER` holds
+`GOVERNANCE_READ` but deliberately not `GOVERNANCE_MANAGE`, so even a
+domain-expert HSE role cannot unilaterally approve a mapping into the
+canonical ontology; only an org administrator (or platform admin) can.
+Introducing a narrower `TERMINOLOGY_MANAGE` permission was considered
+and rejected: it would fragment one existing "administrative,
+canonical-state-changing decision" concept into two near-identical
+permissions with no behavioral difference in who should hold them
+(nothing in this codebase's role design suggests terminology governance
+should be delegable to a role model-governance approval is not also
+delegable to), which is exactly the kind of permission proliferation the
+module docstring of `permissions.py` itself warns against ("adding one
+is a deliberate, reviewed code change, not routine data entry").
+
 **A term is never resolved into a canonical classification anywhere in
 this module.** `suggest_candidates()` surfaces what the existing,
 unmodified `terminology_mapping.py` alias table itself would say (a
@@ -49,12 +80,21 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.intelligence.terminology_mapping import MappingResult, _normalize_key
+from app.intelligence.enums import SafetyEventType
+from app.intelligence.terminology_calibration_adapter import ActiveMappingProvenance
+from app.intelligence.terminology_mapping import (
+    _SUBTYPE_ALIASES,
+    MAINTENANCE_STATUS_TARGET_FIELDS,
+    TRAINING_STATUS_TARGET_FIELDS,
+    MappingResult,
+    _normalize_key,
+)
 from app.intelligence.terminology_review import (
     TerminologyReviewEntry,
 )
 from app.models.terminology_mapping_decision import (
     TerminologyMappingDecision,
+    TerminologyMappingDecisionDomain,
     TerminologyMappingDecisionStatus,
 )
 from app.services import hse_review_service
@@ -63,6 +103,37 @@ from app.services.authorization_service import authorization_service
 from app.services.permissions import Permission
 
 _APPROVAL_PERMISSION = Permission.GOVERNANCE_MANAGE
+
+
+# --- Item 2 (corrective commit): canonical ontology validation ----------------------------------
+
+
+def _canonical_terms_for(domain: str, context: str | None) -> frozenset[str] | None:
+    """The existing SIE canonical vocabulary a `proposed_canonical_term`
+    must belong to for `(domain, context)` -- reused verbatim from
+    `terminology_mapping.py`'s/`enums.py`'s own already-curated
+    constants, never a second canonical ontology and never fuzzy/
+    semantic matching. Returns `None` only for a domain this codebase
+    has no reviewed canonical vocabulary for at all (defensive; every
+    domain `TerminologyMappingDecision` actually supports has one)."""
+    if domain == TerminologyMappingDecisionDomain.EVENT_TYPE:
+        return frozenset(t.value for t in SafetyEventType)
+    if domain == TerminologyMappingDecisionDomain.EVENT_SUBTYPE:
+        # Context-scoped, exactly like map_event_subtype() itself: the
+        # same raw term can mean different things under different
+        # event types, so there is no context-free subtype vocabulary.
+        # A context with no curated subtype table at all (WORKFORCE,
+        # EQUIPMENT, TRAINING, CORRECTIVE_ACTION, ENVIRONMENTAL) has an
+        # empty valid set -- correctly refusing every proposal under it,
+        # not a bug: this codebase has no reviewed subtype vocabulary
+        # for those domains to validate against.
+        table = _SUBTYPE_ALIASES.get(context or "")
+        return frozenset(table.values()) if table else frozenset()
+    if domain == TerminologyMappingDecisionDomain.TRAINING_STATUS:
+        return frozenset(TRAINING_STATUS_TARGET_FIELDS.keys())
+    if domain == TerminologyMappingDecisionDomain.MAINTENANCE_STATUS:
+        return frozenset(MAINTENANCE_STATUS_TARGET_FIELDS.keys())
+    return None
 
 
 class TerminologyMappingDecisionNotFoundError(ValueError):
@@ -79,6 +150,14 @@ class TerminologyMappingDecisionStateError(ValueError):
     row. A terminal row is frozen forever (see the model's own
     docstring); the only way to change an already-decided mapping is
     `open_new_version()`."""
+
+
+class InvalidCanonicalTermError(TerminologyMappingDecisionStateError):
+    """Raised by `approve_mapping()` when `proposed_canonical_term` does
+    not belong to the existing SIE canonical vocabulary for the
+    decision's own `(domain, context)` — corrective-commit audit item 2.
+    The decision is left exactly as `PROPOSED`; no mutation happens
+    before this check passes."""
 
 
 def _require_owned_decision(db: Session, *, organization_id: uuid.UUID, decision_id: uuid.UUID) -> TerminologyMappingDecision:
@@ -259,7 +338,15 @@ def approve_mapping(
     caller, a viewer, or a caller acting against another organization's
     decision all fail here, before anything is written (item 9's own
     acceptance criteria, verified directly by
-    tests/test_terminology_calibration.py)."""
+    tests/test_terminology_calibration.py).
+
+    **Canonical ontology validation (corrective commit, audit item 2).**
+    `proposed_canonical_term` must belong to the existing SIE canonical
+    vocabulary for the decision's own `(domain, context)` -- see
+    `_canonical_terms_for()`. An authorized reviewer can propose
+    anything, but cannot make an arbitrary string eligible for canonical
+    classification; a failed check raises before any field on `decision`
+    is mutated, so the row stays exactly `PROPOSED`."""
     authorization_service.require(db, user_id=acting_user_id, permission=_APPROVAL_PERMISSION, organization_id=organization_id)
 
     decision = _require_owned_decision(db, organization_id=organization_id, decision_id=decision_id)
@@ -270,6 +357,13 @@ def approve_mapping(
     if not decision.proposed_canonical_term:
         raise TerminologyMappingDecisionStateError(
             f"Decision {decision_id} has no proposed_canonical_term -- refusing to approve nothing."
+        )
+    valid_terms = _canonical_terms_for(decision.domain, decision.context)
+    if valid_terms is not None and decision.proposed_canonical_term not in valid_terms:
+        raise InvalidCanonicalTermError(
+            f"{decision.proposed_canonical_term!r} is not a valid SIE canonical term for "
+            f"domain={decision.domain!r} context={decision.context!r}. Valid terms: {sorted(valid_terms) or 'none'}. "
+            "Refusing to approve -- the decision remains PROPOSED."
         )
 
     decision.status = TerminologyMappingDecisionStatus.APPROVED
@@ -441,18 +535,38 @@ def get_active_mapping(
     ).scalars().first()
 
 
+def _provenance_from_decision(decision: TerminologyMappingDecision) -> ActiveMappingProvenance:
+    """The exact-identity provenance record (corrective-commit audit item
+    1) for one `APPROVED` decision -- built straight from the real ORM
+    row, never reconstructed or guessed."""
+    return ActiveMappingProvenance(
+        decision_id=decision.id,
+        mapping_version=decision.mapping_version,
+        organization_id=decision.organization_id,
+        source_system=decision.source_system,
+        domain=decision.domain,
+        context=decision.context,
+        source_term=decision.source_term,
+        normalized_term=decision.normalized_term,
+        canonical_term=decision.proposed_canonical_term,
+    )
+
+
 def build_active_mapping_index(
     db: Session, *, organization_id: uuid.UUID, source_system: str,
-) -> dict[tuple[str, str | None, str], str]:
+) -> dict[tuple[str, str | None, str], ActiveMappingProvenance]:
     """Every currently-active (highest-version `APPROVED`) mapping for
     `(organization_id, source_system)`, as a `{(domain, context,
-    normalized_term): canonical_term}` dict -- fetched **once** per
-    ingestion batch/evaluation run, not per record, so the calibration-
-    aware adapter never queries the database inside its own
+    normalized_term): ActiveMappingProvenance}` dict -- fetched **once**
+    per ingestion batch/evaluation run, not per record, so the
+    calibration-aware adapter never queries the database inside its own
     `validate()`/`normalize()` (which the `DataSourceAdapter` Protocol
     itself does not pass a session into -- see
     `app/intelligence/terminology_calibration_adapter.py`'s own
-    docstring)."""
+    docstring). Each value carries the *exact* decision identity
+    (`decision_id`, `mapping_version`, ...) that resolved it -- never
+    just the bare canonical string -- so a resolved event can always be
+    traced back to precisely which approved decision produced it."""
     rows = db.execute(
         select(TerminologyMappingDecision).where(
             TerminologyMappingDecision.organization_id == organization_id,
@@ -461,13 +575,21 @@ def build_active_mapping_index(
         ).order_by(TerminologyMappingDecision.mapping_version.asc())
     ).scalars().all()
 
-    index: dict[tuple[str, str | None, str], str] = {}
+    index: dict[tuple[str, str | None, str], ActiveMappingProvenance] = {}
     for row in rows:
         # Ascending version order means a later, higher-version row for
         # the same key simply overwrites an earlier one in the dict --
         # the highest version always wins, with no extra sorting needed.
+        # A second, later-approved version therefore never makes an
+        # *earlier* event's own already-recorded provenance ambiguous:
+        # this index only ever affects *new* resolutions going forward
+        # (see the adapter's own "never automatically applied to
+        # historical records" guarantee); a past event's
+        # `attributes["_terminology_calibration"]` was already written,
+        # once, at the moment it was itself resolved, and is never
+        # rewritten by a later version becoming active.
         if row.proposed_canonical_term:
-            index[(row.domain, row.context, row.normalized_term)] = row.proposed_canonical_term
+            index[(row.domain, row.context, row.normalized_term)] = _provenance_from_decision(row)
     return index
 
 
@@ -494,6 +616,7 @@ def list_decisions(
 
 
 __all__ = [
+    "InvalidCanonicalTermError",
     "TerminologyMappingDecisionNotFoundError",
     "TerminologyMappingDecisionStateError",
     "approve_mapping",
