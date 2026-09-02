@@ -32,6 +32,7 @@ from app.models.prediction import Prediction
 from app.models.prediction_outcome import PredictionOutcome
 from app.models.safety_event import SafetyEvent
 from app.models.site import Site
+from app.models.terminology_mapping_decision import TerminologyMappingDecision
 from app.models.user import User
 
 __all__ = [
@@ -62,5 +63,6 @@ __all__ = [
     "PredictionOutcome",
     "SafetyEvent",
     "Site",
+    "TerminologyMappingDecision",
     "User",
 ]

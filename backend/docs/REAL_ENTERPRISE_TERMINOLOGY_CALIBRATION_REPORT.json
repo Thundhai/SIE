@@ -1,0 +1,249 @@
+{
+  "report_type": "SIE_REAL_ENTERPRISE_TERMINOLOGY_ONTOLOGY_CALIBRATION_V0_1",
+  "generated_at": "2026-09-02T11:24:36.622307+00:00",
+  "milestone": "SIE Real Enterprise Terminology & Ontology Calibration v0.1",
+  "is_synthetic_mechanism_demo": true,
+  "scope_note": "This report describes a calibration MECHANISM, not a completed terminology review. No human HSE reviewer participated in this session. Zero of the real dataset terms listed below have been PROPOSED or APPROVED -- every one is REVIEW_CANDIDATE only. Every APPROVED/REJECTED decision demonstrated anywhere in this milestone uses synthetic terminology and a synthetic test user (see tests/test_terminology_calibration.py), never the real dataset.",
+  "final_rule_compliance": "Do not claim a mapping is HSE-approved unless an explicit approval operation exists and was actually exercised by an authorized reviewer/test. This report complies: the approval operation exists and was exercised 8+ times in automated tests against synthetic data; it was never exercised against any real-dataset term.",
+  "lifecycle": [
+    "REVIEW_CANDIDATE",
+    "PROPOSED",
+    "APPROVED",
+    "REJECTED"
+  ],
+  "pending_statuses": [
+    "REVIEW_CANDIDATE",
+    "PROPOSED"
+  ],
+  "terminal_statuses": [
+    "APPROVED",
+    "REJECTED"
+  ],
+  "components_built": {
+    "model": "app/models/terminology_mapping_decision.py",
+    "service": "app/services/terminology_calibration_service.py",
+    "calibration_aware_adapter": "app/intelligence/terminology_calibration_adapter.py",
+    "reprocessing_service": "app/services/terminology_reprocessing_service.py",
+    "migration": "migrations/versions/0013_real_enterprise_terminology_ontology_calibration.py"
+  },
+  "metrics": {
+    "total_unique_terminology_terms_reviewed": 18,
+    "mapped_terms": 0,
+    "unknown_terms": 18,
+    "ambiguous_terms": 0,
+    "pending_terms": 18,
+    "proposed_terms": 0,
+    "approved_terms": 0,
+    "rejected_terms": 0,
+    "records_affected_unknown_or_pending": 450,
+    "records_affected_approved": 0,
+    "records_remaining_quarantined": 450,
+    "by_domain": {
+      "event_type": {
+        "unique_terms": 8,
+        "records_affected": 23
+      },
+      "event_subtype": {
+        "unique_terms": 10,
+        "records_affected": 427
+      }
+    }
+  },
+  "real_dataset_review_candidates": [
+    {
+      "domain": "event_subtype",
+      "context": "OBSERVATION",
+      "source_term": "Working At Height",
+      "occurrence_count": 128,
+      "status": "REVIEW_CANDIDATE",
+      "static_table_outcome": "UNKNOWN",
+      "static_table_candidates": []
+    },
+    {
+      "domain": "event_subtype",
+      "context": "OBSERVATION",
+      "source_term": "PPE Compliance",
+      "occurrence_count": 117,
+      "status": "REVIEW_CANDIDATE",
+      "static_table_outcome": "UNKNOWN",
+      "static_table_candidates": []
+    },
+    {
+      "domain": "event_subtype",
+      "context": "OBSERVATION",
+      "source_term": "Electrical Safety",
+      "occurrence_count": 47,
+      "status": "REVIEW_CANDIDATE",
+      "static_table_outcome": "UNKNOWN",
+      "static_table_candidates": []
+    },
+    {
+      "domain": "event_subtype",
+      "context": "OBSERVATION",
+      "source_term": "Environmental",
+      "occurrence_count": 32,
+      "status": "REVIEW_CANDIDATE",
+      "static_table_outcome": "UNKNOWN",
+      "static_table_candidates": []
+    },
+    {
+      "domain": "event_subtype",
+      "context": "OBSERVATION",
+      "source_term": "Lifting Operations",
+      "occurrence_count": 31,
+      "status": "REVIEW_CANDIDATE",
+      "static_table_outcome": "UNKNOWN",
+      "static_table_candidates": []
+    },
+    {
+      "domain": "event_subtype",
+      "context": "OBSERVATION",
+      "source_term": "Procedure Violation",
+      "occurrence_count": 29,
+      "status": "REVIEW_CANDIDATE",
+      "static_table_outcome": "UNKNOWN",
+      "static_table_candidates": []
+    },
+    {
+      "domain": "event_subtype",
+      "context": "OBSERVATION",
+      "source_term": "Equipment Safety",
+      "occurrence_count": 13,
+      "status": "REVIEW_CANDIDATE",
+      "static_table_outcome": "UNKNOWN",
+      "static_table_candidates": []
+    },
+    {
+      "domain": "event_subtype",
+      "context": "OBSERVATION",
+      "source_term": "Others",
+      "occurrence_count": 13,
+      "status": "REVIEW_CANDIDATE",
+      "static_table_outcome": "UNKNOWN",
+      "static_table_candidates": []
+    },
+    {
+      "domain": "event_subtype",
+      "context": "OBSERVATION",
+      "source_term": "Documentation",
+      "occurrence_count": 11,
+      "status": "REVIEW_CANDIDATE",
+      "static_table_outcome": "UNKNOWN",
+      "static_table_candidates": []
+    },
+    {
+      "domain": "event_type",
+      "context": null,
+      "source_term": "NearMiss",
+      "occurrence_count": 6,
+      "status": "REVIEW_CANDIDATE",
+      "static_table_outcome": "UNKNOWN",
+      "static_table_candidates": []
+    },
+    {
+      "domain": "event_type",
+      "context": null,
+      "source_term": "PropertyDamage",
+      "occurrence_count": 5,
+      "status": "REVIEW_CANDIDATE",
+      "static_table_outcome": "UNKNOWN",
+      "static_table_candidates": []
+    },
+    {
+      "domain": "event_subtype",
+      "context": "OBSERVATION",
+      "source_term": "Fire Safety",
+      "occurrence_count": 4,
+      "status": "REVIEW_CANDIDATE",
+      "static_table_outcome": "UNKNOWN",
+      "static_table_candidates": []
+    },
+    {
+      "domain": "event_type",
+      "context": null,
+      "source_term": "FireIncident",
+      "occurrence_count": 4,
+      "status": "REVIEW_CANDIDATE",
+      "static_table_outcome": "UNKNOWN",
+      "static_table_candidates": []
+    },
+    {
+      "domain": "event_type",
+      "context": null,
+      "source_term": "Others",
+      "occurrence_count": 3,
+      "status": "REVIEW_CANDIDATE",
+      "static_table_outcome": "UNKNOWN",
+      "static_table_candidates": []
+    },
+    {
+      "domain": "event_subtype",
+      "context": "OBSERVATION",
+      "source_term": "Emergency Preparedness",
+      "occurrence_count": 2,
+      "status": "REVIEW_CANDIDATE",
+      "static_table_outcome": "UNKNOWN",
+      "static_table_candidates": []
+    },
+    {
+      "domain": "event_type",
+      "context": null,
+      "source_term": "SecurityBreach",
+      "occurrence_count": 2,
+      "status": "REVIEW_CANDIDATE",
+      "static_table_outcome": "UNKNOWN",
+      "static_table_candidates": []
+    },
+    {
+      "domain": "event_type",
+      "context": null,
+      "source_term": "VehicleAccident",
+      "occurrence_count": 2,
+      "status": "REVIEW_CANDIDATE",
+      "static_table_outcome": "UNKNOWN",
+      "static_table_candidates": []
+    },
+    {
+      "domain": "event_type",
+      "context": null,
+      "source_term": "HazardObservation",
+      "occurrence_count": 1,
+      "status": "REVIEW_CANDIDATE",
+      "static_table_outcome": "UNKNOWN",
+      "static_table_candidates": []
+    }
+  ],
+  "synthetic_mechanism_test_summary": {
+    "test_file": "tests/test_terminology_calibration.py",
+    "test_count": 27,
+    "covers": [
+      "UNKNOWN -> REVIEW_CANDIDATE -> PROPOSED -> APPROVED",
+      "PROPOSED -> REJECTED",
+      "terminal decisions frozen (no further mutation)",
+      "versioning (open_new_version, full history preserved)",
+      "tenant isolation",
+      "source-system isolation",
+      "unauthorized user cannot approve",
+      "viewer cannot propose/approve/reject",
+      "cross-tenant approval denied",
+      "UNKNOWN/AMBIGUOUS/PENDING/REJECTED all remain quarantined",
+      "APPROVED becomes eligible",
+      "explicit historical reprocessing (tenant/source scoped, requires APPROVED, fresh ingestion_time)",
+      "reprocessing refuses unsupported domains",
+      "audit logging for every transition",
+      "provenance (raw term -> decision -> canonical event -> feature/intelligence)",
+      "reproducibility (same input + mapping version -> same classification)",
+      "PII never required or exposed"
+    ]
+  },
+  "architecture_limitations_discovered": [
+    "A plain re-ingest can never re-trigger reclassification for content that has not changed (SafetyEventIngestionService idempotency compares the raw payload hash, not its resolution) -- reprocessing must call validate_and_normalize()/_apply() directly, not re-run ingest_batch().",
+    "training_status/maintenance_status domains have no ingestion adapter that gates classification on them -- calibration approval for those domains has nothing to unlock; reprocessing refuses them.",
+    "DataSourceAdapter.validate()/normalize() take no database session by design, so the calibration-aware adapter requires a precomputed active-mapping index rebuilt once per ingestion batch, not a live query."
+  ],
+  "recommendations_for_next_milestone": [
+    "An actual HSE review of the real dataset's 18 candidate terms by an authorized human reviewer.",
+    "A minimal API router so a real reviewer can drive the lifecycle from the product UI.",
+    "Once real approvals exist, explicit, deliberate reprocessing of the real dataset's own 450 quarantined records."
+  ]
+}
