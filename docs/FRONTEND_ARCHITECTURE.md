@@ -8,8 +8,13 @@ Integration Foundation v0.1** milestone, which resolved the backend gaps
 §7 originally documented (real Events API, effective permissions, CORS)
 — see `docs/ENTERPRISE_API.md` for that milestone's own backend-side
 documentation, including its architecture diagram and CORS
-verification. This document does not cover the backend itself (see
-`backend/README.md`).
+verification. §2, §4, §5, and §7 were updated again, and §9 added, for
+**SIE Milestone 18: Actions & Intervention UX & API Integration v0.1**,
+which brought the Actions domain (SIE Milestone 17's backend, frozen and
+unchanged by this frontend milestone) into the app the same way Events
+was integrated — see `docs/ACTIONS_DOMAIN.md` for the backend's own
+Actions documentation. This document does not cover the backend itself
+(see `backend/README.md`).
 
 ## 1. Legacy vs. new — read this first
 
@@ -71,10 +76,11 @@ src/
     AppErrorBoundary.tsx    Light-themed top-level error boundary
   auth/                    Authentication/identity abstraction (§3 below)
   components/
-    ui/                    Generic primitives: Button, Input, SearchInput,
-                            Select, FilterBar, Tabs, Table, Pagination,
-                            StatusBadge, PriorityBadge, LoadingState,
-                            EmptyState, ErrorState, Modal, Drawer, Overlay
+    ui/                    Generic primitives: Button, Input, Textarea,
+                            SearchInput, Select, FilterBar, Tabs, Table,
+                            Pagination, StatusBadge, PriorityBadge,
+                            LoadingState, EmptyState, ErrorState, Modal,
+                            Drawer, Overlay
     layout/                AppShell, Sidebar, Header, PageContainer,
                             Section, Breadcrumb
     data/                  EvidenceItem, EvidenceList, DocumentReference,
@@ -85,9 +91,18 @@ src/
     events/                EventsPage, EventDetailPage, eventRepository.ts
                             (interface), apiEventRepository.ts (real API),
                             fixtureEventRepository.ts (example-data fallback)
+    actions/               ActionsPage, ActionDetailPage, ActionFormDrawer
+                            (create/edit), RelatedActionSection (Event
+                            Detail's "Related action" area),
+                            actionRepository.ts (interface),
+                            apiActionRepository.ts (real API),
+                            fixtureActionRepository.ts (example-data
+                            fallback, mutable), actionStatus.ts
+                            (status/priority/type labels — see §9 below)
   services/api/            Typed API client (§4 below)
   fixtures/                Isolated fixture data (§5 below) — see its own README.md
-  types/                   Shared cross-feature types (common.ts, events.ts, evidence.ts)
+  types/                   Shared cross-feature types (common.ts, events.ts,
+                            actions.ts, evidence.ts)
   styles/tokens.css         Design tokens (§6 below)
   test/setup.ts             Vitest setup (jest-dom matchers)
 ```
@@ -147,15 +162,22 @@ Swapping in a real `ProdAuthProvider` later touches exactly one file
 - `errors.ts` — `ApiError`, parsed from the backend's own standardized
   error contract (`backend/app/core/errors.py`:
   `{ detail, error: { code, message, request_id } }`).
-- `organizations.ts`, `analytics.ts`, `events.ts`, `auth.ts`, `sites.ts`
-  — typed wrappers around the real endpoints actually used (`GET
-  /organizations/{id}`, `GET /organizations/{id}/members/{user_id}`,
-  `GET /intelligence/analytics/summary`, `GET
+- `organizations.ts`, `analytics.ts`, `events.ts`, `auth.ts`, `sites.ts`,
+  `actions.ts` — typed wrappers around the real endpoints actually used
+  (`GET /organizations/{id}`, `GET /organizations/{id}/members/{user_id}`,
+  `GET /organizations/{id}/members`, `GET
+  /intelligence/analytics/summary`, `GET
   /intelligence/analytics/signals`, `GET /events`, `GET /events/{id}`,
-  `GET /auth/me`, `GET /organizations/{id}/sites`). Every field mirrors
-  the backend's own Pydantic schemas (`backend/app/schemas/
-  intelligence.py`, `organization*.py`, `events.py`, `auth.py`,
-  `site.py`) exactly — nothing invented.
+  `GET /auth/me`, `GET /organizations/{id}/sites`, `POST /actions`,
+  `GET /actions`, `GET /actions/{id}`, `PATCH /actions/{id}`,
+  `POST /actions/{id}/status`). Every field mirrors the backend's own
+  Pydantic schemas (`backend/app/schemas/intelligence.py`,
+  `organization*.py`, `events.py`, `auth.py`, `site.py`, `actions.py`)
+  exactly — nothing invented. `client.ts`'s `ApiRequestOptions` also
+  accepts an optional `headers` map (applied before the base headers, so
+  it can never shadow them) — `actions.ts::createAction()` is the one
+  caller today, attaching the real `Idempotency-Key` header the backend's
+  own idempotency mechanism expects (`backend/app/core/idempotency.py`).
 
 ## 5. Fixtures vs. real data
 
@@ -176,6 +198,18 @@ failed to resolve (e.g. local development with no backend running).
 data" disclosure only when the active repository actually reports
 `isFixtureBacked` — never unconditionally — so fixture data is still
 never presented as live.
+
+`ActionsPage`/`ActionDetailPage`/`RelatedActionSection` follow the exact
+same pattern one level down: `useActionRepository.ts`
+(`src/features/actions/`) selects `ApiActionRepository` (real
+`/api/v1/actions` — SIE Milestone 17: Actions & Intervention Foundation
+v0.1) once an organization is established, `FixtureActionRepository`
+otherwise. Unlike the read-only Events fixture, `FixtureActionRepository`
+holds real, mutable in-memory state — create/edit/status-change/
+reassignment all work against it too, including enforcing the same
+status transition matrix the real backend enforces (see
+`actionStatus.ts`) — so local development without a backend still has a
+working, if non-persistent, Actions domain to exercise.
 
 ## 6. Design tokens
 
@@ -226,9 +260,12 @@ verified. Gaps 4-5 remain open.
    infrastructure this milestone did not build; the seam it plugs into
    already exists and is documented in `docs/ENTERPRISE_API.md` §5's
    Implemented/seam-only/external-infrastructure table.
-5. **No Actions/Reports/Knowledge-browse/Administration backend
-   capability** beyond what already existed — unchanged; out of scope
-   for both frontend milestones so far.
+5. ~~**No Actions backend capability.**~~ **Resolved** by the backend's
+   own SIE Milestone 17: Actions & Intervention Foundation v0.1
+   (`docs/ACTIONS_DOMAIN.md`), integrated into this frontend by SIE
+   Milestone 18 (§9 below). **Reports/Knowledge-browse/Administration**
+   remain open — unchanged; out of scope for every frontend milestone so
+   far.
 
 ## 8. Verification performed this milestone
 
@@ -248,3 +285,88 @@ verified. Gaps 4-5 remain open.
   any code added or changed by this milestone) specifically to exercise
   Home's real API integration end-to-end, which is how the CORS gap
   above was discovered and confirmed.
+
+## 9. Actions & Intervention (SIE Milestone 18)
+
+Brings the Actions domain — SIE Milestone 17's backend, approved/frozen
+and **not modified by this frontend milestone** (`docs/ACTIONS_DOMAIN.md`)
+— into the app the same way Events was integrated: real routes, a typed
+API client layer, a repository abstraction with a fixture fallback, and
+the existing design system throughout. No backend change was required.
+
+**Routes.** `/actions` (list) and `/actions/:actionId` (detail) —
+`src/app/router.tsx`, `src/features/actions/ActionsPage.tsx`/
+`ActionDetailPage.tsx`. The Sidebar's "Actions" item is a real link now
+(`src/components/layout/Sidebar.tsx`).
+
+**Status/priority/type are governed enums, not free text — unlike
+events.** `backend/app/models/safety_action_enums.py` makes `ActionStatus`
+/`ActionPriority`/`ActionType` real, closed vocabularies with an enforced
+transition matrix, deliberately unlike `SafetyEvent.status` (free text —
+§5 above). `src/types/actions.ts` mirrors that as real closed TypeScript
+unions instead of the free-text-with-fallback pattern `eventStatus.ts`
+uses; `src/features/actions/actionStatus.ts` is the one place mapping
+each value to a tone/label (a total `Record`, not a partial lookup with a
+generic fallback — there is no "unknown status" case to design for).
+
+**Status transitions remain backend-authoritative.**
+`actionStatus.ts::suggestedNextStatuses()` mirrors the backend's own
+transition table purely as a UI convenience — which options
+`ActionDetailPage`'s "Change status" control shows. The real
+`POST /actions/{id}/status` response is the sole authority on whether a
+transition actually succeeds: the control never marks the action changed
+until that call resolves, and on failure the previously displayed status
+is left exactly as it was (see `ActionDetailPage.api.test.tsx`'s
+"never optimistic" tests). Completion/cancellation are explicit,
+separately submitted user actions — nothing transitions a status
+automatically anywhere in this codebase.
+
+**Two separately-permissioned mutation workflows, on top of general
+edit.** `ActionFormDrawer` (create/edit) is gated on
+`intervention:manage`; a status change additionally requires
+`intervention:manage` for a non-terminal target or `intervention:close`
+for a terminal one (`COMPLETED`/`CANCELLED`); reassignment
+(`ActionDetailPage`'s "Assignment" section) is its own control gated on
+`intervention:assign`, kept deliberately separate from the general edit
+form so a caller without assign rights never sees a misleading editable
+owner field — they see the current owner read-only instead. All three
+checks use `useAuth().hasPermission()` (§3) for display purposes only;
+the backend's own 403 remains authoritative, and every mutation surfaces
+that 403's message verbatim rather than hiding the failure (see
+`ActionDetailPage.api.test.tsx`'s "unauthorized mutation" tests).
+
+**Assignment picker candidates are labeled by role, not name — a real
+backend contract gap, deliberately not worked around by changing the
+backend.** `GET /organizations/{id}/members` returns
+`OrganizationMembershipRead` — `user_id`/`role`/`status`, no name or
+email (`backend/app/schemas/organization_membership.py`) — and the
+backend has no `GET /users` endpoint anywhere to resolve one from. Adding
+either would be a new backend capability, not a fix to an existing
+contract defect, so `ApiActionRepository.listOwnerOptions()`
+(`src/features/actions/apiActionRepository.ts`) instead labels each
+candidate honestly as `"<role> · <first 8 chars of user_id>"`. This
+affects only the *candidate list* for reassignment — an action that
+already has an owner shows their real name, since
+`SafetyActionRead.owner_name` is resolved server-side
+(`backend/app/api/v1/actions.py::_to_read`) independently of this
+endpoint. See the milestone's own completion report, "known
+limitations".
+
+**Event Detail's "Related action" area**
+(`src/features/actions/RelatedActionSection.tsx`) queries the real
+Actions API by `source_event_id` — a genuinely separate mechanism from
+`EventDetailContent`'s older, generic, fixture-illustrative
+`relatedRecords`/`RelatedRecord` display (left untouched). It renders
+exactly the real state: the one action found, an honest empty state (with
+a permission-gated "Create action" entry point pre-linked to the source
+event), or a genuine load error — never a fabricated action or
+recommendation, and no autonomous creation, assignment, or closure
+anywhere in this feature (backend or frontend).
+
+**New shared primitive:** `src/components/ui/Textarea.tsx` — a
+multi-line counterpart to `Input`, built to the same always-labeled
+contract, added because the create/edit form needed one and none
+existed; every other Actions screen reuses `Table`/`FilterBar`/
+`Pagination`/`Select`/`Button`/`StatusBadge`/`PriorityBadge`/`Modal`/
+`Drawer`/`EmptyState`/`ErrorState`/`LoadingState`/`Section`/
+`PageContainer`/`Breadcrumb` unchanged.

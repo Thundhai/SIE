@@ -32,20 +32,21 @@ function renderShell(initialPath = '/') {
 }
 
 describe('AppShell', () => {
-  it('renders Home and Events as real navigable links', () => {
+  it('renders Home, Events, and Actions as real navigable links', () => {
     renderShell();
     expect(screen.getByRole('link', { name: 'Home' })).toHaveAttribute('href', '/');
     expect(screen.getByRole('link', { name: 'Events' })).toHaveAttribute('href', '/events');
+    expect(screen.getByRole('link', { name: 'Actions' })).toHaveAttribute('href', '/actions');
   });
 
-  it('renders Actions/Intelligence/Knowledge/Reports/Administration as disabled, non-navigating items (§9/§22)', () => {
+  it('renders Intelligence/Knowledge/Reports/Administration as disabled, non-navigating items (§9/§22)', () => {
     renderShell();
-    for (const label of ['Actions', 'Intelligence', 'Knowledge', 'Reports', 'Administration']) {
+    for (const label of ['Intelligence', 'Knowledge', 'Reports', 'Administration']) {
       // Not a link/button — no navigation target exists for it this milestone.
       expect(screen.queryByRole('link', { name: label })).not.toBeInTheDocument();
       expect(screen.getByText(label)).toBeInTheDocument();
     }
-    expect(screen.getAllByText('Coming later')).toHaveLength(5);
+    expect(screen.getAllByText('Coming later')).toHaveLength(4);
   });
 
   it('navigating from Home to Events swaps the routed content without a full page reload', async () => {

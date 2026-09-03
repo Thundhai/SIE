@@ -7,6 +7,7 @@ import { Section } from '../../components/layout/Section';
 import { DocumentReference } from '../../components/data/DocumentReference';
 import { RelatedRecord } from '../../components/data/RelatedRecord';
 import { InsightPanel } from '../../components/intelligence/InsightPanel';
+import { RelatedActionSection } from '../actions/RelatedActionSection';
 import { Button } from '../../components/ui/Button';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { ErrorState } from '../../components/ui/ErrorState';
@@ -165,6 +166,8 @@ function EventDetailContent({ event }: { event: SafetyEventDetail }) {
       <Section title="What SIE found">
         <InsightPanel heading="Finding" finding={event.finding} context={event.findingContext} evidence={event.evidence} />
       </Section>
+
+      <RelatedActionSection sourceEventId={event.id} />
 
       {event.relatedRecords.length > 0 && (
         <Section title="Related records">

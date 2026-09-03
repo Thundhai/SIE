@@ -14,3 +14,4 @@ export * from './Select';
 export * from './StatusBadge';
 export * from './Table';
 export * from './Tabs';
+export * from './Textarea';

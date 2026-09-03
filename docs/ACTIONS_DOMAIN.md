@@ -330,8 +330,10 @@ in this codebase yet.
 
 - No HTTP read endpoint for `SafetyActionHistory` (§2) — implemented and
   tested at the service/database layer only.
-- No Actions frontend — the `Actions` navigation item remains disabled;
-  this is deliberate (§1), not an oversight.
+- ~~No Actions frontend.~~ **Resolved** by SIE Milestone 18: Actions &
+  Intervention UX & API Integration v0.1, which integrated this
+  milestone's API — unmodified — into the app (`/actions`,
+  `/actions/:actionId`) — see `docs/FRONTEND_ARCHITECTURE.md` §9.
 - `PATCH` cannot change `source_event_id` after creation — provenance is
   set once. If a future milestone needs to correct a mis-attributed
   source event, that is new, explicit scope, not implied by this one.

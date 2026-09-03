@@ -25,6 +25,12 @@ export interface ApiRequestOptions {
   query?: Record<string, QueryValue>;
   body?: unknown;
   signal?: AbortSignal;
+  /** Extra request headers (e.g. `Idempotency-Key` — see
+   * `services/api/actions.ts`'s own `createAction()`). Applied before
+   * the base headers `buildHeaders()` always sets, so a caller-supplied
+   * value can never shadow `Content-Type`/`Accept`/the request-id/dev-
+   * identity headers. */
+  headers?: Record<string, string>;
 }
 
 function buildUrl(path: string, query?: Record<string, QueryValue>): string {
@@ -39,8 +45,16 @@ function buildUrl(path: string, query?: Record<string, QueryValue>): string {
   return url.toString();
 }
 
-function buildHeaders(hasBody: boolean): Headers {
+function buildHeaders(hasBody: boolean, extraHeaders?: Record<string, string>): Headers {
   const headers = new Headers();
+  // Caller-supplied headers are applied first, so none of them can ever
+  // shadow the base headers set below (Content-Type/Accept/the request-
+  // id/dev-identity headers always win on a name collision).
+  if (extraHeaders) {
+    for (const [key, value] of Object.entries(extraHeaders)) {
+      headers.set(key, value);
+    }
+  }
   if (hasBody) {
     headers.set('Content-Type', 'application/json');
   }
@@ -60,9 +74,9 @@ function buildHeaders(hasBody: boolean): Headers {
 }
 
 export async function apiRequest<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
-  const { method = 'GET', query, body, signal } = options;
+  const { method = 'GET', query, body, signal, headers: extraHeaders } = options;
   const url = buildUrl(path, query);
-  const headers = buildHeaders(body !== undefined);
+  const headers = buildHeaders(body !== undefined, extraHeaders);
 
   let response: Response;
   try {

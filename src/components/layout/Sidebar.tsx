@@ -7,15 +7,15 @@ interface NavItem {
   href: string;
   icon: typeof Home;
   /** `false` items render as disabled, non-navigating rows with a
-   * "Coming later" note — never a fake page (§9/§22). Only Home and
-   * Events are active this milestone. */
+   * "Coming later" note — never a fake page (§9/§22). Only Home, Events,
+   * and (as of SIE Milestone 18) Actions are active. */
   enabled: boolean;
 }
 
 const NAV_ITEMS: NavItem[] = [
   { label: 'Home', href: '/', icon: Home, enabled: true },
   { label: 'Events', href: '/events', icon: ClipboardList, enabled: true },
-  { label: 'Actions', href: '/actions', icon: CheckSquare, enabled: false },
+  { label: 'Actions', href: '/actions', icon: CheckSquare, enabled: true },
   { label: 'Intelligence', href: '/intelligence', icon: LineChart, enabled: false },
   { label: 'Knowledge', href: '/knowledge', icon: ShieldCheck, enabled: false },
   { label: 'Reports', href: '/reports', icon: FileBarChart2, enabled: false },
@@ -24,10 +24,10 @@ const NAV_ITEMS: NavItem[] = [
 
 /**
  * Primary navigation — clean, light, and easy to scan (§9): no glow, no
- * saturated badges, no per-item live counts. Only Home and Events are
- * real links; the rest render as disabled rows with a "Coming later"
- * label so the eventual information architecture is visible without
- * pretending those screens exist yet.
+ * saturated badges, no per-item live counts. Home, Events, and (as of
+ * SIE Milestone 18) Actions are real links; the rest render as disabled
+ * rows with a "Coming later" label so the eventual information
+ * architecture is visible without pretending those screens exist yet.
  */
 export function Sidebar() {
   return (

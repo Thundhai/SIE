@@ -46,8 +46,18 @@ describe('AppRoutes', () => {
     expect(screen.getByRole('heading', { name: 'Home' })).toBeInTheDocument();
   });
 
-  it('does not route Actions/Intelligence/Knowledge/Reports/Administration to a fake page (§22) — falls back to Home', () => {
-    renderAt('/actions');
+  it('does not route Intelligence/Knowledge/Reports/Administration to a fake page (§22) — falls back to Home', () => {
+    renderAt('/intelligence');
     expect(screen.getByRole('heading', { name: 'Home' })).toBeInTheDocument();
+  });
+
+  it('renders Actions at /actions (SIE Milestone 18)', async () => {
+    renderAt('/actions');
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Actions' })).toBeInTheDocument());
+  });
+
+  it('renders Action Detail for a known fixture id at /actions/:actionId', async () => {
+    renderAt('/actions/ACT-2001');
+    await waitFor(() => expect(screen.getByRole('heading', { name: /Review reversing procedure/ })).toBeInTheDocument());
   });
 });
