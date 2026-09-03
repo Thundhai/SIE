@@ -7,7 +7,10 @@ as more of the system gets wired to audit logging, without a migration).
 `AuditService.log()` is the single write path; every call site listed in
 this milestone's spec that is actually implemented calls it — see the
 README's "Audit foundation" section for the current list and what is
-*not* yet wired up.
+*not* yet wired up. `log()` also takes an optional `commit` flag (SIE
+Milestone 17 corrective patch, default `True` — see its own docstring)
+letting a caller with its own transaction boundary defer the commit
+instead of always committing independently.
 """
 
 import uuid
@@ -117,7 +120,21 @@ class AuditService:
         user_id: uuid.UUID | None = None,
         metadata: dict[str, Any] | None = None,
         request_id: str | None = None,
+        commit: bool = True,
     ) -> AuditLog:
+        """`commit=True` (default) is unchanged behavior for every
+        existing call site across this codebase: the `AuditLog` row
+        commits immediately, on its own.
+
+        `commit=False` (SIE Milestone 17 corrective patch) instead only
+        `db.add()`s and `db.flush()`s the row, so it participates in a
+        caller's own open transaction rather than committing
+        independently — used by
+        `app/services/safety_action_service.py::action_mutation_transaction()`
+        so a `SafetyAction` mutation and the `AuditLog` row describing it
+        either both persist or neither does. This is purely additive:
+        no other call site passes `commit=False`, so nothing about the
+        platform-wide audit trail's existing behavior changes."""
         entry = AuditLog(
             action=action,
             resource_type=resource_type,
@@ -128,8 +145,11 @@ class AuditService:
             request_id=request_id,
         )
         db.add(entry)
-        db.commit()
-        db.refresh(entry)
+        if commit:
+            db.commit()
+            db.refresh(entry)
+        else:
+            db.flush()
         return entry
 
 

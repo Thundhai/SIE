@@ -32,6 +32,21 @@ No scheduled cleanup job exists in this milestone (consistent with item
 row's intended lifetime for a future cleanup pass to key off; nothing
 prunes automatically today, so a long-running deployment should add one
 before relying on this table staying small indefinitely.
+
+**`store_response(..., commit=False)`** (SIE Milestone 17 corrective
+patch). Every existing caller keeps calling `store_response()` exactly
+as before — `commit` defaults to `True`, so this is purely additive.
+It exists for a route whose own mutation must commit as a single
+all-or-nothing unit together with the `IdempotencyKey` row (e.g.
+`POST /actions` — `app/services/safety_action_service.py`'s own
+`action_mutation_transaction()`): pass `commit=False` and the row is
+`db.add()`ed and `db.flush()`ed (so it participates in the caller's own
+open transaction and is visible to later statements in it) but not
+committed — the caller commits once, itself, after every other write
+that mutation needs has also been added. This is the smallest change
+that lets `store_response()` participate in an outer transaction
+without touching its behavior for any of its other, non-transactional
+callers.
 """
 
 from __future__ import annotations
@@ -130,11 +145,19 @@ def store_response(
     organization_id: uuid.UUID | None,
     api_client_id: uuid.UUID | None = None,
     user_id: uuid.UUID | None = None,
+    commit: bool = True,
 ) -> None:
     """Call once, right before returning, after the route's real work
     succeeded. A no-op when no `Idempotency-Key` was supplied — see
     module docstring: idempotency is opt-in, never forced onto a caller
-    that didn't ask for it."""
+    that didn't ask for it.
+
+    `commit=True` (default, unchanged) commits immediately, exactly as
+    before every existing caller of this function. `commit=False` only
+    `db.add()`s and `db.flush()`s the row — see this module's own
+    docstring's "store_response(..., commit=False)" note, and
+    `app/services/safety_action_service.py::action_mutation_transaction()`
+    for the caller that uses it."""
     if not idempotency_key:
         return
 
@@ -150,4 +173,7 @@ def store_response(
         expires_at=datetime.now(timezone.utc) + timedelta(hours=settings.IDEMPOTENCY_KEY_TTL_HOURS),
     )
     db.add(row)
-    db.commit()
+    if commit:
+        db.commit()
+    else:
+        db.flush()

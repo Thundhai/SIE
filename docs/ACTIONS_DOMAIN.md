@@ -209,6 +209,18 @@ most significant change when both occur together), `UPDATED` otherwise;
 an empty/no-op `PATCH` (nothing actually different from the stored row)
 writes neither.
 
+**Transactional integrity (corrective patch).** The `SafetyAction` row,
+its `SafetyActionHistory` entry, and its `AuditLog` entry all commit
+together, in one transaction, for every mutation
+(`app/services/safety_action_service.py::action_mutation_transaction()`)
+— an exception anywhere in that sequence rolls all of it back, so a
+client can never observe (and a retry can never be confused by) an
+action that exists without its history/audit record, or a history/audit
+row with no matching action change. Verified directly against the
+database in `tests/test_actions_transaction_integrity.py` (failure
+injected at each write, database state re-read afterward — not just
+"an exception was raised").
+
 ## 8. Idempotency
 
 `POST /actions` accepts the existing `Idempotency-Key` header
@@ -219,6 +231,14 @@ same key with a materially different body is rejected `409
 IDEMPOTENCY_CONFLICT`. `PATCH`/status-transition do not accept an
 `Idempotency-Key` — the milestone spec's own idempotency requirement
 (§14) is scoped to "machine-created actions," i.e. creation.
+
+The `IdempotencyKey` response row is written and committed as part of
+the same transaction as the `SafetyAction` it describes (see
+"Transactional integrity" above) — a failure anywhere in that
+transaction leaves neither the action nor the `IdempotencyKey` row
+persisted, so a subsequent retry with the same key is a genuinely fresh
+attempt (never blocked by, and never creates a duplicate alongside, a
+row left over from a failed attempt).
 
 ## 9. API
 

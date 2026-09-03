@@ -70,6 +70,14 @@ go through `PATCH` — only the dedicated `POST .../status` endpoint can
 change `status`/`completed_at`/`cancelled_at`, so the transition matrix
 (`app/models/safety_action_enums.py`) has exactly one code path to
 enforce, not two.
+
+**Transaction boundary.** Each of the three mutation routes below
+(`create_action`/`update_action`/`update_action_status`) wraps its
+writes in `app.services.safety_action_service.action_mutation_transaction()`
+— see that function's own docstring for the full rationale. In short:
+the `SafetyAction` row, its `SafetyActionHistory` entry, its `AuditLog`
+entry, and (create only) the `IdempotencyKey` response all commit
+together in one `db.commit()`, or none of them persist.
 """
 
 from __future__ import annotations
@@ -93,6 +101,7 @@ from app.services.permissions import Permission
 from app.services.safety_action_service import (
     ActionHistoryChangeType,
     AuditAction,
+    action_mutation_transaction,
     apply_update,
     audit_action_event,
     record_history,
@@ -203,56 +212,65 @@ def create_action(
     if lookup.is_replay:
         return SafetyActionRead.model_validate(lookup.response_body)
 
-    action = SafetyAction(
-        organization_id=organization_id,
-        site_id=body.site_id,
-        source_event_id=body.source_event_id,
-        title=body.title,
-        description=body.description,
-        action_type=body.action_type,
-        priority=body.priority,
-        status=ActionStatus.OPEN,
-        owner_user_id=body.owner_user_id,
-        due_date=body.due_date,
-        created_by_user_id=context.user_id,
-        created_by_api_client_id=context.api_client_id,
-        external_reference=body.external_reference,
-        attributes=body.attributes,
-    )
-    db.add(action)
-    db.commit()
-    db.refresh(action)
+    # Everything from here on -- the SafetyAction row itself, its
+    # SafetyActionHistory entry, its AuditLog entry, and the
+    # IdempotencyKey response -- is one transaction: all of it commits
+    # together, once, or (on any exception) none of it persists. See
+    # app.services.safety_action_service.action_mutation_transaction()'s
+    # own docstring.
+    with action_mutation_transaction(db):
+        action = SafetyAction(
+            organization_id=organization_id,
+            site_id=body.site_id,
+            source_event_id=body.source_event_id,
+            title=body.title,
+            description=body.description,
+            action_type=body.action_type,
+            priority=body.priority,
+            status=ActionStatus.OPEN,
+            owner_user_id=body.owner_user_id,
+            due_date=body.due_date,
+            created_by_user_id=context.user_id,
+            created_by_api_client_id=context.api_client_id,
+            external_reference=body.external_reference,
+            attributes=body.attributes,
+        )
+        db.add(action)
+        db.flush()  # populates action.id/created_at/updated_at for the writes below, without committing
 
-    record_history(
-        db,
-        action=action,
-        change_type=ActionHistoryChangeType.CREATED,
-        to_status=action.status.value,
-        changed_by_user_id=context.user_id,
-        changed_by_api_client_id=context.api_client_id,
-        request_id=request_id,
-    )
-    audit_action_event(
-        db,
-        action_name=AuditAction.SAFETY_ACTION_CREATED,
-        action=action,
-        user_id=context.user_id,
-        caller_kind=context.kind,
-        metadata={"title": action.title, "action_type": action.action_type.value, "priority": action.priority.value},
-    )
+        record_history(
+            db,
+            action=action,
+            change_type=ActionHistoryChangeType.CREATED,
+            to_status=action.status.value,
+            changed_by_user_id=context.user_id,
+            changed_by_api_client_id=context.api_client_id,
+            request_id=request_id,
+            commit=False,
+        )
+        audit_action_event(
+            db,
+            action_name=AuditAction.SAFETY_ACTION_CREATED,
+            action=action,
+            user_id=context.user_id,
+            caller_kind=context.kind,
+            metadata={"title": action.title, "action_type": action.action_type.value, "priority": action.priority.value},
+            commit=False,
+        )
 
-    result = _to_read(action)
-    store_response(
-        db,
-        endpoint=_ENDPOINT_CREATE,
-        idempotency_key=idempotency_key,
-        request_hash=request_hash,
-        response_status_code=status.HTTP_201_CREATED,
-        response_body=result.model_dump(mode="json"),
-        organization_id=organization_id,
-        api_client_id=context.api_client_id,
-        user_id=context.user_id,
-    )
+        result = _to_read(action)
+        store_response(
+            db,
+            endpoint=_ENDPOINT_CREATE,
+            idempotency_key=idempotency_key,
+            request_hash=request_hash,
+            response_status_code=status.HTTP_201_CREATED,
+            response_body=result.model_dump(mode="json"),
+            organization_id=organization_id,
+            api_client_id=context.api_client_id,
+            user_id=context.user_id,
+            commit=False,
+        )
     return result
 
 
@@ -364,30 +382,35 @@ def update_action(
 
     changed_fields, owner_changed = apply_update(action, body)
     if not changed_fields:
+        # Nothing to persist -- no transaction to open at all (mirrors
+        # the pre-patch behavior exactly: an empty/no-op PATCH writes
+        # neither a SafetyAction change nor a history/audit entry).
         return _to_read(action)
 
-    db.commit()
-    db.refresh(action)
-
     change_type = ActionHistoryChangeType.ASSIGNED if owner_changed else ActionHistoryChangeType.UPDATED
-    record_history(
-        db,
-        action=action,
-        change_type=change_type,
-        changed_by_user_id=context.user_id,
-        changed_by_api_client_id=context.api_client_id,
-        request_id=request_id,
-        comment=f"Changed fields: {', '.join(sorted(changed_fields))}",
-    )
-    audit_action_event(
-        db,
-        action_name=AuditAction.SAFETY_ACTION_ASSIGNED if owner_changed else AuditAction.SAFETY_ACTION_UPDATED,
-        action=action,
-        user_id=context.user_id,
-        caller_kind=context.kind,
-        metadata={"changed_fields": sorted(changed_fields)},
-    )
-    return _to_read(action)
+    with action_mutation_transaction(db):
+        db.flush()  # pushes apply_update()'s in-place attribute changes without committing
+        record_history(
+            db,
+            action=action,
+            change_type=change_type,
+            changed_by_user_id=context.user_id,
+            changed_by_api_client_id=context.api_client_id,
+            request_id=request_id,
+            comment=f"Changed fields: {', '.join(sorted(changed_fields))}",
+            commit=False,
+        )
+        audit_action_event(
+            db,
+            action_name=AuditAction.SAFETY_ACTION_ASSIGNED if owner_changed else AuditAction.SAFETY_ACTION_UPDATED,
+            action=action,
+            user_id=context.user_id,
+            caller_kind=context.kind,
+            metadata={"changed_fields": sorted(changed_fields)},
+            commit=False,
+        )
+        result = _to_read(action)
+    return result
 
 
 @router.post(
@@ -422,37 +445,40 @@ def update_action_status(
         )
 
     previous_status = action.status
-    action.status = body.status
-    # completed_at/cancelled_at are set here, and only here -- never
-    # accepted as client input (see app/schemas/actions.py's own
-    # docstring and app/models/safety_action.py's "Closure semantics").
-    if body.status == ActionStatus.COMPLETED:
-        action.completed_at = utcnow()
-    elif body.status == ActionStatus.CANCELLED:
-        action.cancelled_at = utcnow()
-    db.commit()
-    db.refresh(action)
+    with action_mutation_transaction(db):
+        action.status = body.status
+        # completed_at/cancelled_at are set here, and only here -- never
+        # accepted as client input (see app/schemas/actions.py's own
+        # docstring and app/models/safety_action.py's "Closure semantics").
+        if body.status == ActionStatus.COMPLETED:
+            action.completed_at = utcnow()
+        elif body.status == ActionStatus.CANCELLED:
+            action.cancelled_at = utcnow()
+        db.flush()  # pushes the status/completed_at/cancelled_at change without committing
 
-    record_history(
-        db,
-        action=action,
-        change_type=ActionHistoryChangeType.STATUS_CHANGED,
-        from_status=previous_status.value,
-        to_status=action.status.value,
-        changed_by_user_id=context.user_id,
-        changed_by_api_client_id=context.api_client_id,
-        request_id=request_id,
-        comment=body.comment,
-    )
-    audit_action_event(
-        db,
-        action_name=AuditAction.SAFETY_ACTION_STATUS_CHANGED,
-        action=action,
-        user_id=context.user_id,
-        caller_kind=context.kind,
-        metadata={"from_status": previous_status.value, "to_status": action.status.value},
-    )
-    return _to_read(action)
+        record_history(
+            db,
+            action=action,
+            change_type=ActionHistoryChangeType.STATUS_CHANGED,
+            from_status=previous_status.value,
+            to_status=action.status.value,
+            changed_by_user_id=context.user_id,
+            changed_by_api_client_id=context.api_client_id,
+            request_id=request_id,
+            comment=body.comment,
+            commit=False,
+        )
+        audit_action_event(
+            db,
+            action_name=AuditAction.SAFETY_ACTION_STATUS_CHANGED,
+            action=action,
+            user_id=context.user_id,
+            caller_kind=context.kind,
+            metadata={"from_status": previous_status.value, "to_status": action.status.value},
+            commit=False,
+        )
+        result = _to_read(action)
+    return result
 
 
 __all__ = ["router"]
