@@ -49,6 +49,16 @@ describe('ActionsPage', () => {
     await waitFor(() => expect(screen.getByText('No actions match your filters')).toBeInTheDocument());
   });
 
+  it('never renders the raw sourceEventId UUID as the Source column\'s visible label', async () => {
+    renderPage();
+    await waitFor(() => expect(screen.getByRole('table')).toBeInTheDocument());
+
+    // ACT-2001's fixture seed has sourceEventId 'EVT-1001' — the id
+    // itself must never appear as a table cell's visible text.
+    expect(screen.queryByText('EVT-1001')).not.toBeInTheDocument();
+    expect(screen.getAllByText('Linked event').length).toBeGreaterThan(0);
+  });
+
   it('does not show a "Create action" control without intervention:manage permission', async () => {
     renderPage(false);
     await waitFor(() => expect(screen.getByRole('table')).toBeInTheDocument());

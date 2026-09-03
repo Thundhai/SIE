@@ -117,7 +117,16 @@ export function ActionsPage() {
       header: 'Due date',
       render: (row) => (row.dueDate ? new Date(row.dueDate).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '—'),
     },
-    { key: 'source', header: 'Source', render: (row) => (row.sourceEventId ? row.sourceEventId : '—') },
+    {
+      key: 'source',
+      header: 'Source',
+      // Human-readable, never the raw source_event_id UUID (SIE Milestone
+      // 18 corrective patch, §2A) — the id itself is still the real
+      // routing target on Action Detail's own "View source event" link
+      // (ActionDetailPage.tsx), not fabricated or hidden, just not shown
+      // here as a primary label.
+      render: (row) => (row.sourceEventId ? 'Linked event' : '—'),
+    },
     {
       key: 'updated',
       header: 'Updated',

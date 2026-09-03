@@ -73,7 +73,18 @@ export function ActionDetailPage() {
 
   return (
     <PageContainer>
-      <Breadcrumb items={[{ label: 'Actions', href: '/actions' }, { label: actionId ?? 'Action' }]} />
+      <Breadcrumb
+        items={[
+          { label: 'Actions', href: '/actions' },
+          // The real action title once it's loaded (already fetched for
+          // this page — no extra API call) — never the raw actionId UUID
+          // (SIE Milestone 18 corrective patch, §2C). "Action detail" is
+          // an honest, neutral fallback while loading, on error, or if
+          // the id doesn't resolve to a real action; the URL itself is
+          // unchanged either way.
+          { label: state.status === 'success' && state.data ? state.data.title : 'Action detail' },
+        ]}
+      />
 
       {repository.isFixtureBacked && (
         <div className="flex items-start gap-2 rounded-md border border-informational/30 bg-informational-surface px-3 py-2.5 text-sm text-informational">
@@ -182,8 +193,13 @@ function ActionDetailContent({
             <div>
               <dt className="text-xs font-medium uppercase tracking-wide text-text-muted">Source event</dt>
               <dd className="mt-0.5 text-sm text-text-primary">
+                {/* "View source event" — never the raw sourceEventId UUID
+                 * as the visible label (SIE Milestone 18 corrective patch,
+                 * §2B). The link itself still navigates by the real id;
+                 * no event title exists in this API response to show
+                 * instead, and one is not fabricated here. */}
                 <Link to={`/events/${action.sourceEventId}`} className="text-teal-700 hover:underline">
-                  {action.sourceEventId}
+                  View source event
                 </Link>
               </dd>
             </div>

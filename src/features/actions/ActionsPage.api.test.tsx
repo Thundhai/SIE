@@ -87,6 +87,10 @@ describe('ActionsPage — real API path', () => {
     expect(screen.getByText(/Review reversing procedure/)).toBeInTheDocument();
     expect(screen.getByText('Jordan Blake')).toBeInTheDocument();
     expect(screen.queryByText(/Showing example action data/)).not.toBeInTheDocument();
+    // The real source_event_id UUID ('evt-1') is never the Source
+    // column's visible label — a human-readable one is shown instead.
+    expect(screen.queryByText('evt-1')).not.toBeInTheDocument();
+    expect(screen.getByText('Linked event')).toBeInTheDocument();
   });
 
   it('shows an empty state for a real, successful query with zero results', async () => {

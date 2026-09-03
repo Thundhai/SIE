@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
@@ -31,6 +31,7 @@ function renderAt(actionId: string, permissions: string[] = []) {
       <MemoryRouter initialEntries={[`/actions/${actionId}`]}>
         <Routes>
           <Route path="/actions/:actionId" element={<ActionDetailPage />} />
+          <Route path="/events/:eventId" element={<div>Event detail page</div>} />
         </Routes>
       </MemoryRouter>
     </AuthProviderStub>,
@@ -163,5 +164,33 @@ describe('ActionDetailPage — real API path', () => {
 
     expect(screen.getByText('You do not have permission to reassign this action.')).toBeInTheDocument();
     expect(screen.queryByLabelText('Owner')).not.toBeInTheDocument();
+  });
+
+  it('never shows the raw source_event_id UUID as the source-event label, and its link still navigates by the real id', async () => {
+    vi.mocked(getAction).mockResolvedValue(DETAIL); // source_event_id: 'evt-1'
+
+    renderAt('action-1');
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Review reversing procedure' })).toBeInTheDocument());
+
+    const link = screen.getByRole('link', { name: 'View source event' });
+    expect(link).toHaveAttribute('href', '/events/evt-1');
+    expect(screen.queryByText('evt-1')).not.toBeInTheDocument();
+
+    await userEvent.click(link);
+    await waitFor(() => expect(screen.getByText('Event detail page')).toBeInTheDocument());
+  });
+
+  it('the breadcrumb never shows the raw actionId UUID as its visible label — the real title once loaded', async () => {
+    vi.mocked(getAction).mockResolvedValue(DETAIL);
+
+    renderAt('action-1');
+    const breadcrumb = screen.getByRole('navigation', { name: 'Breadcrumb' });
+    expect(within(breadcrumb).getByText('Action detail')).toBeInTheDocument();
+    expect(within(breadcrumb).queryByText('action-1')).not.toBeInTheDocument();
+
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Review reversing procedure' })).toBeInTheDocument());
+
+    expect(within(breadcrumb).getByText('Review reversing procedure')).toBeInTheDocument();
+    expect(within(breadcrumb).queryByText('action-1')).not.toBeInTheDocument();
   });
 });

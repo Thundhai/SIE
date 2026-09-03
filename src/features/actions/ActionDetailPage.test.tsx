@@ -11,6 +11,7 @@ function renderAt(actionId: string, permissions: string[] = []) {
       <MemoryRouter initialEntries={[`/actions/${actionId}`]}>
         <Routes>
           <Route path="/actions/:actionId" element={<ActionDetailPage />} />
+          <Route path="/events/:eventId" element={<div>Event detail page</div>} />
         </Routes>
       </MemoryRouter>
     </AuthProviderStub>,
@@ -90,5 +91,46 @@ describe('ActionDetailPage', () => {
     await userEvent.click(within(dialog).getByRole('button', { name: 'Save changes' }));
 
     await waitFor(() => expect(screen.getByRole('heading', { name: 'Updated spill kit inventory check' })).toBeInTheDocument());
+  });
+
+  it('never shows the raw sourceEventId UUID as the source-event label, and its link still navigates by the real id', async () => {
+    // ACT-2001's fixture seed has sourceEventId 'EVT-1001'.
+    renderAt('ACT-2001');
+    await waitFor(() => expect(screen.getByRole('heading', { name: /Review reversing procedure/ })).toBeInTheDocument());
+
+    const link = screen.getByRole('link', { name: 'View source event' });
+    expect(link).toBeInTheDocument();
+    expect(link).toHaveAttribute('href', '/events/EVT-1001');
+    // The raw id is never the visible label anywhere on the page.
+    expect(screen.queryByText('EVT-1001')).not.toBeInTheDocument();
+
+    await userEvent.click(link);
+    await waitFor(() => expect(screen.getByText('Event detail page')).toBeInTheDocument());
+  });
+
+  it('the breadcrumb never shows the raw actionId UUID as its visible label', async () => {
+    renderAt('ACT-2001');
+
+    // While loading, the id is not yet known to be a valid action — the
+    // breadcrumb shows the honest, neutral fallback rather than the id.
+    const breadcrumb = screen.getByRole('navigation', { name: 'Breadcrumb' });
+    expect(within(breadcrumb).getByText('Action detail')).toBeInTheDocument();
+    expect(within(breadcrumb).queryByText('ACT-2001')).not.toBeInTheDocument();
+
+    await waitFor(() => expect(screen.getByRole('heading', { name: /Review reversing procedure/ })).toBeInTheDocument());
+
+    // Once loaded, the breadcrumb shows the real title instead — still
+    // never the raw id.
+    expect(within(breadcrumb).getByText(/Review reversing procedure/)).toBeInTheDocument();
+    expect(within(breadcrumb).queryByText('ACT-2001')).not.toBeInTheDocument();
+  });
+
+  it('the breadcrumb falls back to an honest label, never the raw id, for an action that does not exist', async () => {
+    renderAt('ACT-DOES-NOT-EXIST');
+    await waitFor(() => expect(screen.getByText('Action not found')).toBeInTheDocument());
+
+    const breadcrumb = screen.getByRole('navigation', { name: 'Breadcrumb' });
+    expect(within(breadcrumb).getByText('Action detail')).toBeInTheDocument();
+    expect(within(breadcrumb).queryByText('ACT-DOES-NOT-EXIST')).not.toBeInTheDocument();
   });
 });
