@@ -1,0 +1,128 @@
+/**
+ * SIE design tokens — SIE Frontend Foundation & Core UX Implementation v0.1.
+ *
+ * Centralized, Tailwind v4-native tokens (CSS custom properties inside an
+ * `@theme` block). Tailwind v4 is CSS-first: every `--color-*` / `--radius-*`
+ * / `--shadow-*` variable declared here automatically becomes a matching
+ * utility class (e.g. `--color-teal-600` -> `bg-teal-600`, `text-teal-600`,
+ * `border-teal-600`, ...). Nothing outside this file should hardcode a raw
+ * hex value for brand color, surface, border, text, or status color — that
+ * was the legacy prototype's own pattern (`bg-[#09090B]` scattered through
+ * 14 view files) and is exactly what this milestone exists to stop.
+ *
+ * IMPORTANT LIMITATION (documented per the milestone's own instruction not
+ * to invent Figma-specific measurements): the Figma file
+ * (https://www.figma.com/design/PkWBneIfrMuMUp8Du8aGnD, "SIE UX & Brand
+ * Design System v0.1") could not be read directly in this session — the
+ * Figma MCP connection was unavailable/rate-limited. The values below are
+ * therefore restrained, professional, enterprise-SaaS defaults chosen from
+ * the written brief ("light professional surfaces, white and soft neutral
+ * backgrounds, deep navy, restrained teal, subtle borders, clear
+ * typography, generous whitespace") — NOT measured from the Figma file.
+ * Every value lives in exactly this one place so a future pass that DOES
+ * have Figma access can correct them centrally without touching a single
+ * component.
+ */
+
+@theme {
+  /* ---- Brand: deep navy + restrained teal ------------------------------ */
+  --color-navy-950: #0a1628;
+  --color-navy-900: #0f2038;
+  --color-navy-800: #16304f;
+  --color-navy-700: #1f4066;
+  --color-navy-600: #2c5480;
+  --color-navy-500: #3d6a9c;
+
+  --color-teal-700: #0e6b62;
+  --color-teal-600: #128377;
+  --color-teal-500: #159a8c;
+  --color-teal-100: #e2f4f1;
+  --color-teal-50: #f0faf8;
+
+  /* ---- Neutral surfaces -------------------------------------------------
+   * "background" is the page canvas; "surface" is a card/panel sitting on
+   * it; "surface-muted" is a recessed/secondary panel (e.g. a table's
+   * header row, a filter bar). Kept close in value deliberately — SIE
+   * should read as calm and layered, not high-contrast/dashboard-glossy. */
+  --color-background: #f6f7f9;
+  --color-surface: #ffffff;
+  --color-surface-muted: #f0f2f5;
+  --color-border: #e2e5eb;
+  --color-border-strong: #cbd1db;
+
+  /* ---- Text -------------------------------------------------------------
+   * Near-black, not pure black — softer, more human than #000. */
+  --color-text-primary: #17202b;
+  --color-text-secondary: #47525f;
+  --color-text-muted: #7c8794;
+  --color-text-inverse: #ffffff;
+  --color-text-link: var(--color-teal-700);
+
+  /* ---- Status -------------------------------------------------------------
+   * Every status/priority pairing below has BOTH a foreground and a
+   * matching low-saturation surface color, so a badge never needs to
+   * invent its own tint. Deliberately restrained (no neon, no glow) —
+   * see StatusBadge/PriorityBadge, which also always pair color with a
+   * text label or icon, never color alone (§18 accessibility). */
+  --color-success: #1a7a4c;
+  --color-success-surface: #e7f5ec;
+  --color-warning: #9a5b00;
+  --color-warning-surface: #fbf0dd;
+  --color-critical: #a92318;
+  --color-critical-surface: #fbeae8;
+  --color-informational: #1c5a96;
+  --color-informational-surface: #e9f1fa;
+  --color-neutral-status: #55606c;
+  --color-neutral-status-surface: #eef0f3;
+
+  /* ---- Focus ------------------------------------------------------------ */
+  --color-focus-ring: var(--color-teal-600);
+
+  /* ---- Radius (overrides Tailwind's own default scale) ------------------
+   * Restrained corner treatment — the legacy prototype leaned on
+   * `rounded-xl`/`rounded-2xl` everywhere; SIE keeps corners subtle. */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 10px;
+
+  /* ---- Shadow (overrides Tailwind's own default scale) -------------------
+   * No glow shadows (e.g. `shadow-blue-600/30`) anywhere in new SIE code —
+   * shadows exist only to lift a surface slightly, never to draw attention. */
+  --shadow-xs: 0 1px 2px rgba(15, 23, 42, 0.05);
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06), 0 1px 3px rgba(15, 23, 42, 0.08);
+  --shadow-md: 0 2px 6px rgba(15, 23, 42, 0.08), 0 1px 3px rgba(15, 23, 42, 0.06);
+  --shadow-lg: 0 8px 24px rgba(15, 23, 42, 0.14);
+
+  /* ---- Typography ---------------------------------------------------------
+   * System-UI stack, not a webfont — avoids an external font-loading
+   * dependency (and its own layout-shift/perf/privacy considerations)
+   * until an exact Figma typeface spec is available. Tailwind's own
+   * default type scale (text-xs..text-4xl with paired line-heights) is
+   * kept as-is; it is already a restrained, readable scale and the
+   * legacy prototype's real problem was density/micro-text usage, not
+   * the scale itself. */
+  --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+}
+
+/* ---- Layout widths -------------------------------------------------------
+ * Deliberately OUTSIDE the @theme block: Tailwind v4 only auto-generates
+ * utilities for its own recognized theme namespaces (--color-*, --font-*,
+ * --radius-*, --shadow-*, ...) — plain layout dimensions like these have
+ * no such namespace, so they're consumed via the arbitrary-value
+ * shorthand instead (e.g. `max-w-(--width-content)`), same as any other
+ * CSS custom property. Still centralized in this one file. */
+:root {
+  --width-content: 1280px;
+  --width-sidebar: 244px;
+  --width-sidebar-collapsed: 64px;
+}
+
+/* Spacing rhythm (convention, not a token override): --spacing itself is
+   left at Tailwind's default 0.25rem base so every existing utility
+   (gap-*, p-*, m-*, ...) keeps its familiar meaning. SIE's own spacing
+   convention: page padding uses p-6 (desktop) / p-4 (narrow); related
+   controls use gap-2/gap-3; distinct sections use gap-6/gap-8; card
+   internal padding uses p-4/p-5. Documented here rather than enforced by
+   a new token, per this milestone's "do not create architecture purely
+   for the sake of folders/tokens" guidance. */

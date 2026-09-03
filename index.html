@@ -44,7 +44,17 @@
       })();
     </script>
   </head>
-  <body class="bg-[#09090B] text-slate-100 font-sans antialiased selection:bg-blue-600 selection:text-white">
+  <!--
+    SIE Frontend Foundation & Core UX Implementation v0.1: `<body>` no
+    longer hardcodes the legacy prototype's dark theme (bg-[#09090B]/
+    text-slate-100) — that was leaking a dark background at the document
+    level underneath BOTH apps (visible during overscroll, before
+    hydration, etc.), which fights the new SIE app's light theme and is
+    exactly the "dark futuristic AI-dashboard styling" this milestone
+    removes. The legacy prototype is unaffected: its own root element
+    (src/App.tsx) already sets this same background on itself.
+  -->
+  <body class="antialiased">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
