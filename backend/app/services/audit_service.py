@@ -92,6 +92,17 @@ class AuditAction:
     ONTOLOGY_CONCEPT_APPROVED = "ONTOLOGY_CONCEPT_APPROVED"
     ONTOLOGY_CONCEPT_REJECTED = "ONTOLOGY_CONCEPT_REJECTED"
     ONTOLOGY_CONCEPT_DEPRECATED = "ONTOLOGY_CONCEPT_DEPRECATED"
+    # SIE Milestone 17: Actions & Intervention Foundation v0.1 --
+    # app/services/safety_action_service.py is the one write path for
+    # every one of these (called from app/api/v1/actions.py). Distinct
+    # from the domain-scoped SafetyActionHistory table (§12 of that
+    # milestone) -- this is the platform-wide security/administrative
+    # log every other milestone already writes to; see that service
+    # module's own docstring for why both exist.
+    SAFETY_ACTION_CREATED = "SAFETY_ACTION_CREATED"
+    SAFETY_ACTION_UPDATED = "SAFETY_ACTION_UPDATED"
+    SAFETY_ACTION_ASSIGNED = "SAFETY_ACTION_ASSIGNED"
+    SAFETY_ACTION_STATUS_CHANGED = "SAFETY_ACTION_STATUS_CHANGED"
 
 
 class AuditService:

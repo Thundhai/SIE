@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.api.v1 import (
+    actions,
     api_clients,
     auth,
     data_ingestion,
@@ -30,6 +31,7 @@ api_router.include_router(retrieval.router)
 api_router.include_router(rag.router)
 api_router.include_router(intelligence.router)
 api_router.include_router(events.router)
+api_router.include_router(actions.router)
 api_router.include_router(predictions.router)
 api_router.include_router(model_governance.router)
 api_router.include_router(api_clients.router)

@@ -68,6 +68,20 @@ class Permission(str, Enum):
     PREDICTION_READ = "prediction:read"
     INTERVENTION_READ = "intervention:read"
     INTERVENTION_MANAGE = "intervention:manage"
+    # SIE Milestone 17 — Actions & Intervention Foundation v0.1. The
+    # milestone spec asks for four capabilities (read/write/assign/close);
+    # INTERVENTION_READ/INTERVENTION_MANAGE above already existed,
+    # reserved but unused by any route until this milestone -- reused
+    # here as SAFETY_ACTIONS_READ/SAFETY_ACTIONS_WRITE rather than adding
+    # two more permissions that would mean exactly the same thing (see
+    # ROLE_PERMISSIONS below and app/api/v1/actions.py's own docstring
+    # for the full read/write/assign/close -> permission mapping). Only
+    # the two genuinely new capabilities -- reassigning an action's
+    # owner, and closing one (COMPLETED/CANCELLED) -- get new enum
+    # members, following this file's own "domain:verb" naming
+    # convention.
+    INTERVENTION_ASSIGN = "intervention:assign"
+    INTERVENTION_CLOSE = "intervention:close"
     GOVERNANCE_READ = "governance:read"
     GOVERNANCE_MANAGE = "governance:manage"
     USERS_READ = "users:read"
@@ -100,6 +114,8 @@ ROLE_PERMISSIONS: dict[OrganizationRole, frozenset[Permission]] = {
             Permission.PREDICTION_READ,
             Permission.INTERVENTION_READ,
             Permission.INTERVENTION_MANAGE,
+            Permission.INTERVENTION_ASSIGN,
+            Permission.INTERVENTION_CLOSE,
             Permission.GOVERNANCE_READ,
             Permission.USERS_READ,
         }

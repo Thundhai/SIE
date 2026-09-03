@@ -97,6 +97,16 @@ OPENAPI_TAGS = [
             "See `docs/ENTERPRISE_API.md`."
         ),
     },
+    {
+        "name": "actions",
+        "description": (
+            "Governed safety actions — create, list, read, update, and transition status "
+            "(OPEN/IN_PROGRESS/BLOCKED/COMPLETED/CANCELLED) with an enforced transition matrix, "
+            "tenant-safe event/site/owner provenance, immutable per-action history, and "
+            "idempotent creation (human or machine, `intervention:read`/`:manage`/`:assign`/`:close`). "
+            "See `docs/ACTIONS_DOMAIN.md`."
+        ),
+    },
 ]
 
 _MACHINE_BEARER_DESCRIPTION = (

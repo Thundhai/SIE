@@ -65,7 +65,7 @@ def test_fresh_postgres_database_migrates_through_head_with_no_manual_interventi
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0014"
+            assert version == "0015"
 
             enum_types = {
                 row[0]
@@ -232,7 +232,7 @@ def test_downgrade_then_reupgrade_round_trips_cleanly(monkeypatch):
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0014"
+            assert version == "0015"
     finally:
         engine.dispose()
 
@@ -274,7 +274,7 @@ def test_intelligence_migration_downgrade_then_reupgrade_round_trips_cleanly(mon
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0014"
+            assert version == "0015"
 
             tables = {
                 row[0]
@@ -330,7 +330,7 @@ def test_predictive_modeling_migration_downgrade_then_reupgrade_round_trips_clea
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0014"
+            assert version == "0015"
 
             tables = {
                 row[0]
@@ -401,7 +401,7 @@ def test_governance_migration_downgrade_then_reupgrade_round_trips_cleanly(monke
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0014"
+            assert version == "0015"
 
             tables = {
                 row[0]
@@ -490,7 +490,7 @@ def test_enterprise_api_migration_downgrade_then_reupgrade_round_trips_cleanly(m
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0014"
+            assert version == "0015"
 
             tables = {
                 row[0]
@@ -598,7 +598,7 @@ def test_data_ingestion_migration_downgrade_then_reupgrade_round_trips_cleanly(m
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0014"
+            assert version == "0015"
 
             tables = {
                 row[0]
@@ -741,7 +741,7 @@ def test_real_enterprise_terminology_ontology_calibration_migration_downgrade_th
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0014"
+            assert version == "0015"
 
             tables = {
                 row[0]
@@ -816,7 +816,7 @@ def test_sie_enterprise_ontology_migration_downgrade_then_reupgrade_round_trips_
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0014"
+            assert version == "0015"
 
             tables = {
                 row[0]
@@ -850,5 +850,98 @@ def test_sie_enterprise_ontology_migration_downgrade_then_reupgrade_round_trips_
             # Not org-scoped -- see app/models/ontology_concept.py's own
             # "Deliberately NOT OrganizationScopedMixin" docstring note.
             assert "organization_id" not in concept_columns
+    finally:
+        engine.dispose()
+
+
+def test_actions_and_intervention_migration_downgrade_then_reupgrade_round_trips_cleanly(monkeypatch):
+    """0015's own downgrade/re-upgrade round trip (SIE Milestone 17:
+    Actions & Intervention Foundation v0.1) -- `safety_actions`/
+    `safety_action_history` must disappear on downgrade to 0014 and
+    reappear correctly on re-upgrade, with nothing 0014 or earlier
+    disturbed either way -- including `ontology_concepts`, proving 0015
+    never touches the tables it sits on top of. Also exercises the
+    native-enum-type downgrade path (0015's own docstring note on why
+    that needs an explicit `sa.Enum(...).drop()`, unlike a plain
+    `op.drop_table()` alone)."""
+    engine = _fresh_schema_engine()
+    try:
+        monkeypatch.setattr("app.core.config.settings.DATABASE_URL", PG_TEST_DATABASE_URL)
+        config = _alembic_config()
+
+        command.upgrade(config, "head")
+        command.downgrade(config, "0014")
+
+        with engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version == "0014"
+
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+                ).all()
+            }
+            assert "safety_actions" not in tables
+            assert "safety_action_history" not in tables
+            # Untouched by 0015's downgrade.
+            assert "ontology_concepts" in tables
+            assert "safety_events" in tables
+
+            enum_types = {row[0] for row in conn.execute(text("SELECT typname FROM pg_type WHERE typtype = 'e'")).all()}
+            assert "safety_action_status" not in enum_types
+            assert "safety_action_priority" not in enum_types
+            assert "safety_action_type" not in enum_types
+            # Not dropped/redefined by this migration's downgrade.
+            assert "knowledge_verification_status" in enum_types
+
+        command.upgrade(config, "head")
+
+        with engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version == "0015"
+
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+                ).all()
+            }
+            assert "safety_actions" in tables
+            assert "safety_action_history" in tables
+
+            action_columns = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = 'safety_actions'"
+                    )
+                ).all()
+            }
+            assert "organization_id" in action_columns
+            assert "site_id" in action_columns
+            assert "source_event_id" in action_columns
+            assert "owner_user_id" in action_columns
+            assert "status" in action_columns
+            assert "priority" in action_columns
+            assert "action_type" in action_columns
+            assert "completed_at" in action_columns
+            assert "cancelled_at" in action_columns
+
+            history_columns = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = 'safety_action_history'"
+                    )
+                ).all()
+            }
+            assert "action_id" in history_columns
+            assert "organization_id" in history_columns
+            assert "change_type" in history_columns
+            assert "from_status" in history_columns
+            assert "to_status" in history_columns
     finally:
         engine.dispose()
