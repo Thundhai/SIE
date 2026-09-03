@@ -36,6 +36,49 @@ class Settings(BaseSettings):
     # see the README's "Identity architecture" section.
     DEV_MODE: bool = False
 
+    # Production authentication (OIDC/OAuth2) -- SIE Milestone 20:
+    # Production Authentication & Identity Foundation v0.1. See
+    # app/services/oidc_verifier.py for the token-verification
+    # implementation these settings configure, and
+    # app/api/deps_auth.py::get_authenticated_user_id for how a request is
+    # routed here versus the DEV_MODE-only mechanism above.
+    #
+    # Provider-neutral by design: SIE never imports or hardcodes a
+    # specific identity provider's SDK. Any standards-compliant OIDC
+    # provider (Azure AD, Okta, Auth0, Google, a self-hosted Keycloak,
+    # ...) is supported purely by configuring these values to that
+    # provider's own issuer/audience/JWKS endpoint -- nothing provider-
+    # specific lives in this codebase. OIDC_ISSUER, OIDC_AUDIENCE and
+    # OIDC_JWKS_URL are all required together for a production Bearer
+    # token to be accepted at all -- a deployment with DEV_MODE=False that
+    # is missing any of the three fails closed (see
+    # get_oidc_verifier()'s own docstring), never silently accepts the
+    # token or falls back to DEV_MODE's header mechanism.
+    OIDC_ISSUER: str | None = None
+    OIDC_AUDIENCE: str | None = None
+    # The provider's JWKS endpoint (e.g.
+    # "https://your-tenant.example.com/.well-known/jwks.json"). SIE does
+    # not perform OIDC discovery (`/.well-known/openid-configuration`)
+    # itself -- a deployment supplies its provider's JWKS URL directly,
+    # keeping the configuration surface small and explicit rather than an
+    # extra network round trip at every process start.
+    OIDC_JWKS_URL: str | None = None
+    # Comma-separated list of accepted JWS algorithms, passed directly to
+    # PyJWT's `algorithms=` (see app/services/oidc_verifier.py). PyJWT
+    # itself refuses the "none" algorithm's signature-less tokens
+    # regardless of this list; the default below is a real asymmetric
+    # algorithm, not a placeholder a deployment would need to remember to
+    # change to be secure.
+    OIDC_ALGORITHMS: str = "RS256"
+    # How long a fetched JWKS key set is cached before being re-fetched
+    # (seconds) -- see PyJWT's PyJWKClient `lifespan` kwarg.
+    OIDC_JWKS_CACHE_TTL_SECONDS: int = 3600
+    # Human-facing label recorded on Identity.provider and audit metadata
+    # for every identity this verifier resolves (e.g. "azuread", "okta")
+    # -- display/filtering only, never the actual trust boundary (that's
+    # OIDC_ISSUER) -- see app/models/identity.py.
+    OIDC_PROVIDER_LABEL: str = "oidc"
+
     # Browser/CORS access (see app/main.py, cors_allowed_origins_list
     # below, docs/FRONTEND_ARCHITECTURE.md's "Browser integration"
     # section) -- SIE Enterprise Read API & Browser Integration
@@ -337,6 +380,13 @@ class Settings(BaseSettings):
         cross-origin browser access is allowed at all -- fail closed,
         not "allow everything"."""
         return [origin.strip() for origin in self.CORS_ALLOWED_ORIGINS.split(",") if origin.strip()]
+
+    @property
+    def oidc_algorithms_list(self) -> list[str]:
+        """`OIDC_ALGORITHMS` parsed into a list -- see that field's own
+        docstring. Blank entries are dropped the same way
+        `cors_allowed_origins_list` drops them."""
+        return [alg.strip() for alg in self.OIDC_ALGORITHMS.split(",") if alg.strip()]
 
 
 @lru_cache

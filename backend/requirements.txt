@@ -5,6 +5,13 @@ alembic==1.14.0
 psycopg[binary]==3.2.3
 pydantic==2.10.4
 pydantic-settings==2.7.0
+
+# Production authentication (see app/services/oidc_verifier.py) -- an
+# established JWT/OIDC library, not a hand-rolled cryptographic
+# implementation. The [crypto] extra pulls in `cryptography`, needed for
+# RS256/ES256-family asymmetric signature verification (the algorithms a
+# real OIDC provider's JWKS actually publishes).
+PyJWT[crypto]==2.10.1
 email-validator==2.2.0
 python-dotenv==1.0.1
 python-multipart==0.0.32

@@ -86,9 +86,10 @@ A green build means the repository's own existing automated checks
 (backend migrations + pytest, frontend tests + typecheck + build) passed
 against that exact commit, on GitHub's infrastructure, independent of any
 locally reported result. **It is not a claim that SIE is
-production-ready** — it does not cover production authentication (still
-an open, separately-scoped item — see `docs/FRONTEND_ARCHITECTURE.md`
-§7), does not run against real enterprise data, does not contact any
+production-ready** — while the production authentication boundary
+itself is now built (SIE Milestone 20 — see `docs/PRODUCTION_AUTH.md`),
+this build does not include a real login flow for any specific identity
+provider, does not run against real enterprise data, does not contact any
 external LLM provider, and does not evaluate UX, security, or
 performance beyond what the underlying test suites already assert.
 

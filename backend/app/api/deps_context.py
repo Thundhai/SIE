@@ -60,7 +60,7 @@ from fastapi import Depends, Header, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
-from app.api.deps_auth import get_dev_authenticated_user_id
+from app.api.deps_auth import get_dev_authenticated_user_id, get_production_authenticated_user_id
 from app.api.deps_machine_auth import get_machine_client_context
 from app.services.authorization_service import authorization_service
 from app.services.permissions import Permission
@@ -94,21 +94,31 @@ def get_request_context(
     authorization: str | None = Header(default=None),
     db: Session = Depends(get_db),
 ) -> RequestContext:
-    """Picks whichever of the two existing mechanisms this request
-    actually presented. A `Bearer` credential is checked first — it names
-    a specific, cryptographically verified machine identity, where the
-    dev header only names a human by unverified convention (see
-    `app.api.deps_auth`'s own docstring on why that mechanism is
-    development-only)."""
+    """Picks whichever of the three mechanisms this request actually
+    presented. A `Bearer` credential is checked first, then disambiguated
+    by shape — a machine `<client_id>:<secret>` credential always
+    contains a `:`, which a JWT's base64url segments never do (see
+    `app.api.deps_auth.get_authenticated_user_id`'s own docstring for the
+    identical rule used there):
+
+        Authorization: Bearer <client_id>:<secret>  -> machine (MachineClientContext)
+        Authorization: Bearer <JWT>                  -> human, production (SIE Milestone 20)
+        X-SIE-Dev-User-Id: <uuid>  (DEV_MODE only)    -> human, development
+        none of the above                             -> 401 or 501 (fail closed)
+    """
     if authorization and authorization.lower().startswith("bearer "):
-        machine_context = get_machine_client_context(authorization=authorization, db=db)
-        return RequestContext(
-            kind="machine",
-            api_client_id=machine_context.api_client_id,
-            client_id=machine_context.client_id,
-            machine_organization_id=machine_context.organization_id,
-            scopes=machine_context.scopes,
-        )
+        token = authorization[len("bearer ") :].strip()
+        if ":" in token:
+            machine_context = get_machine_client_context(authorization=authorization, db=db)
+            return RequestContext(
+                kind="machine",
+                api_client_id=machine_context.api_client_id,
+                client_id=machine_context.client_id,
+                machine_organization_id=machine_context.organization_id,
+                scopes=machine_context.scopes,
+            )
+        user_id = get_production_authenticated_user_id(token, db)
+        return RequestContext(kind="human", user_id=user_id)
 
     user_id = get_dev_authenticated_user_id(request=request, db=db)
     return RequestContext(kind="human", user_id=user_id)

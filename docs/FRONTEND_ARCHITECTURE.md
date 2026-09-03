@@ -145,8 +145,14 @@ documented there as non-production.
   every real enforcement is still the backend's own 403 response,
   whether or not a screen also checks this first.
 
-Swapping in a real `ProdAuthProvider` later touches exactly one file
-(`app/App.tsx`, which provider wraps the router) — no screen changes.
+**`ProdAuthProvider.tsx` (SIE Milestone 20) now exists** and implements
+the exact same `AuthContextValue` interface, backed by the real
+production authentication boundary (`docs/PRODUCTION_AUTH.md`). It is
+not wired into `App.tsx` by default — that still requires a concrete
+token source (a real login flow for whichever provider a deployment
+picks), which is explicitly out of this milestone's scope — but swapping
+it in touches exactly one file (`app/App.tsx`, which provider wraps the
+router) and zero screens, exactly as designed.
 
 ## 4. API layer
 
@@ -255,11 +261,21 @@ verified. Gaps 4-5 remain open.
    **Resolved.** `GET /api/v1/auth/me` (`backend/app/api/v1/auth.py`)
    serializes the backend's own real, already-computed permission set —
    see `docs/ENTERPRISE_API.md` §6 and §3 above.
-4. **No production login/session endpoint.** Still open — a real
-   OIDC/OAuth2 `TokenVerifier` implementation remains external
-   infrastructure this milestone did not build; the seam it plugs into
-   already exists and is documented in `docs/ENTERPRISE_API.md` §5's
-   Implemented/seam-only/external-infrastructure table.
+4. ~~**No production login/session endpoint.**~~ **Resolved** by **SIE
+   Milestone 20: Production Authentication & Identity Foundation v0.1**
+   — `backend/app/services/oidc_verifier.py` is a real, provider-neutral
+   OIDC/OAuth2 `TokenVerifier` implementation (JWT signature/issuer/
+   audience/expiry verification via PyJWT + JWKS, no hand-rolled
+   cryptography). `src/auth/authToken.ts` + `src/auth/ProdAuthProvider.tsx`
+   are this frontend's matching seam: the exact same `AuthContextValue`
+   interface `DevAuthProvider` implements, wired to a pluggable
+   `getAccessToken()` function rather than any specific identity
+   provider's SDK — see this file's §3 and `docs/PRODUCTION_AUTH.md`.
+   What remains external infrastructure: a real login/redirect UI for a
+   *specific* provider (Azure AD, Okta, Auth0, Google, ...), which this
+   milestone deliberately does not build (see `docs/PRODUCTION_AUTH.md`'s
+   own "Explicitly not in this milestone" list) — `ProdAuthProvider` is
+   ready to receive that provider's token once one is wired up.
 5. ~~**No Actions backend capability.**~~ **Resolved** by the backend's
    own SIE Milestone 17: Actions & Intervention Foundation v0.1
    (`docs/ACTIONS_DOMAIN.md`), integrated into this frontend by SIE

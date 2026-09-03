@@ -106,6 +106,15 @@ class AuditAction:
     SAFETY_ACTION_UPDATED = "SAFETY_ACTION_UPDATED"
     SAFETY_ACTION_ASSIGNED = "SAFETY_ACTION_ASSIGNED"
     SAFETY_ACTION_STATUS_CHANGED = "SAFETY_ACTION_STATUS_CHANGED"
+    # SIE Milestone 20: Production Authentication & Identity Foundation
+    # v0.1 -- app/api/deps_auth.py::get_production_authenticated_user_id
+    # is the one write path for AUTH_SUCCEEDED/AUTH_REJECTED;
+    # app/services/identity_service.py::IdentityResolverService is the one
+    # write path for IDENTITY_PROVISIONED. Never logs a token, secret, or
+    # password -- see that dependency's own docstring.
+    AUTH_SUCCEEDED = "AUTH_SUCCEEDED"
+    AUTH_REJECTED = "AUTH_REJECTED"
+    IDENTITY_PROVISIONED = "IDENTITY_PROVISIONED"
 
 
 class AuditService:

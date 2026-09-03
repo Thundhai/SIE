@@ -27,8 +27,10 @@ from typing import Protocol
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.base import utcnow
 from app.models.identity import Identity
 from app.models.user import User
+from app.services.audit_service import AuditAction, audit_service
 from app.services.user_service import user_service
 
 
@@ -105,9 +107,13 @@ class IdentityResolverService:
         identity = self._get_identity(db, issuer=claims.issuer, subject=claims.subject)
         if identity is not None and identity.user is not None:
             self._sync_identity_fields(db, identity, claims)
+            identity.last_authenticated_at = utcnow()
+            db.add(identity)
+            db.commit()
             return identity.user
 
         user = self._resolve_or_create_user_by_email(db, claims=claims)
+        is_new_identity = identity is None
 
         if identity is None:
             identity = Identity(
@@ -122,6 +128,26 @@ class IdentityResolverService:
         else:
             identity.user_id = user.id
             self._sync_identity_fields(db, identity, claims)
+        identity.last_authenticated_at = utcnow()
+        db.add(identity)
+        db.flush()  # assign identity.id (a Python-side default) before it's used below
+
+        if is_new_identity:
+            # Auditable per the milestone's "identity provisioning/linking"
+            # requirement -- covers both a brand-new User and an existing
+            # one (matched by email) gaining a new external identity link.
+            # commit=False: this participates in the same transaction as
+            # the User/Identity rows above, so either all three persist or
+            # none do -- see AuditService.log()'s own docstring.
+            audit_service.log(
+                db,
+                action=AuditAction.IDENTITY_PROVISIONED,
+                resource_type="Identity",
+                resource_id=identity.id,
+                user_id=user.id,
+                metadata={"issuer": claims.issuer, "provider": claims.provider},
+                commit=False,
+            )
         db.commit()
         return user
 

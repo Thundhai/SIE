@@ -695,9 +695,17 @@ future work has a stable foundation to build on:
 
 ## Identity architecture
 
+**SIE Milestone 20: Production Authentication & Identity Foundation
+v0.1** implemented real token verification — see `docs/PRODUCTION_AUTH.md`
+(repository root) for the full design. The diagram and "not implemented
+yet" language immediately below describe the architecture as it stood
+before that milestone; kept here for continuity since every layer it
+names is still exactly as described except the top box, which is now real.
+
 ```
 OIDC/OAuth2-compatible identity provider
-    │  (real token verification — not implemented yet)
+    │  (real token verification — app/services/oidc_verifier.py,
+    │   SIE Milestone 20)
     ▼
 Identity Resolver        app/services/identity_service.py
     │  (links an external identity to a SIE User, creating one if needed)
@@ -730,8 +738,11 @@ provider (Auth0, Entra ID, Okta, Keycloak, or anything else that speaks
 the standard) verifying a token and handing SIE a set of claims — this
 codebase defines the *boundary* that verification plugs into
 (`app.services.identity_service.TokenVerifier`, a `Protocol`) without
-depending on any specific provider's SDK. No real implementation of that
-protocol exists yet; connecting one is future work.
+depending on any specific provider's SDK. `app/services/oidc_verifier.py::OIDCTokenVerifier`
+(SIE Milestone 20) is a real, provider-neutral implementation of that
+protocol — see `docs/PRODUCTION_AUTH.md` (repository root). Connecting a
+*specific* provider (its own login/redirect flow) remains future work;
+the verification boundary itself is no longer hypothetical.
 
 ### Authentication vs. authorization vs. tenant isolation
 
@@ -740,10 +751,12 @@ conflated:
 
 * **Authentication** — "who is making this request." Answered by
   verifying a token's signature against an identity provider and
-  extracting its claims (not implemented — see `TokenVerifier` above),
-  then resolving those claims to a `User` via `IdentityResolverService`.
-  In this milestone, the *only* thing that stands in for this is the
-  development-only mechanism described below.
+  extracting its claims (`OIDCTokenVerifier` — see `TokenVerifier` above
+  and `docs/PRODUCTION_AUTH.md`), then resolving those claims to a `User`
+  via `IdentityResolverService`. `DEV_MODE=True` still uses the
+  development-only header mechanism described below instead; production
+  (`DEV_MODE=False`) uses real OIDC/OAuth2 verification, never a
+  fallback to the development mechanism.
 * **Authorization** — "is this (now-known) user allowed to do this
   specific thing." Answered by `AuthorizationService.can()`
   (`app/services/authorization_service.py`): given a user, a `Permission`,

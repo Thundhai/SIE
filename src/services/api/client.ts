@@ -5,8 +5,10 @@
  *
  * Responsibilities:
  *  - base URL (services/api/config.ts)
- *  - dev-identity auth header (auth/devIdentity.ts) — swappable later for
- *    a real session mechanism without changing any caller
+ *  - auth header: a production Bearer token (auth/authToken.ts) when one
+ *    is registered, else the dev-identity header (auth/devIdentity.ts) —
+ *    neither is hardcoded here; a caller never needs to change when the
+ *    app moves from `DevAuthProvider` to a real production provider
  *  - a client-generated request id, sent as `X-Client-Request-Id` and
  *    echoed by the backend's own `RequestIdMiddleware`
  *    (backend/app/core/request_id.py)
@@ -14,6 +16,7 @@
  *  - normalizing every failure (HTTP error status OR network failure)
  *    into one `ApiError` type (services/api/errors.ts)
  */
+import { getAccessToken } from '../../auth/authToken';
 import { getDevIdentityConfig } from '../../auth/devIdentity';
 import { API_BASE_URL } from './config';
 import { ApiError, apiErrorFromResponse } from './errors';
@@ -61,13 +64,21 @@ function buildHeaders(hasBody: boolean, extraHeaders?: Record<string, string>): 
   headers.set('Accept', 'application/json');
   headers.set('X-Client-Request-Id', crypto.randomUUID());
 
-  // Development-only identity header — mirrors backend/app/api/deps_auth.py's
-  // own `DEV_USER_HEADER` convention exactly. Never sent if no dev
-  // identity is configured; there is no other auth mechanism to fall
-  // back to yet (see auth/types.ts's own docstring).
-  const devIdentity = getDevIdentityConfig();
-  if (devIdentity) {
-    headers.set('X-SIE-Dev-User-Id', devIdentity.userId);
+  // Production Bearer token (SIE Milestone 20) takes priority when a
+  // ProdAuthProvider-style component has registered one via
+  // auth/authToken.ts — mirrors backend/app/api/deps_auth.py's own
+  // dev-vs-production dispatch: a request carries at most one identity
+  // mechanism, never both. Falls back to the development-only identity
+  // header (backend's `DEV_USER_HEADER` convention) exactly as before
+  // when no production token is registered.
+  const accessToken = getAccessToken();
+  if (accessToken) {
+    headers.set('Authorization', `Bearer ${accessToken}`);
+  } else {
+    const devIdentity = getDevIdentityConfig();
+    if (devIdentity) {
+      headers.set('X-SIE-Dev-User-Id', devIdentity.userId);
+    }
   }
 
   return headers;

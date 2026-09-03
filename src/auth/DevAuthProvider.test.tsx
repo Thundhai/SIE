@@ -75,6 +75,8 @@ describe('DevAuthProvider', () => {
       role: 'ORG_ADMIN',
       permissions: ['safety_data:read'],
       is_platform_admin: false,
+      auth_mode: 'dev',
+      identity_provider: null,
     });
 
     render(
@@ -99,6 +101,8 @@ describe('DevAuthProvider', () => {
       role: 'ORG_ADMIN',
       permissions: ['safety_data:read', 'organization:read'],
       is_platform_admin: false,
+      auth_mode: 'dev',
+      identity_provider: null,
     });
 
     render(
