@@ -185,7 +185,7 @@ def test_sentence_transformers_provider_in_production_is_not_refused(monkeypatch
     class _StubSentenceTransformerProvider:
         provider_name = "sentence_transformers"
 
-        def __init__(self, *, model_name=None, model_version=None):
+        def __init__(self, *, model_name=None, model_version=None, device=None, cache_folder=None, batch_size=32):
             self.model_name = model_name
             self.model_version = model_version
             self.dimensions = 384

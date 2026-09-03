@@ -1464,7 +1464,20 @@ Architecture](#semantic-knowledge-architecture) and
 
 This was the Semantic Knowledge Engine v0.1 milestone: it proves SIE can
 retrieve semantically relevant knowledge chunks reliably, with tenant
-isolation and full provenance. `RetrievalService` returns evidence — it
+isolation and full provenance.
+
+**SIE Milestone 21: Real Semantic Embedding & Retrieval
+Productionization v0.1** added a real, production-capable
+`EmbeddingProvider` (`SentenceTransformerEmbeddingProvider`, wrapping a
+genuine `sentence-transformers` model) alongside the deterministic
+`HashingEmbeddingProvider` used below and throughout this milestone's own
+evaluation — see `docs/SEMANTIC_EMBEDDING.md` for the full architecture,
+production deployment guide, and evaluation results. Nothing in this
+section's own description of `RetrievalService`'s behavior changed: the
+real provider sits behind the exact same `EmbeddingProvider` interface,
+selected purely by configuration (`EMBEDDING_PROVIDER`).
+
+`RetrievalService` returns evidence — it
 still does not call an LLM, construct a prompt, or generate an answer;
 that is a separate layer built directly on top of it, unmodified, in the
 [Evidence-Grounded RAG](#evidence-grounded-rag) milestone documented
@@ -1508,11 +1521,20 @@ would make the test suite unreliable or require downloading large model
 weights, create a deterministic test provider and a production-provider
 abstraction."* `SentenceTransformerEmbeddingProvider` is that production
 extension point — implemented, lazy-importing its optional dependency so
-this module stays importable without it — but it was **not exercised
-against a real downloaded model in this environment**, and is not the
-default. No commercial AI provider is hardcoded into the domain layer
-anywhere; `EMBEDDING_PROVIDER` (`app/core/config.py`) is a plain setting
-resolved once, at the edge, by `get_embedding_provider()`.
+this module stays importable without it — and is not the default.
+
+**Update (SIE Milestone 21: Real Semantic Embedding & Retrieval
+Productionization v0.1):** `SentenceTransformerEmbeddingProvider` is now
+a real, tested, production implementation — see
+`docs/SEMANTIC_EMBEDDING.md` for the full architecture, the recommended
+production model (`sentence-transformers/all-MiniLM-L6-v2`), and exactly
+what real-model validation was (and was not) performed in this
+sandboxed, network-restricted environment. `HashingEmbeddingProvider`
+remains the default and the only provider CI itself exercises — the
+paragraph above still accurately describes it. No commercial AI provider
+is hardcoded into the domain layer anywhere; `EMBEDDING_PROVIDER`
+(`app/core/config.py`) is a plain setting resolved once, at the edge, by
+`get_embedding_provider()`.
 
 ### Embedding model/version tracking — why re-embedding never overwrites
 
@@ -1755,27 +1777,32 @@ purpose is to catch regressions on this one small fixture, nothing more.
 | Provider | Recall@1 | Recall@3 | Recall@5 |
 | --- | --- | --- | --- |
 | `HashingEmbeddingProvider` | 0.83 | 1.00 | 1.00 |
-| `SentenceTransformerEmbeddingProvider` (`all-MiniLM-L6-v2`) | pending | pending | pending |
+| `SentenceTransformerEmbeddingProvider` (`all-MiniLM-L6-v2`, recommended production model) | not measured in this environment | not measured in this environment | not measured in this environment |
 
 The `HashingEmbeddingProvider` row is real and honestly-calculated (10 of
 12 queries found their expected topic at rank 1; all 12 found it within
-the top 3). **The `SentenceTransformerEmbeddingProvider` row is
-deliberately left as "pending", not fabricated, estimated, or
-substituted with a different model:** this execution environment's
-egress policy blocks `huggingface.co` (confirmed via the outbound proxy
-returning a policy-denial 403 to that host), so no sentence-transformers
-model weights can be downloaded here, and per explicit instruction no
-alternative model was substituted in its place. The code path itself
-(`SentenceTransformerEmbeddingProvider`, selected via
-`EMBEDDING_PROVIDER=sentence_transformers`) is implemented and
-code-reviewed but has never been executed against real model weights in
-this environment — running it and reporting real numbers is future work
-for an environment with that egress path open, not a documented result
-of this milestone. Either way, this fixture's numbers — real or
-pending — say nothing about how any embedding model would perform on
-real organizational content; they say only whether this milestone's
-retrieval pipeline, end to end, correctly surfaces topically relevant
-evidence on this one small fixture.
+the top 3). This execution environment's egress policy blocks
+`huggingface.co` (confirmed via the outbound proxy returning a
+policy-denial 403 to that host), so the recommended production model's
+weights could never be downloaded here — that row remains genuinely
+unmeasured, not fabricated or estimated.
+
+**Update (SIE Milestone 21: Real Semantic Embedding & Retrieval
+Productionization v0.1)** did produce a real, honest hashing-vs-real
+comparison anyway, using a small model *trained from scratch, entirely
+offline* (not `all-MiniLM-L6-v2`, and not a substitute claimed to
+represent it) — see `docs/SEMANTIC_EMBEDDING.md`'s "Evaluation" section
+and `docs/SEMANTIC_EVALUATION_REPORT.md` for the full results,
+methodology, and an explicit, harder (keyword-disjoint) paraphrase query
+set added specifically to avoid rewarding lexical-overlap shortcuts.
+Running `SentenceTransformerEmbeddingProvider` against the actual
+recommended pretrained model and reporting real numbers for *that*
+specific checkpoint remains future work for an environment with that
+egress path open — this fixture's numbers, from any provider, say
+nothing about how any embedding model would perform on real
+organizational content; they say only whether the retrieval pipeline,
+end to end, correctly surfaces topically relevant evidence on this one
+small fixture.
 
 ### Production architecture consideration — synchronous today, a queue later
 
@@ -1886,12 +1913,16 @@ real provider — any HTTP service exposing an OpenAI-compatible
 `/chat/completions` endpoint (this covers OpenAI itself, and self-hosted/
 open-source inference servers that speak the same schema). It is
 implemented and code-reviewed but **was not exercised against a real
-model/API in this environment** — the identical honesty principle
-`SentenceTransformerEmbeddingProvider` already follows in this codebase
-(see the corrective migration milestone): no reachable LLM API endpoint
-in this session's sandboxed egress policy, and per explicit instruction,
-no alternative/substitute model was exercised in its place either. Do
-not present it as validated. Selected via `LLM_PROVIDER=openai_compatible`,
+model/API in this environment**: no reachable LLM API endpoint in this
+session's sandboxed egress policy, and per explicit instruction, no
+alternative/substitute model was exercised in its place either. Do
+not present it as validated. (`SentenceTransformerEmbeddingProvider`
+was in this identical position until SIE Milestone 21 — see
+`docs/SEMANTIC_EMBEDDING.md` for how that milestone worked around the
+same egress restriction to still produce a genuine, honestly-labeled
+real-model result; the same technique could apply here in a future
+milestone, but has not been attempted for the LLM layer.) Selected via
+`LLM_PROVIDER=openai_compatible`,
 configured entirely through `app/core/config.py` settings
 (`LLM_MODEL_NAME`, `LLM_API_BASE_URL`, `LLM_API_KEY`, `LLM_TEMPERATURE`,
 `LLM_MAX_OUTPUT_TOKENS`, `LLM_TIMEOUT_SECONDS`) — the API key is read
@@ -4248,16 +4279,22 @@ validation against real customer data.
   application-enforced, not database-enforced. A direct SQL write that
   bypasses the service layer could violate it; this is the one place in
   the knowledge foundation with that gap.
-* **`HashingEmbeddingProvider` is not a trained semantic model.** It is a
-  genuine, deterministic, dependency-free feature-hashing embedding — see
-  [Semantic Knowledge Architecture](#semantic-knowledge-architecture) —
-  chosen specifically so this milestone's tests and evaluation harness
-  never need network access or a downloaded model. `SentenceTransformerEmbeddingProvider`
-  is implemented as the real-model extension point but was not exercised
-  against an actual downloaded model in this environment. Before any
-  production use, a real embedding model should be evaluated and wired in
-  through that same provider abstraction — no `RetrievalService` or
-  `EmbeddingService` call site would need to change. Because
+* **`HashingEmbeddingProvider` is not a trained semantic model** (it
+  remains the default, and the only provider CI itself exercises). It is
+  a genuine, deterministic, dependency-free feature-hashing embedding —
+  see [Semantic Knowledge Architecture](#semantic-knowledge-architecture)
+  — chosen specifically so tests and CI never need network access or a
+  downloaded model. **SIE Milestone 21: Real Semantic Embedding &
+  Retrieval Productionization v0.1** made `SentenceTransformerEmbeddingProvider`
+  a real, tested production implementation — see
+  `docs/SEMANTIC_EMBEDDING.md` for the recommended production model
+  (`sentence-transformers/all-MiniLM-L6-v2`) and exactly what was (and
+  was not) validated in this environment, which still cannot download
+  that specific pretrained checkpoint. Before production use with a real
+  pretrained model, that model's own semantic quality should be
+  independently evaluated in an environment with network access — no
+  `RetrievalService` or `EmbeddingService` call site would need to
+  change to do so. Because
   `EMBEDDING_PROVIDER` defaults to `"hashing"` (unlike `DEV_MODE`, whose
   unsafe value is *not* the default), `build_embedding_provider()`
   (`app/embeddings/provider.py`) — and therefore `get_embedding_provider()`,
@@ -4294,13 +4331,17 @@ validation against real customer data.
   — the gaps below are specific to that layer.)
 * **The real LLM provider (`OpenAICompatibleLLMProvider`) has not been
   exercised against a real model/API in this environment.** No reachable
-  LLM API endpoint in this session's sandboxed egress policy — the
-  identical situation `SentenceTransformerEmbeddingProvider` is already
-  in (see the corrective migration milestone). It is implemented and
-  code-reviewed, selectable via `LLM_PROVIDER=openai_compatible`, but not
-  validated end to end against a live provider; do not present it as
-  validated. `FakeLLMProvider` remains the only provider actually
-  exercised by this codebase's tests and evaluation harness.
+  LLM API endpoint in this session's sandboxed egress policy. It is
+  implemented and code-reviewed, selectable via
+  `LLM_PROVIDER=openai_compatible`, but not validated end to end against
+  a live provider; do not present it as validated. `FakeLLMProvider`
+  remains the only LLM provider actually exercised by this codebase's
+  tests and evaluation harness. (`SentenceTransformerEmbeddingProvider`
+  was in this same position until SIE Milestone 21 — see
+  `docs/SEMANTIC_EMBEDDING.md` for how a locally-trained-from-scratch
+  model was used to still produce a genuine, honestly-labeled real-model
+  validation despite the identical egress restriction; that technique
+  has not been attempted for the LLM layer.)
 * **Source conflict detection is a narrow, keyword-based heuristic, not
   a general contradiction detector.** See [Evidence-Grounded RAG](#evidence-grounded-rag)'s
   "Source conflicts" section — it only catches a requirement-type

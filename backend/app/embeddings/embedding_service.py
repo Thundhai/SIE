@@ -97,12 +97,30 @@ class EmbeddingOutcome:
 
 
 @dataclass
-class BatchEmbeddingReport:
-    """Summary of one `generate_embeddings_for_version` call — see that
-    function's own docstring for the idempotency/failure-reporting
-    contract this exists to satisfy."""
+class _PendingEmbedding:
+    """One chunk that has passed every eligibility check (not empty, not
+    INSUFFICIENT-quality without override, not already embedded under
+    this exact model identity) and is ready to actually be sent to the
+    provider. Internal to this module — never returned to a caller."""
 
-    document_version_id: uuid.UUID
+    chunk: KnowledgeChunk
+    content: str
+    content_hash: str
+    existing: KnowledgeChunkEmbedding | None
+
+
+@dataclass
+class BatchEmbeddingReport:
+    """Summary of one `generate_embeddings_for_version`/`embed_chunks_batch`
+    call — see those functions' own docstrings for the idempotency/
+    failure-reporting contract this exists to satisfy.
+
+    `document_version_id` is `None` for a batch not scoped to a single
+    version (e.g. a re-embedding run spanning a document's chunks
+    directly — see `app/embeddings/reembedding_service.py`); populated
+    when the caller has one (e.g. `generate_embeddings_for_version`)."""
+
+    document_version_id: uuid.UUID | None = None
     outcomes: list[EmbeddingOutcome] = field(default_factory=list)
 
     @property
@@ -156,8 +174,119 @@ class EmbeddingService:
         a mismatch is reported as `SKIPPED_STALE_CONTENT_HASH` rather
         than silently overwritten — see the milestone's own "do not
         overwrite historical embeddings blindly" instruction.
+
+        A thin, single-chunk wrapper around `embed_chunks_batch` (SIE
+        Milestone 21) — same eligibility rules, same failure reporting,
+        just for exactly one chunk. Kept as its own method because a lot
+        of call sites (query embedding aside — that's a different thing
+        entirely, see `RetrievalService`) genuinely only have one chunk
+        in hand.
         """
         provider = provider or get_embedding_provider()
+        self._check_dimensions(provider)
+        outcome, pending = self._resolve_eligibility(db, chunk=chunk, provider=provider, force=force)
+        if outcome is not None:
+            return outcome
+        return self._embed_pending(db, provider=provider, pending=[pending])[0]
+
+    def embed_chunks_batch(
+        self,
+        db: Session,
+        *,
+        chunks: list[KnowledgeChunk],
+        provider: EmbeddingProvider | None = None,
+        force: bool = False,
+        document_version_id: uuid.UUID | None = None,
+    ) -> BatchEmbeddingReport:
+        """Embed a list of chunks — SIE Milestone 21's real batching entry
+        point. The model/provider is resolved exactly **once** (never
+        loaded per chunk — item 6), and every chunk that actually needs
+        embedding is sent to the provider in **one** `embed_texts()` call
+        (never one `embed_text()` call per chunk — item 7), letting a real
+        model batch its own forward pass instead of running one text at a
+        time. Chunks that don't need embedding at all (already embedded
+        under this exact model identity, empty content, INSUFFICIENT
+        quality without override) never reach the provider — resolved
+        first, cheaply, from the database alone.
+
+        **Batch-call failure isolation.** If the single batched
+        `embed_texts()` call itself raises (a real provider failure, or a
+        test double that fails on one specific input), this does not fail
+        every chunk in the batch: the batch is retried one chunk at a time
+        so a single bad chunk's failure is reported against *that* chunk
+        alone (`FAILED`), while every chunk that succeeds on its own is
+        still `CREATED` — the same resilience `generate_embeddings_for_version`
+        has always offered, now sitting behind real batching for the
+        common (everything-succeeds) case instead of always embedding one
+        chunk at a time.
+
+        A dimension mismatch (`EmbeddingDimensionMismatchError`) is
+        different: it is a deployment-level configuration error affecting
+        every chunk equally, not a per-chunk data problem, so it is
+        deliberately allowed to propagate and abort the whole call
+        immediately rather than being reported as N separate failures.
+        """
+        provider = provider or get_embedding_provider()
+        self._check_dimensions(provider)
+
+        report = BatchEmbeddingReport(document_version_id=document_version_id)
+        pending: list[_PendingEmbedding] = []
+        for chunk in chunks:
+            outcome, item = self._resolve_eligibility(db, chunk=chunk, provider=provider, force=force)
+            if outcome is not None:
+                report.outcomes.append(outcome)
+            else:
+                assert item is not None  # exactly one of (outcome, item) is set
+                pending.append(item)
+
+        report.outcomes.extend(self._embed_pending(db, provider=provider, pending=pending))
+
+        logger.info(
+            "embedding_batch_complete",
+            extra={
+                "document_version_id": str(document_version_id) if document_version_id else None,
+                "provider": provider.provider_name,
+                "model_name": provider.model_name,
+                "model_version": provider.model_version,
+                "total": report.total,
+                "chunks_created": report.created,
+                "chunks_skipped": report.skipped,
+                "chunks_failed": report.failed,
+            },
+        )
+        return report
+
+    def generate_embeddings_for_version(
+        self,
+        db: Session,
+        *,
+        version_id: uuid.UUID,
+        provider: EmbeddingProvider | None = None,
+    ) -> BatchEmbeddingReport:
+        """Embed every chunk belonging to one `KnowledgeDocumentVersion`.
+
+        Idempotent and safe to re-run: chunks already embedded under this
+        provider/model identity are skipped, never duplicated. Thin
+        wrapper around `embed_chunks_batch` — see that method's own
+        docstring for the real-batching and failure-isolation contract
+        this inherits unchanged; this method's own public contract
+        (arguments, return shape, idempotency, per-chunk failure
+        reporting) is untouched from before SIE Milestone 21.
+        """
+        provider = provider or get_embedding_provider()
+        self._check_dimensions(provider)
+
+        chunks = db.execute(
+            select(KnowledgeChunk)
+            .where(KnowledgeChunk.document_version_id == version_id)
+            .order_by(KnowledgeChunk.chunk_index)
+        ).scalars().all()
+
+        return self.embed_chunks_batch(
+            db, chunks=list(chunks), provider=provider, document_version_id=version_id
+        )
+
+    def _check_dimensions(self, provider: EmbeddingProvider) -> None:
         if provider.dimensions != settings.EMBEDDING_DIMENSIONS:
             raise EmbeddingDimensionMismatchError(
                 f"EmbeddingProvider {provider.provider_name!r} (model "
@@ -170,12 +299,29 @@ class EmbeddingService:
                 f"choose a provider/model whose dimension already matches."
             )
 
+    def _resolve_eligibility(
+        self,
+        db: Session,
+        *,
+        chunk: KnowledgeChunk,
+        provider: EmbeddingProvider,
+        force: bool,
+    ) -> tuple[EmbeddingOutcome | None, _PendingEmbedding | None]:
+        """Every check `embed_chunk` used to make before ever calling a
+        provider, extracted so `embed_chunks_batch` can run it once per
+        chunk *before* deciding what to actually send to the provider in
+        one call. Returns exactly one of `(outcome, None)` — nothing more
+        to do for this chunk — or `(None, pending)` — this chunk is
+        eligible and ready to embed."""
         content = chunk.content or ""
         if not content.strip():
-            return EmbeddingOutcome(
-                chunk_id=chunk.id,
-                status=EmbeddingOutcomeStatus.SKIPPED_EMPTY_CONTENT,
-                reason="Chunk has no usable text content to embed.",
+            return (
+                EmbeddingOutcome(
+                    chunk_id=chunk.id,
+                    status=EmbeddingOutcomeStatus.SKIPPED_EMPTY_CONTENT,
+                    reason="Chunk has no usable text content to embed.",
+                ),
+                None,
             )
 
         if (
@@ -183,14 +329,17 @@ class EmbeddingService:
             and not force
             and not settings.EMBED_INSUFFICIENT_QUALITY_CHUNKS
         ):
-            return EmbeddingOutcome(
-                chunk_id=chunk.id,
-                status=EmbeddingOutcomeStatus.SKIPPED_INSUFFICIENT_QUALITY,
-                reason=(
-                    "Chunk quality_status is INSUFFICIENT; set "
-                    "EMBED_INSUFFICIENT_QUALITY_CHUNKS=true or pass force=True "
-                    "to embed it anyway."
+            return (
+                EmbeddingOutcome(
+                    chunk_id=chunk.id,
+                    status=EmbeddingOutcomeStatus.SKIPPED_INSUFFICIENT_QUALITY,
+                    reason=(
+                        "Chunk quality_status is INSUFFICIENT; set "
+                        "EMBED_INSUFFICIENT_QUALITY_CHUNKS=true or pass force=True "
+                        "to embed it anyway."
+                    ),
                 ),
+                None,
             )
 
         content_hash = sha256_hex(content.encode("utf-8"))
@@ -206,123 +355,142 @@ class EmbeddingService:
 
         if existing is not None:
             if existing.content_hash == content_hash and not force:
-                return EmbeddingOutcome(
-                    chunk_id=chunk.id,
-                    status=EmbeddingOutcomeStatus.SKIPPED_EXISTING,
-                    embedding=existing,
-                    reason="Already embedded under this exact model identity.",
+                return (
+                    EmbeddingOutcome(
+                        chunk_id=chunk.id,
+                        status=EmbeddingOutcomeStatus.SKIPPED_EXISTING,
+                        embedding=existing,
+                        reason="Already embedded under this exact model identity.",
+                    ),
+                    None,
                 )
             if existing.content_hash != content_hash and not force:
-                return EmbeddingOutcome(
-                    chunk_id=chunk.id,
-                    status=EmbeddingOutcomeStatus.SKIPPED_STALE_CONTENT_HASH,
-                    embedding=existing,
-                    reason=(
-                        "An embedding already exists for this chunk/model, but its "
-                        "content_hash no longer matches the chunk's current content "
-                        "(chunks are expected to be immutable — this should not "
-                        "normally happen). Pass force=True to re-embed."
+                return (
+                    EmbeddingOutcome(
+                        chunk_id=chunk.id,
+                        status=EmbeddingOutcomeStatus.SKIPPED_STALE_CONTENT_HASH,
+                        embedding=existing,
+                        reason=(
+                            "An embedding already exists for this chunk/model, but its "
+                            "content_hash no longer matches the chunk's current content "
+                            "(chunks are expected to be immutable — this should not "
+                            "normally happen). Pass force=True to re-embed."
+                        ),
                     ),
+                    None,
                 )
 
-        try:
-            vector = provider.embed_text(content)
-        except Exception as exc:  # noqa: BLE001 - reported, not swallowed
-            # Safe structured logging (milestone item 26): chunk id and
-            # error type/message only — never the chunk's own content.
-            logger.warning(
-                "embedding_failed",
-                extra={
-                    "chunk_id": str(chunk.id),
-                    "provider": provider.provider_name,
-                    "model_name": provider.model_name,
-                    "model_version": provider.model_version,
-                    "error": f"{type(exc).__name__}: {exc}",
-                },
-            )
-            return EmbeddingOutcome(
-                chunk_id=chunk.id,
-                status=EmbeddingOutcomeStatus.FAILED,
-                reason=f"{type(exc).__name__}: {exc}",
-            )
-
-        if existing is not None and force:
-            existing.provider = provider.provider_name
-            existing.model_name = provider.model_name
-            existing.model_version = provider.model_version
-            existing.dimensions = provider.dimensions
-            existing.content_hash = content_hash
-            existing.embedding = vector
-            existing.organization_id = chunk.organization_id
-            db.commit()
-            db.refresh(existing)
-            return EmbeddingOutcome(
-                chunk_id=chunk.id, status=EmbeddingOutcomeStatus.CREATED, embedding=existing
-            )
-
-        record = KnowledgeChunkEmbedding(
-            knowledge_chunk_id=chunk.id,
-            organization_id=chunk.organization_id,
-            provider=provider.provider_name,
-            model_name=provider.model_name,
-            model_version=provider.model_version,
-            dimensions=provider.dimensions,
-            content_hash=content_hash,
-            embedding=vector,
-        )
-        db.add(record)
-        db.commit()
-        db.refresh(record)
-        return EmbeddingOutcome(
-            chunk_id=chunk.id, status=EmbeddingOutcomeStatus.CREATED, embedding=record
+        return None, _PendingEmbedding(
+            chunk=chunk, content=content, content_hash=content_hash, existing=existing
         )
 
-    def generate_embeddings_for_version(
+    def _embed_pending(
         self,
         db: Session,
         *,
-        version_id: uuid.UUID,
-        provider: EmbeddingProvider | None = None,
-    ) -> BatchEmbeddingReport:
-        """Embed every chunk belonging to one `KnowledgeDocumentVersion`.
+        provider: EmbeddingProvider,
+        pending: list[_PendingEmbedding],
+    ) -> list[EmbeddingOutcome]:
+        """Send every pending chunk to `provider.embed_texts()` in one
+        real batch call. On failure, isolate: retry one chunk at a time
+        so a single bad input is reported against just that chunk rather
+        than failing chunks that would have succeeded — see
+        `embed_chunks_batch`'s own docstring."""
+        if not pending:
+            return []
 
-        Idempotent and safe to re-run: chunks already embedded under this
-        provider/model identity are skipped (see `embed_chunk`), never
-        duplicated. Failures on individual chunks are collected into the
-        report rather than aborting the whole batch — one bad chunk does
-        not block embedding the rest of the version. A dimension
-        mismatch (`EmbeddingDimensionMismatchError`) is the one exception
-        to that: it is a deployment-level configuration error affecting
-        every chunk equally, not a per-chunk data problem, so it is
-        deliberately allowed to propagate and abort the whole batch
-        immediately rather than being reported as N separate failures.
-        """
-        provider = provider or get_embedding_provider()
+        contents = [item.content for item in pending]
+        try:
+            vectors = provider.embed_texts(contents)
+            if len(vectors) != len(pending):
+                raise ValueError(
+                    f"Provider {provider.provider_name!r} returned {len(vectors)} "
+                    f"vector(s) for {len(pending)} input text(s)."
+                )
+            return self._write_rows(db, provider=provider, pending=pending, vectors=vectors)
+        except Exception as exc:  # noqa: BLE001 - isolated/reported below, never swallowed
+            if len(pending) == 1:
+                # Safe structured logging (never the chunk's own content):
+                # chunk id and error type/message only.
+                logger.warning(
+                    "embedding_failed",
+                    extra={
+                        "chunk_id": str(pending[0].chunk.id),
+                        "provider": provider.provider_name,
+                        "model_name": provider.model_name,
+                        "model_version": provider.model_version,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    },
+                )
+                return [
+                    EmbeddingOutcome(
+                        chunk_id=pending[0].chunk.id,
+                        status=EmbeddingOutcomeStatus.FAILED,
+                        reason=f"{type(exc).__name__}: {exc}",
+                    )
+                ]
 
-        chunks = db.execute(
-            select(KnowledgeChunk)
-            .where(KnowledgeChunk.document_version_id == version_id)
-            .order_by(KnowledgeChunk.chunk_index)
-        ).scalars().all()
+            logger.warning(
+                "embedding_batch_call_failed_isolating_per_chunk",
+                extra={
+                    "provider": provider.provider_name,
+                    "model_name": provider.model_name,
+                    "model_version": provider.model_version,
+                    "batch_size": len(pending),
+                    "error": f"{type(exc).__name__}: {exc}",
+                },
+            )
+            outcomes: list[EmbeddingOutcome] = []
+            for item in pending:
+                outcomes.extend(self._embed_pending(db, provider=provider, pending=[item]))
+            return outcomes
 
-        report = BatchEmbeddingReport(document_version_id=version_id)
-        for chunk in chunks:
-            report.outcomes.append(self.embed_chunk(db, chunk=chunk, provider=provider))
+    def _write_rows(
+        self,
+        db: Session,
+        *,
+        provider: EmbeddingProvider,
+        pending: list[_PendingEmbedding],
+        vectors: list[list[float]],
+    ) -> list[EmbeddingOutcome]:
+        """Create-or-update one `KnowledgeChunkEmbedding` row per
+        (pending, vector) pair, committing once for the whole group
+        (real batching all the way to the database write, not just the
+        provider call) rather than once per row."""
+        touched: list[tuple[_PendingEmbedding, KnowledgeChunkEmbedding]] = []
+        for item, vector in zip(pending, vectors):
+            if item.existing is not None:
+                row = item.existing
+                row.provider = provider.provider_name
+                row.model_name = provider.model_name
+                row.model_version = provider.model_version
+                row.dimensions = provider.dimensions
+                row.content_hash = item.content_hash
+                row.embedding = vector
+                row.organization_id = item.chunk.organization_id
+            else:
+                row = KnowledgeChunkEmbedding(
+                    knowledge_chunk_id=item.chunk.id,
+                    organization_id=item.chunk.organization_id,
+                    provider=provider.provider_name,
+                    model_name=provider.model_name,
+                    model_version=provider.model_version,
+                    dimensions=provider.dimensions,
+                    content_hash=item.content_hash,
+                    embedding=vector,
+                )
+            db.add(row)
+            touched.append((item, row))
 
-        logger.info(
-            "embedding_batch_complete",
-            extra={
-                "document_version_id": str(version_id),
-                "provider": provider.provider_name,
-                "model_name": provider.model_name,
-                "model_version": provider.model_version,
-                "total": report.total,
-                "chunks_created": report.created,
-                "chunks_skipped": report.skipped,
-                "chunks_failed": report.failed,
-            },
-        )
-        return report
+        db.commit()
+
+        outcomes = []
+        for item, row in touched:
+            db.refresh(row)
+            outcomes.append(
+                EmbeddingOutcome(chunk_id=item.chunk.id, status=EmbeddingOutcomeStatus.CREATED, embedding=row)
+            )
+        return outcomes
 
 
 embedding_service = EmbeddingService()

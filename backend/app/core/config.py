@@ -150,6 +150,65 @@ class Settings(BaseSettings):
     # per-call-site booleans.
     EMBED_INSUFFICIENT_QUALITY_CHUNKS: bool = False
 
+    # Real embedding provider runtime configuration — SIE Milestone 21:
+    # Real Semantic Embedding & Retrieval Productionization v0.1. Only
+    # consulted when EMBEDDING_PROVIDER="sentence_transformers"
+    # (app/embeddings/provider.py::SentenceTransformerEmbeddingProvider);
+    # ignored by HashingEmbeddingProvider. All server-side configuration
+    # only — there is no API parameter anywhere that lets a request
+    # choose a model, a device, or a filesystem path (see that module's
+    # own docstring, "Security").
+    #
+    # EMBEDDING_MODEL_NAME (above) doubles as this provider's
+    # `model_name_or_path`: either a real model id resolvable via the
+    # `sentence-transformers`/`huggingface_hub` download-and-cache
+    # mechanism (e.g. "sentence-transformers/all-MiniLM-L6-v2" — see
+    # docs/SEMANTIC_EMBEDDING.md's "Recommended production model"
+    # section), or a local filesystem directory already containing a
+    # saved sentence-transformers model (e.g. a pre-baked image layer, or
+    # EMBEDDING_MODEL_CACHE_DIR populated ahead of time) — both are
+    # standard, documented `SentenceTransformer(...)` constructor
+    # behavior, not a special case added here.
+    #
+    # None (the default) lets sentence-transformers/torch pick
+    # automatically (GPU if available, else CPU). Set explicitly
+    # ("cpu"/"cuda"/"cuda:0"/"mps") to pin it — e.g. to guarantee a CPU-
+    # only deployment never silently tries to allocate a GPU it doesn't
+    # have, or the reverse.
+    EMBEDDING_DEVICE: str | None = None
+    # Where downloaded model weights are cached on disk, so a real
+    # deployment's *second* process start (and every subsequent one)
+    # reuses the already-downloaded model rather than re-fetching it —
+    # see docs/SEMANTIC_EMBEDDING.md's "Model loading & lifecycle"
+    # section. None lets sentence-transformers use its own default cache
+    # directory (`~/.cache/torch/sentence_transformers` /
+    # `SENTENCE_TRANSFORMERS_HOME`). Never committed to Git — this is a
+    # runtime cache path, not a repository artifact (see backend/.gitignore).
+    EMBEDDING_MODEL_CACHE_DIR: str | None = None
+    # Passed straight to `SentenceTransformer.encode(batch_size=...)` —
+    # the real, effective batching control (item 7): EmbeddingService
+    # calls `embed_texts()` once with every chunk that needs embedding,
+    # and the provider itself is what actually chunks that list into
+    # batch_size-sized minibatches for the underlying model. Larger
+    # values trade memory for throughput; 32 is sentence-transformers'
+    # own documented default.
+    EMBEDDING_BATCH_SIZE: int = 32
+    # Documented, best-effort budget for one embed_texts() call — **not
+    # currently enforced by preemption**. A real hard timeout on
+    # synchronous CPU/GPU tensor inference would require running it in a
+    # separate, killable process (subprocess isolation), which this
+    # milestone deliberately does not introduce (see its own "do not
+    # introduce Celery/background workers" exclusion) — a thread-based
+    # `.result(timeout=...)` wrapper cannot actually stop CPU-bound
+    # PyTorch work already running, so it would raise a timeout error
+    # while silently leaking the still-running computation, which is
+    # worse than not enforcing one at all. Recorded here so the
+    # *configuration surface* exists and is documented (item 4), and so a
+    # future worker-based embedding milestone (explicitly out of this
+    # one's scope) has an obvious place to actually enforce it via
+    # process-level cancellation.
+    EMBEDDING_INFERENCE_TIMEOUT_SECONDS: float = 60.0
+
     # Retrieval (see app/retrieval/retrieval_service.py). Documented
     # *initial* defaults calibrated against the deterministic hashing
     # provider above, the same "not scientifically validated optimal

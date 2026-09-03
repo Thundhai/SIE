@@ -36,7 +36,7 @@ from app.services.knowledge_document_version_service import (
 )
 from app.services.knowledge_source_service import knowledge_source_service
 from tests.fixtures.evaluation.corpus import CORPUS
-from tests.fixtures.evaluation.queries import QUERIES
+from tests.fixtures.evaluation.queries import QUERIES, EvaluationQuery
 
 LABEL = "Prototype retrieval evaluation result on synthetic fixture dataset — not a production benchmark."
 
@@ -119,21 +119,32 @@ def run_recall_at_k(
     *,
     ks: list[int] | None = None,
     provider: EmbeddingProvider | None = None,
+    queries: list[EvaluationQuery] | None = None,
 ) -> RecallReport:
-    """For each query in tests/fixtures/evaluation/queries.py, retrieve
-    top-max(ks) results and check whether a chunk from the query's
-    expected topic appears within the top-k, for each k in `ks`. Recall@K
-    here is per-query binary hit/miss averaged over all queries (the
-    standard definition when each query has one relevant topic, not a
-    ranked set of multiple graded-relevance documents)."""
+    """For each query in `queries` (defaults to
+    tests/fixtures/evaluation/queries.py's own QUERIES, unchanged from
+    before this parameter existed), retrieve top-max(ks) results and
+    check whether a chunk from the query's expected topic appears within
+    the top-k, for each k in `ks`. Recall@K here is per-query binary
+    hit/miss averaged over all queries (the standard definition when each
+    query has one relevant topic, not a ranked set of multiple
+    graded-relevance documents).
+
+    `queries` (SIE Milestone 21) lets a caller reuse this exact,
+    unmodified harness against a different query set over the same
+    seeded corpus — e.g.
+    tests/fixtures/evaluation/hard_paraphrase_queries.py's deliberately
+    keyword-disjoint queries, for a hashing-vs-real-model comparison —
+    without duplicating any retrieval/scoring logic."""
     ks = sorted(ks or [1, 3, 5])
     provider = provider or get_embedding_provider()
+    queries = queries if queries is not None else QUERIES
     max_k = max(ks)
 
     hits_at_k: dict[int, int] = {k: 0 for k in ks}
     per_query: list[dict] = []
 
-    for eval_query in QUERIES:
+    for eval_query in queries:
         response = retrieval_service.search(
             db,
             query_text=eval_query.query,
@@ -167,7 +178,7 @@ def run_recall_at_k(
             }
         )
 
-    total = len(QUERIES)
+    total = len(queries)
     recall_at_k = {k: (hits_at_k[k] / total if total else 0.0) for k in ks}
     return RecallReport(ks=ks, recall_at_k=recall_at_k, per_query=per_query)
 

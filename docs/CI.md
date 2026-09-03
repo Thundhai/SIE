@@ -90,8 +90,28 @@ production-ready** — while the production authentication boundary
 itself is now built (SIE Milestone 20 — see `docs/PRODUCTION_AUTH.md`),
 this build does not include a real login flow for any specific identity
 provider, does not run against real enterprise data, does not contact any
-external LLM provider, and does not evaluate UX, security, or
-performance beyond what the underlying test suites already assert.
+external LLM provider, does not exercise the real semantic embedding
+provider against a real pretrained model (see below), and does not
+evaluate UX, security, or performance beyond what the underlying test
+suites already assert.
+
+**Semantic embeddings (SIE Milestone 21) — CI vs. separate real-model
+validation.** `EMBEDDING_PROVIDER` stays at its default (`hashing`,
+deterministic and dependency-free) for this backend job; `sentence-
+transformers`/`torch` are deliberately **not** in
+`backend/requirements.txt` (the default PyPI `torch` wheel bundles a
+500+ MB CUDA runtime with no CPU-only build reachable from this
+environment's/CI's allowed package sources), so a green build here never
+means the real `SentenceTransformerEmbeddingProvider` ran. Tests that
+need it (`tests/test_sentence_transformer_provider.py`,
+`tests/test_retrieval_service_real_provider.py`,
+`tests/test_rag_service_real_provider.py`) self-skip cleanly, and the
+semantic-evaluation report-writing test
+(`tests/evaluation/test_semantic_embedding_evaluation.py`) records
+`real_provider_available: false` and reports only the hashing baseline
+half. See `docs/SEMANTIC_EMBEDDING.md`'s own "CI strategy" section for
+how the real-provider side is validated instead: locally, on demand,
+never claimed as something this CI run itself covers.
 
 ## Environment / credentials
 

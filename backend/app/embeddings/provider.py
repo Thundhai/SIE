@@ -26,15 +26,21 @@ model, and nothing in this codebase claims otherwise — see the README's
 "Semantic Knowledge Architecture" section for what this does and does not
 mean for retrieval quality.
 
-`SentenceTransformerEmbeddingProvider` below is the documented extension
-point for a real local/open-source embedding model
-(`sentence-transformers`, per the milestone's own suggestion) — the
-interface a future swap would implement. It lazy-imports its dependency
-inside `__init__`, not at module import time, so this module (and every
-caller of `get_embedding_provider()`) stays importable, and the test
-suite stays offline, whether or not that optional dependency is
-installed. It has not been exercised against a real model download in
-this environment; do not present it as validated.
+`SentenceTransformerEmbeddingProvider` below is the real production
+implementation (SIE Milestone 21: Real Semantic Embedding & Retrieval
+Productionization v0.1) — a genuine `sentence-transformers` model,
+selected via `EMBEDDING_PROVIDER=sentence_transformers`, never the
+default. It lazy-imports its dependency inside `__init__`, not at module
+import time, so this module (and every caller of
+`get_embedding_provider()`) stays importable, and the test suite stays
+offline, whether or not that optional dependency is installed. See
+`docs/SEMANTIC_EMBEDDING.md` for the recommended production model,
+licensing, runtime requirements, and exactly how (and how much) this was
+validated in a sandboxed environment with no access to the public
+`huggingface.co` model hub — that document is explicit about the
+difference between "this provider class is real, tested, working code"
+and "a specific large pretrained checkpoint's semantic quality was
+personally verified in this session," which are not the same claim.
 
 Never a commercial AI provider hardcoded here or anywhere in the domain
 layer — `EMBEDDING_PROVIDER` is an app setting (`app/core/config.py`),
@@ -80,6 +86,48 @@ _TOKEN_RE = re.compile(r"[a-z0-9]+")
 # deployment — so this is the one place APP_ENV is actually read for
 # behavior, not just recorded.
 _PRODUCTION_APP_ENVS = frozenset({"production", "prod"})
+
+
+class EmbeddingProviderError(RuntimeError):
+    """Base class for every real-provider failure below — never caught
+    and silently converted into a fallback to `HashingEmbeddingProvider`
+    anywhere in this codebase (see this module's docstring and item 14 of
+    the milestone this introduces it for: "a fallback would make the
+    system appear operational while silently degrading semantic
+    quality"). `EmbeddingService.embed_chunk`/`embed_chunks_batch` still
+    catch this (like any other exception) to report a per-chunk `FAILED`
+    outcome rather than crash a whole batch — that is error *reporting*,
+    not a fallback to a different, semantically-meaningless provider."""
+
+
+class EmbeddingModelLoadError(EmbeddingProviderError):
+    """Raised when a real embedding model cannot be constructed: the
+    optional `sentence-transformers` dependency is not installed, the
+    named model/path cannot be resolved (unknown Hub id, no network
+    access, a local path that does not exist or is not a valid saved
+    model), or it loaded but reported an unusable configuration (e.g. a
+    non-positive embedding dimension). Raised eagerly, at provider
+    construction time — never deferred to the first `embed_text()` call."""
+
+
+class EmbeddingInferenceError(EmbeddingProviderError):
+    """Raised when a real model's forward pass itself fails for a batch
+    that was otherwise valid input (e.g. an out-of-memory error, a
+    corrupted model state, an unexpected runtime error inside the
+    underlying framework). Distinct from `EmbeddingModelLoadError`
+    (happens at construction) and from a plain `ValueError` on malformed
+    *input* (raised directly by `embed_texts()` before the model is ever
+    called)."""
+
+
+class EmbeddingOutputValidationError(EmbeddingProviderError):
+    """Raised when a model's own output does not match what it claimed
+    about itself: a different vector count than input texts, or a vector
+    whose length doesn't match `self.dimensions`. This is the "malformed
+    model output" / "unexpected embedding dimension" guard — checked
+    immediately after every real inference call, before any vector from
+    that call is ever returned to `EmbeddingService` or written to the
+    database."""
 
 
 class HashingProviderInProductionError(RuntimeError):
@@ -215,39 +263,139 @@ class HashingEmbeddingProvider:
 
 
 class SentenceTransformerEmbeddingProvider:
-    """Documented extension point for a real local/open-source embedding
-    model — **not exercised in this environment** (no `sentence-
-    transformers`/model weights available; see this module's docstring).
-    Lazy-imports its dependency so importing this module never requires
-    it. Selected via `EMBEDDING_PROVIDER=sentence_transformers`, distinct
-    from — and not the default over — `HashingEmbeddingProvider`.
+    """A real, working `sentence-transformers` embedding provider — the
+    production implementation this milestone adds. Lazy-imports its
+    dependency so importing this module never requires it; the test
+    suite (and CI's default configuration) stays fully offline whether or
+    not the optional dependency is installed — see this module's own
+    docstring. Selected via `EMBEDDING_PROVIDER=sentence_transformers`,
+    distinct from — and never the default over — `HashingEmbeddingProvider`.
+
+    `model_name` doubles as `sentence_transformers.SentenceTransformer`'s
+    own `model_name_or_path` argument: a Hugging Face Hub model id (the
+    documented production path — downloaded once, then cached locally;
+    see `docs/SEMANTIC_EMBEDDING.md`) or a local filesystem directory
+    already containing a saved sentence-transformers model (a pre-baked
+    cache, or an offline-trained model — see that same document's
+    "Evaluation methodology" section for why this second form matters in
+    a sandboxed environment with no access to the public model hub). No
+    request-supplied value ever reaches this constructor — `model_name`,
+    `device`, and `cache_folder` all come from `app.core.config.settings`
+    only, resolved once at provider-construction time (see
+    `build_embedding_provider()` below and this module's "Security" note
+    in `docs/SEMANTIC_EMBEDDING.md`).
     """
 
     provider_name = "sentence_transformers"
 
-    def __init__(self, *, model_name: str = "all-MiniLM-L6-v2", model_version: str = "1") -> None:
+    def __init__(
+        self,
+        *,
+        model_name: str,
+        model_version: str,
+        device: str | None = None,
+        cache_folder: str | None = None,
+        batch_size: int = 32,
+    ) -> None:
         try:
             # type: ignore[import-not-found]
             from sentence_transformers import SentenceTransformer
-        except ImportError as exc:  # pragma: no cover - optional dependency
-            raise RuntimeError(
+        except ImportError as exc:
+            raise EmbeddingModelLoadError(
                 "EMBEDDING_PROVIDER=sentence_transformers requires the optional "
                 "'sentence-transformers' package, which is not installed in this "
                 "environment. Install it, or use EMBEDDING_PROVIDER=hashing "
-                "(the default)."
+                "(the default, deterministic test/dev provider)."
             ) from exc
 
         self.model_name = model_name
         self.model_version = model_version
-        self._model = SentenceTransformer(model_name)
-        self.dimensions = self._model.get_sentence_embedding_dimension()
+        self._batch_size = batch_size
+
+        try:
+            self._model = SentenceTransformer(
+                model_name, device=device, cache_folder=cache_folder
+            )
+        except Exception as exc:  # noqa: BLE001 - reported as a clear, typed load failure
+            raise EmbeddingModelLoadError(
+                f"Could not load embedding model {model_name!r} "
+                f"(provider=sentence_transformers): {type(exc).__name__}: {exc}. "
+                "This is a fail-closed error, not a fallback -- see "
+                "app/embeddings/provider.py's own docstring on why this codebase "
+                "never silently substitutes HashingEmbeddingProvider here."
+            ) from exc
+
+        # get_sentence_embedding_dimension() was renamed to
+        # get_embedding_dimension() in newer sentence-transformers
+        # releases; try the current name first, fall back for
+        # compatibility with older pinned versions a deployment might use.
+        dimension_getter = getattr(
+            self._model, "get_embedding_dimension", None
+        ) or getattr(self._model, "get_sentence_embedding_dimension", None)
+        dimensions = dimension_getter() if dimension_getter is not None else None
+        if not dimensions or dimensions <= 0:
+            raise EmbeddingModelLoadError(
+                f"Model {model_name!r} reported an invalid embedding dimension "
+                f"({dimensions!r}). Refusing to construct a provider that cannot "
+                "state its own output shape."
+            )
+        self.dimensions = int(dimensions)
 
     def embed_text(self, text: str) -> list[float]:
         return self.embed_texts([text])[0]
 
-    def embed_texts(self, texts: list[str]) -> list[list[float]]:  # pragma: no cover - optional
-        vectors = self._model.encode(texts, normalize_embeddings=True)
-        return [list(map(float, v)) for v in vectors]
+    def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        """Real batch inference: one `SentenceTransformer.encode()` call
+        for the whole list (internally chunked into `self._batch_size`-
+        sized minibatches by that call, not by this method) — never one
+        model invocation per text. Preserves input order exactly
+        (`encode()`'s own documented contract: `input[i] -> output[i]`,
+        and this method never reorders/sorts before encoding). See
+        `EmbeddingModelLoadError`/`EmbeddingInferenceError`/
+        `EmbeddingOutputValidationError`'s own docstrings for the
+        three distinct failure modes this validates against."""
+        if not texts:
+            return []
+
+        for index, text in enumerate(texts):
+            if text is None or not text.strip():
+                raise ValueError(
+                    f"embed_texts() received an empty or whitespace-only text at "
+                    f"index {index}; every element of a batch must have real "
+                    "content to embed."
+                )
+
+        try:
+            vectors = self._model.encode(
+                texts,
+                batch_size=self._batch_size,
+                normalize_embeddings=True,
+                show_progress_bar=False,
+                convert_to_numpy=True,
+            )
+        except Exception as exc:  # noqa: BLE001 - reported as a clear, typed inference failure
+            raise EmbeddingInferenceError(
+                f"Embedding inference failed for a batch of {len(texts)} text(s) "
+                f"under model {self.model_name!r}: {type(exc).__name__}: {exc}"
+            ) from exc
+
+        if len(vectors) != len(texts):
+            raise EmbeddingOutputValidationError(
+                f"Model {self.model_name!r} returned {len(vectors)} vector(s) for "
+                f"{len(texts)} input text(s) -- a batch-ordering/count mismatch."
+            )
+
+        result: list[list[float]] = []
+        for index, vector in enumerate(vectors):
+            row = [float(value) for value in vector]
+            if len(row) != self.dimensions:
+                raise EmbeddingOutputValidationError(
+                    f"Model {self.model_name!r} returned a {len(row)}-dimensional "
+                    f"vector at batch index {index}, but this provider reports "
+                    f"dimensions={self.dimensions}."
+                )
+            result.append(row)
+        return result
 
 
 def build_embedding_provider(
@@ -295,6 +443,9 @@ def build_embedding_provider(
         return SentenceTransformerEmbeddingProvider(
             model_name=model_name or settings.EMBEDDING_MODEL_NAME,
             model_version=model_version or settings.EMBEDDING_MODEL_VERSION,
+            device=settings.EMBEDDING_DEVICE,
+            cache_folder=settings.EMBEDDING_MODEL_CACHE_DIR,
+            batch_size=settings.EMBEDDING_BATCH_SIZE,
         )
     raise ValueError(
         f"Unknown EMBEDDING_PROVIDER {provider!r}. Supported: 'hashing', "
