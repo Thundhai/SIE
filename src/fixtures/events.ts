@@ -116,5 +116,8 @@ export function buildFixtureDetail(summary: SafetyEventSummary): SafetyEventDeta
     evidence: override?.evidence ?? [],
     relatedRecords: override?.relatedRecords ?? [],
     relevantKnowledge: override?.relevantKnowledge ?? [],
+    // Fixtures have no genuine ingestion history to report — see
+    // EventProvenance's own docstring (types/events.ts).
+    provenance: null,
   };
 }

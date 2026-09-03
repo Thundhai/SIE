@@ -13,32 +13,19 @@ import { ErrorState } from '../../components/ui/ErrorState';
 import { LoadingState } from '../../components/ui/LoadingState';
 import { StatusBadge } from '../../components/ui/StatusBadge';
 import type { AsyncState } from '../../types/common';
-import type { EventStatus, SafetyEventDetail } from '../../types/events';
+import type { SafetyEventDetail } from '../../types/events';
+import { eventStatusLabel, eventStatusTone } from './eventStatus';
 import { useEventRepository } from './useEventRepository';
-
-const STATUS_TONE: Record<EventStatus, 'success' | 'warning' | 'informational' | 'neutral'> = {
-  open: 'informational',
-  under_review: 'warning',
-  closed: 'success',
-  quarantined: 'neutral',
-};
-
-const STATUS_LABEL: Record<EventStatus, string> = {
-  open: 'Open',
-  under_review: 'Under review',
-  closed: 'Closed',
-  quarantined: 'Quarantined',
-};
 
 /**
  * Event Detail — "What exactly happened, and what evidence supports it?"
  *
- * Same fixture-backed data source as Events (§15) — see
- * `useEventRepository.ts`. The "What SIE found" section uses
- * `InsightPanel`, which shows an "insufficient evidence" state rather
- * than a fabricated conclusion whenever a fixture event has no
- * associated finding (most of them — see `src/fixtures/events.ts`'s own
- * `DETAIL_OVERRIDES`).
+ * Same repository as Events (§15) — see `useEventRepository.ts`. The
+ * "What SIE found" section uses `InsightPanel`, which shows an
+ * "insufficient evidence" state rather than a fabricated conclusion
+ * whenever an event has no associated finding (every real event today —
+ * see `apiEventRepository.ts`'s own docstring — and most fixture events,
+ * see `src/fixtures/events.ts`'s own `DETAIL_OVERRIDES`).
  */
 export function EventDetailPage() {
   const { eventId } = useParams<{ eventId: string }>();
@@ -70,10 +57,12 @@ export function EventDetailPage() {
     <PageContainer>
       <Breadcrumb items={[{ label: 'Events', href: '/events' }, { label: eventId ?? 'Event' }]} />
 
-      <div className="flex items-start gap-2 rounded-md border border-informational/30 bg-informational-surface px-3 py-2.5 text-sm text-informational">
-        <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-        <p>Showing example event data — see the Events page for details on this limitation.</p>
-      </div>
+      {repository.isFixtureBacked && (
+        <div className="flex items-start gap-2 rounded-md border border-informational/30 bg-informational-surface px-3 py-2.5 text-sm text-informational">
+          <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+          <p>Showing example event data — see the Events page for details on this limitation.</p>
+        </div>
+      )}
 
       {state.status === 'loading' && <LoadingState label="Loading event…" />}
 
@@ -108,7 +97,7 @@ function EventDetailContent({ event }: { event: SafetyEventDetail }) {
             {new Date(event.date).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })} · {event.site}
           </p>
         </div>
-        <StatusBadge tone={STATUS_TONE[event.status]} label={STATUS_LABEL[event.status]} />
+        <StatusBadge tone={eventStatusTone(event.status)} label={eventStatusLabel(event.status)} />
       </div>
 
       <Section title="Classification">
@@ -137,6 +126,41 @@ function EventDetailContent({ event }: { event: SafetyEventDetail }) {
           {event.narrative}
         </p>
       </Section>
+
+      {event.provenance && (
+        <Section title="Provenance">
+          <dl className="grid grid-cols-2 gap-4 rounded-lg border border-border bg-surface p-4 sm:grid-cols-4">
+            <div>
+              <dt className="text-xs font-medium uppercase tracking-wide text-text-muted">Data source</dt>
+              <dd className="mt-0.5 text-sm text-text-primary">{event.provenance.dataSourceName ?? '—'}</dd>
+            </div>
+            <div>
+              <dt className="text-xs font-medium uppercase tracking-wide text-text-muted">External reference</dt>
+              <dd className="mt-0.5 font-mono text-sm text-text-primary">{event.provenance.sourceRecordId}</dd>
+            </div>
+            <div>
+              <dt className="text-xs font-medium uppercase tracking-wide text-text-muted">Source version</dt>
+              <dd className="mt-0.5 text-sm text-text-primary">{event.provenance.sourceRecordVersion ?? '—'}</dd>
+            </div>
+            <div>
+              <dt className="text-xs font-medium uppercase tracking-wide text-text-muted">Ingested</dt>
+              <dd className="mt-0.5 text-sm text-text-primary">
+                {new Date(event.provenance.ingestionTime).toLocaleString(undefined, {
+                  year: 'numeric',
+                  month: 'short',
+                  day: 'numeric',
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs font-medium uppercase tracking-wide text-text-muted">Ingestion batch</dt>
+              <dd className="mt-0.5 font-mono text-sm text-text-primary">{event.provenance.ingestionBatchId}</dd>
+            </div>
+          </dl>
+        </Section>
+      )}
 
       <Section title="What SIE found">
         <InsightPanel heading="Finding" finding={event.finding} context={event.findingContext} evidence={event.evidence} />

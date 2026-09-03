@@ -36,6 +36,23 @@ class Settings(BaseSettings):
     # see the README's "Identity architecture" section.
     DEV_MODE: bool = False
 
+    # Browser/CORS access (see app/main.py, cors_allowed_origins_list
+    # below, docs/FRONTEND_ARCHITECTURE.md's "Browser integration"
+    # section) -- SIE Enterprise Read API & Browser Integration
+    # Foundation v0.1.
+    #
+    # Comma-separated list of EXACT browser origins allowed to call this
+    # API cross-origin. Never "*" for an authenticated API -- an
+    # allow-all origin combined with credentialed requests is exactly
+    # what browsers themselves refuse to honor, and it would defeat the
+    # whole point of an explicit, reviewable allowlist. The default below
+    # is a local-development value only (the new SIE frontend's own
+    # `vite --port=3000` dev server) -- any non-local deployment MUST set
+    # this explicitly via the CORS_ALLOWED_ORIGINS environment variable
+    # to its real frontend origin(s), or browser-based access is refused
+    # entirely (fail closed, the same posture DEV_MODE already takes).
+    CORS_ALLOWED_ORIGINS: str = "http://localhost:3000"
+
     # Ingestion (see app/ingestion/storage.py, app/ingestion/pipeline.py)
     #
     # Local-filesystem StorageProvider root. Development-only, per the
@@ -306,6 +323,20 @@ class Settings(BaseSettings):
             f"postgresql+psycopg://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}"
             f"@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
         )
+
+    @property
+    def cors_allowed_origins_list(self) -> list[str]:
+        """`CORS_ALLOWED_ORIGINS` parsed into a list of exact origins --
+        never a wildcard (see that field's own docstring). Blank entries
+        (a trailing comma, an unset/empty environment variable) are
+        dropped rather than becoming a stray `''` origin string, which
+        `CORSMiddleware` would never match against a real `Origin`
+        header anyway but is confusing to see reflected in a startup log
+        or test assertion. An empty *list* here (every configured entry
+        blank, or the variable set to an empty string) means no
+        cross-origin browser access is allowed at all -- fail closed,
+        not "allow everything"."""
+        return [origin.strip() for origin in self.CORS_ALLOWED_ORIGINS.split(",") if origin.strip()]
 
 
 @lru_cache

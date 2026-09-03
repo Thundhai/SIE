@@ -1,7 +1,13 @@
 import { FIXTURE_EVENTS, buildFixtureDetail } from '../../fixtures/events';
 import type { Page } from '../../types/common';
 import type { SafetyEventDetail, SafetyEventSummary } from '../../types/events';
-import type { EventListParams, EventRepository } from './eventRepository';
+import type { EventListParams, EventRepository, SiteOption } from './eventRepository';
+
+const FIXTURE_SITE_OPTIONS: SiteOption[] = [
+  { value: 'Project North', label: 'Project North' },
+  { value: 'Bayview Terminal', label: 'Bayview Terminal' },
+  { value: 'Riverside Plant', label: 'Riverside Plant' },
+];
 
 /**
  * `EventRepository` backed by `src/fixtures/events.ts` — see
@@ -11,7 +17,13 @@ import type { EventListParams, EventRepository } from './eventRepository';
  * `latencyMs: 0` for determinism).
  */
 export class FixtureEventRepository implements EventRepository {
+  readonly isFixtureBacked = true;
+
   constructor(private readonly latencyMs = 250) {}
+
+  async listSiteOptions(): Promise<SiteOption[]> {
+    return FIXTURE_SITE_OPTIONS;
+  }
 
   private async delay(): Promise<void> {
     if (this.latencyMs > 0) {

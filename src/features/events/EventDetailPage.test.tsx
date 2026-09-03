@@ -1,15 +1,18 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
+import { AuthProviderStub } from '../../test/authTestUtils';
 import { EventDetailPage } from './EventDetailPage';
 
 function renderAt(eventId: string) {
   return render(
-    <MemoryRouter initialEntries={[`/events/${eventId}`]}>
-      <Routes>
-        <Route path="/events/:eventId" element={<EventDetailPage />} />
-      </Routes>
-    </MemoryRouter>,
+    <AuthProviderStub>
+      <MemoryRouter initialEntries={[`/events/${eventId}`]}>
+        <Routes>
+          <Route path="/events/:eventId" element={<EventDetailPage />} />
+        </Routes>
+      </MemoryRouter>
+    </AuthProviderStub>,
   );
 }
 

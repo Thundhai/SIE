@@ -1,10 +1,15 @@
 # SIE Frontend Architecture
 
-**SIE Frontend Foundation & Core UX Implementation v0.1.** This document
-covers the *new* SIE frontend (Home, Events, Event Detail) established
-in this milestone — its architecture, design tokens, the legacy-vs-new
-boundary, and the backend gaps discovered while building it. It does not
-cover the backend (see `backend/README.md`).
+Originally written for **SIE Frontend Foundation & Core UX Implementation
+v0.1** — the *new* SIE frontend (Home, Events, Event Detail), its
+architecture, design tokens, and the legacy-vs-new boundary. §3, §5, and
+§7 below were updated for the **SIE Enterprise Read API & Browser
+Integration Foundation v0.1** milestone, which resolved the backend gaps
+§7 originally documented (real Events API, effective permissions, CORS)
+— see `docs/ENTERPRISE_API.md` for that milestone's own backend-side
+documentation, including its architecture diagram and CORS
+verification. This document does not cover the backend itself (see
+`backend/README.md`).
 
 ## 1. Legacy vs. new — read this first
 
@@ -78,7 +83,8 @@ src/
   features/
     home/HomePage.tsx
     events/                EventsPage, EventDetailPage, eventRepository.ts
-                            (interface), fixtureEventRepository.ts
+                            (interface), apiEventRepository.ts (real API),
+                            fixtureEventRepository.ts (example-data fallback)
   services/api/            Typed API client (§4 below)
   fixtures/                Isolated fixture data (§5 below) — see its own README.md
   types/                   Shared cross-feature types (common.ts, events.ts, evidence.ts)
@@ -114,14 +120,15 @@ documented there as non-production.
   header) is not a real session. When unconfigured, or when the backend
   can't resolve the configured ids, `isAuthenticated` is simply `false`
   — the UI never fabricates a user or organization.
-- `permissions` is always `[]` and `hasPermission()` always returns
-  `false`. The backend has no endpoint to resolve a user's *effective*
-  permission set (only their role); reimplementing
-  `app/services/permissions.py::ROLE_PERMISSIONS` client-side to derive
-  one would drift from the backend's own source of truth, so this was
-  deliberately not attempted. Nothing in this milestone's UI depends on
-  `hasPermission()` returning `true` — every real enforcement is the
-  backend's own 403 response.
+- `permissions`/`hasPermission()` are backed by the real
+  `GET /api/v1/auth/me` endpoint (SIE Enterprise Read API & Browser
+  Integration Foundation v0.1 — `backend/app/api/v1/auth.py`), which
+  serializes the backend's own already-computed, already-authoritative
+  effective permission set. This frontend still carries no copy of
+  `app/services/permissions.py::ROLE_PERMISSIONS` — see
+  `docs/ENTERPRISE_API.md` §6. `hasPermission()` remains display-only:
+  every real enforcement is still the backend's own 403 response,
+  whether or not a screen also checks this first.
 
 Swapping in a real `ProdAuthProvider` later touches exactly one file
 (`app/App.tsx`, which provider wraps the router) — no screen changes.
@@ -140,27 +147,35 @@ Swapping in a real `ProdAuthProvider` later touches exactly one file
 - `errors.ts` — `ApiError`, parsed from the backend's own standardized
   error contract (`backend/app/core/errors.py`:
   `{ detail, error: { code, message, request_id } }`).
-- `organizations.ts`, `analytics.ts` — typed wrappers around the real
-  endpoints actually used (`GET /organizations/{id}`, `GET
-  /organizations/{id}/members/{user_id}`, `GET
-  /intelligence/analytics/summary`, `GET
-  /intelligence/analytics/signals`). Every field mirrors the backend's
-  own Pydantic schemas (`backend/app/schemas/intelligence.py`,
-  `backend/app/schemas/organization*.py`) exactly — nothing invented.
+- `organizations.ts`, `analytics.ts`, `events.ts`, `auth.ts`, `sites.ts`
+  — typed wrappers around the real endpoints actually used (`GET
+  /organizations/{id}`, `GET /organizations/{id}/members/{user_id}`,
+  `GET /intelligence/analytics/summary`, `GET
+  /intelligence/analytics/signals`, `GET /events`, `GET /events/{id}`,
+  `GET /auth/me`, `GET /organizations/{id}/sites`). Every field mirrors
+  the backend's own Pydantic schemas (`backend/app/schemas/
+  intelligence.py`, `organization*.py`, `events.py`, `auth.py`,
+  `site.py`) exactly — nothing invented.
 
 ## 5. Fixtures vs. real data
 
-See `src/fixtures/README.md` for the full rule. Summary: Home uses only
-real backend data (no fixture exists for it). Events and Event Detail
-are fixture-backed (`src/fixtures/events.ts`) because the backend has no
-human-facing read endpoint for `SafetyEvent` records (§7) — accessed
-only through the `EventRepository` interface
-(`src/features/events/eventRepository.ts`), so swapping in a future
-`ApiEventRepository` changes one file
-(`src/features/events/useEventRepository.ts`), not the screens. Every
-fixture-backed screen visibly discloses this to the user (a small inline
-notice — "Showing example event data...") — fixture data is never
-presented as live.
+See `src/fixtures/README.md` for the full rule. Home, Events, and Event
+Detail all use real backend data now: Events/Event Detail talk to the
+real `GET /api/v1/events`/`GET /api/v1/events/{id}` endpoints (SIE
+Enterprise Read API & Browser Integration Foundation v0.1 — see
+`docs/ENTERPRISE_API.md`) through `ApiEventRepository`
+(`src/features/events/apiEventRepository.ts`), reached only through the
+same `EventRepository` interface (`eventRepository.ts`) the fixture
+implementation always used — no screen changed to adopt it.
+`useEventRepository.ts` (`src/features/events/`) is the one place that
+decides which implementation is active: `ApiEventRepository` once a real
+organization is established (`useAuth().organization`), falling back to
+`FixtureEventRepository` only when no dev identity is configured or it
+failed to resolve (e.g. local development with no backend running).
+`EventsPage`/`EventDetailPage` render their "showing example event
+data" disclosure only when the active repository actually reports
+`isFixtureBacked` — never unconditionally — so fixture data is still
+never presented as live.
 
 ## 6. Design tokens
 
@@ -182,46 +197,38 @@ taken from the Figma file. Every value lives in this one file so a
 future pass with real Figma access can correct them centrally without
 touching a single component.
 
-## 7. Known backend gaps discovered while building this milestone
+## 7. Known backend gaps
 
-These are documented, not worked around — per this milestone's explicit
-instruction, the backend was not modified to address any of them.
+Gaps 1-3 below, discovered while building the original Frontend
+Foundation v0.1 milestone, were resolved by the **SIE Enterprise Read
+API & Browser Integration Foundation v0.1** milestone — kept here,
+marked resolved, rather than deleted, so the history of what this
+frontend had to work around is not lost. See `docs/ENTERPRISE_API.md`
+for that milestone's own documentation of what it built and how it was
+verified. Gaps 4-5 remain open.
 
-1. **No human-facing `GET /events` / `GET /events/{id}`.** The backend
-   only exposes machine-client event *ingestion*
-   (`POST /intelligence/events`, `POST /data/ingestion`) and aggregate
-   analytics reads (`summary`/`trends`/`signals`/`features`) — there is
-   no endpoint to list or fetch individual `SafetyEvent` records for a
-   human-facing UI. This is why Events/Event Detail are fixture-backed.
-2. **No CORS configuration.** Verified directly in this session:
-   `backend/app/main.py` registers no `CORSMiddleware`, and an `OPTIONS`
-   preflight request to any endpoint returns `405 Method Not Allowed`
-   with no `Access-Control-Allow-Origin` header. Every endpoint
-   works correctly when called server-to-server (verified with `curl`
-   against a real seeded organization — `GET /organizations/{id}`, `GET
-   /organizations/{id}/members/{user_id}`, and `GET
-   /intelligence/analytics/summary` all returned correct data), but a
-   **browser** refuses to let this frontend's JavaScript read the
-   response from a different origin (`http://localhost:3000` →
-   `http://localhost:8000`) without CORS headers. This blocks *any*
-   browser-based frontend from calling this API directly, not just this
-   one. This frontend's own error handling was verified to degrade
-   gracefully under this real failure (Home shows "No organization
-   context available" rather than crashing) — but the underlying gap is
-   a backend capability that needs to be added (a `CORSMiddleware`
-   registration naming the frontend's real origin(s)) before this
-   frontend — or any browser-based SIE frontend — can use real data
-   end-to-end outside of same-origin deployment.
-3. **No endpoint to resolve a user's effective permission set.** Only
-   role (`OrganizationMembership.role`) is exposed; turning a role into
-   permissions requires `app/services/permissions.py::ROLE_PERMISSIONS`,
-   which has no API surface. See §3.
-4. **No production login/session endpoint.** Confirmed in
-   `backend/app/api/deps_auth.py`'s own docstring.
+1. ~~**No human-facing `GET /events` / `GET /events/{id}`.**~~
+   **Resolved.** `backend/app/api/v1/events.py` now provides both,
+   tenant-isolated, paginated, filtered, and searched server-side — see
+   `docs/ENTERPRISE_API.md` §2-3. Events/Event Detail are real-data
+   screens now (§5 above).
+2. ~~**No CORS configuration.**~~ **Resolved.** `backend/app/main.py`
+   now registers a configurable `CORSMiddleware`
+   (`settings.CORS_ALLOWED_ORIGINS`), verified against a real running
+   server (both real `curl` preflight requests and this repository's own
+   `backend/tests/test_cors.py`) — see `docs/ENTERPRISE_API.md` §4.
+3. ~~**No endpoint to resolve a user's effective permission set.**~~
+   **Resolved.** `GET /api/v1/auth/me` (`backend/app/api/v1/auth.py`)
+   serializes the backend's own real, already-computed permission set —
+   see `docs/ENTERPRISE_API.md` §6 and §3 above.
+4. **No production login/session endpoint.** Still open — a real
+   OIDC/OAuth2 `TokenVerifier` implementation remains external
+   infrastructure this milestone did not build; the seam it plugs into
+   already exists and is documented in `docs/ENTERPRISE_API.md` §5's
+   Implemented/seam-only/external-infrastructure table.
 5. **No Actions/Reports/Knowledge-browse/Administration backend
-   capability** beyond what already existed — unchanged from the
-   implementation map produced before this milestone; not re-verified
-   here since those screens are explicitly out of scope this milestone.
+   capability** beyond what already existed — unchanged; out of scope
+   for both frontend milestones so far.
 
 ## 8. Verification performed this milestone
 

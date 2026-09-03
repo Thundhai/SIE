@@ -81,6 +81,22 @@ OPENAPI_TAGS = [
             "readable by human or machine (`safety_data:read`)."
         ),
     },
+    {
+        "name": "events",
+        "description": (
+            "Human-facing, tenant-isolated read access to the enterprise `SafetyEvent` population "
+            "— list (filtered, searched, paginated) and single-event detail with provenance "
+            "(human or machine, `safety_data:read`). See `docs/ENTERPRISE_API.md`."
+        ),
+    },
+    {
+        "name": "auth",
+        "description": (
+            "The authenticated caller's own identity, organization, role, and effective permission "
+            "set — human-only, backend-authoritative (no client-side permission matrix). "
+            "See `docs/ENTERPRISE_API.md`."
+        ),
+    },
 ]
 
 _MACHINE_BEARER_DESCRIPTION = (

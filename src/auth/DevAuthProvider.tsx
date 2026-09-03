@@ -1,4 +1,5 @@
 import { ReactNode, useEffect, useState } from 'react';
+import { getEffectivePermissions } from '../services/api/auth';
 import { getMembership, getOrganization } from '../services/api/organizations';
 import { AuthContext } from './AuthContext';
 import { getDevIdentityConfig } from './devIdentity';
@@ -25,16 +26,19 @@ const NOT_AUTHENTICATED: AuthContextValue = {
  * (the `X-SIE-Dev-User-Id` header) is the backend's own documented
  * dev-only mechanism, not a real session.
  *
- * `permissions` is always empty and `hasPermission()` always returns
- * `false`: the backend has no endpoint to resolve a user's effective
- * permission set (only their role, which requires the same
- * `ROLE_PERMISSIONS` logic `app/services/permissions.py` owns to turn
- * into permissions — duplicating that mapping client-side would drift
- * from the backend's own source of truth, so it was deliberately not
- * attempted here; see this milestone's own completion report, "known
- * backend gaps"). Nothing in this milestone's UI depends on
- * `hasPermission()` returning true — the backend's own 403 response
- * remains the real enforcement in every case.
+ * `permissions`/`hasPermission()` are backed by the real
+ * `GET /api/v1/auth/me` endpoint (SIE Enterprise Read API & Browser
+ * Integration Foundation v0.1 — `backend/app/api/v1/auth.py`), which
+ * serializes the backend's own already-computed, already-authoritative
+ * `TenantContext.permissions` (`app/services/permissions.py::
+ * ROLE_PERMISSIONS`, resolved server-side). This frontend never carries
+ * its own copy of that mapping — see `docs/FRONTEND_ARCHITECTURE.md` §3
+ * and `docs/ENTERPRISE_API.md` §6. `hasPermission()` remains
+ * display-only, exactly like every other field on this context (this
+ * module's own docstring): it lets the UI hide an action a user
+ * genuinely cannot perform, but the backend's own 403 response is still
+ * the real enforcement in every case, whether or not a screen also
+ * checks this first.
  */
 export function DevAuthProvider({ children }: { children: ReactNode }) {
   const [value, setValue] = useState<AuthContextValue>(NOT_AUTHENTICATED);
@@ -51,15 +55,20 @@ export function DevAuthProvider({ children }: { children: ReactNode }) {
 
     async function resolve() {
       try {
-        const [organization, membership] = await Promise.all([
+        const [organization, membership, effectivePermissions] = await Promise.all([
           getOrganization(config!.organizationId, controller.signal),
           getMembership(config!.organizationId, config!.userId, controller.signal),
+          // Real, backend-authoritative permissions (see this module's
+          // own docstring) — not derived from `membership.role` here.
+          getEffectivePermissions(config!.organizationId, controller.signal),
         ]);
         if (cancelled) return;
 
         const memberships: AuthMembership[] = [
           { organizationId: organization.id, organizationName: organization.name, role: membership.role },
         ];
+        const permissions = effectivePermissions.permissions;
+        const permissionSet = new Set(permissions);
 
         setValue({
           isAuthenticated: true,
@@ -67,8 +76,8 @@ export function DevAuthProvider({ children }: { children: ReactNode }) {
           user: { id: config!.userId, name: config!.userName, email: config!.userEmail },
           organization: { id: organization.id, name: organization.name },
           memberships,
-          permissions: [],
-          hasPermission: () => false,
+          permissions,
+          hasPermission: (permission) => permissionSet.has(permission),
         });
       } catch {
         // Could not resolve the configured dev identity against the

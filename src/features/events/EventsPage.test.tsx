@@ -2,13 +2,16 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
+import { AuthProviderStub } from '../../test/authTestUtils';
 import { EventsPage } from './EventsPage';
 
 function renderPage() {
   return render(
-    <MemoryRouter initialEntries={['/events']}>
-      <EventsPage />
-    </MemoryRouter>,
+    <AuthProviderStub>
+      <MemoryRouter initialEntries={['/events']}>
+        <EventsPage />
+      </MemoryRouter>
+    </AuthProviderStub>,
   );
 }
 
