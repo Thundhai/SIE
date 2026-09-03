@@ -53,7 +53,7 @@ import uuid
 from datetime import datetime
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import DateTime, ForeignKey, Integer, String, UniqueConstraint, Uuid
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, UniqueConstraint, Uuid
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.config import settings
@@ -69,6 +69,22 @@ class KnowledgeChunkEmbedding(UUIDPrimaryKeyMixin, Base):
             "model_name",
             "model_version",
             name="uq_knowledge_chunk_embeddings_chunk_model",
+        ),
+        # Milestone 19A: declares the composite index migration 0006 already
+        # creates via a raw `op.create_index(...)` (same name, same three
+        # columns, non-unique) — see that migration's own docstring. It was
+        # never mirrored here, which made every subsequent
+        # `alembic check`/`--autogenerate` run propose dropping a real,
+        # still-used index (RetrievalService._model_clause() filters on
+        # exactly this (provider, model_name, model_version) triple for
+        # every retrieval search). This is a metadata-only correction — the
+        # index itself already exists in the database from 0006; no new
+        # migration is needed or added.
+        Index(
+            "ix_knowledge_chunk_embeddings_model_identity",
+            "provider",
+            "model_name",
+            "model_version",
         ),
     )
 

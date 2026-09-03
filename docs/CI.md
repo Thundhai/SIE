@@ -33,22 +33,25 @@ fork or a substitute). In order:
 5. `alembic check` — verifies there is no autogenerate-detectable drift
    between the current models and the migration history's head state.
 
-**Known limitation, stated plainly:** step 5 currently fails, and always
-will until someone changes `app/models/embedding.py` (out of scope for
-this milestone — see below). This is a real, pre-existing condition, not
-something Milestone 19 introduced: migration `0006_semantic_embeddings`
-creates a raw composite index
+**Resolved (SIE Milestone 19A: Migration/Model Drift Resolution).** Step 5
+originally failed on every run — a real, pre-existing condition Milestone
+19's own first CI run correctly surfaced, not something it introduced:
+migration `0006_semantic_embeddings` creates a raw composite index
 (`ix_knowledge_chunk_embeddings_model_identity`) that
-`app/models/embedding.py` has never declared an equivalent `Index(...)`
-for. Every migration from `0007` through `0015`'s own docstring already
-calls this out by name as a known, pre-existing, deliberately-untouched
-drift predating that migration. This CI workflow does not paper over it
-— `alembic check` runs unsuppressed and the backend job genuinely fails
-on it, exactly as a real drift should make it fail. Fixing it means
-editing a SQLAlchemy model, which SIE Milestone 19 (CI infrastructure
-only, no application changes) is explicitly not scoped to do. See the
-milestone's own completion report for the exact CI run this was observed
-on.
+`app/models/embedding.py` never declared a matching `Index(...)` for, so
+every `alembic check`/`--autogenerate` run proposed dropping a real,
+still-used index (`RetrievalService._model_clause()` filters on exactly
+that `(provider, model_name, model_version)` triple for every retrieval
+search — confirmed before making this change). The fix is metadata-only:
+`app/models/embedding.py`'s `__table_args__` now declares that same
+index (same name, same three columns, non-unique) — the index itself
+already existed in the database from migration 0006, so no new migration
+was needed or added, and no existing migration was edited.
+`tests/test_migrations.py::test_alembic_check_reports_no_drift_after_upgrade_head`
+guards against this regressing silently — it runs the same
+autogenerate-diff comparison `alembic check` does against a freshly
+migrated, real PostgreSQL 16 database and fails if models and migrations
+ever disagree again.
 
 ### Frontend job
 
