@@ -38,20 +38,42 @@ parallel scope vocabulary).
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
 from app.api.deps_context import RequestContext, require_context_permission
 from app.api.deps_machine_auth import MachineClientContext, require_scope
 from app.api.deps_rate_limit import RateLimitClass, require_rate_limit
+from app.core.config import settings
 from app.intelligence.adapters import GenericJSONAdapter
 from app.intelligence.analytics import compute_summary, compute_trend
+from app.intelligence.enterprise_intelligence_service import (
+    EnterpriseIntelligenceResult,
+    compute_enterprise_intelligence,
+)
 from app.intelligence.features import feature_engineering_service
 from app.intelligence.ingestion_service import safety_event_ingestion_service
 from app.intelligence.schemas import RawSafetyEventPayload
 from app.intelligence.signals import risk_signal_service
+from app.models.site import Site
+from app.schemas.enterprise_intelligence import (
+    ActionsContextRead,
+    ConcentrationContributorRead,
+    DataSufficiencyRead,
+    EnterpriseIndicatorRead,
+    EnterpriseIntelligenceRead,
+    EnterpriseTrendRead,
+    ExplanationItemRead,
+    PredictiveContextRead,
+    ProvenanceRead,
+    RecurrencePatternRead,
+    RiskScoreComponentRead,
+    RiskScoreRead,
+)
 from app.schemas.intelligence import (
     AnalyticsSummaryRead,
     BatchIngestionRead,
@@ -310,6 +332,115 @@ def _signal_read(s) -> RiskSignalRead:
         data_quality=s.data_quality,
         calculation_version=s.calculation_version,
     )
+
+
+# --- Enterprise intelligence (SIE Milestone 22, human OR machine, tenant-authorized) ---
+
+
+def _require_owned_site(db: Session, *, organization_id: uuid.UUID, site_id: uuid.UUID) -> Site:
+    """Entity-ownership check, mirroring `app/api/v1/predictions.py`'s own
+    `_require_owned_site()` exactly — a 404, not a 403, for a site that
+    either doesn't exist or belongs to a different organization: this
+    endpoint never reveals whether a given id exists in someone else's
+    tenant (milestone item 15)."""
+    site = db.execute(
+        select(Site).where(Site.id == site_id, Site.organization_id == organization_id)
+    ).scalar_one_or_none()
+    if site is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Site not found in this organization.")
+    return site
+
+
+def _validate_window_days(window_days: int) -> None:
+    if window_days not in settings.ENTERPRISE_INTELLIGENCE_ALLOWED_WINDOW_DAYS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"window_days must be one of {settings.ENTERPRISE_INTELLIGENCE_ALLOWED_WINDOW_DAYS}, "
+                f"got {window_days}."
+            ),
+        )
+
+
+def _to_enterprise_intelligence_read(result: EnterpriseIntelligenceResult) -> EnterpriseIntelligenceRead:
+    return EnterpriseIntelligenceRead(
+        scope=result.scope,
+        organization_id=result.organization_id,
+        entity_id=result.entity_id,
+        as_of=result.as_of,
+        window_days=result.window_days,
+        data_sufficiency=DataSufficiencyRead(status=result.data_sufficiency, event_count=result.event_count),
+        deterministic_risk=RiskScoreRead(
+            score=result.risk.score,
+            classification=result.risk.classification,
+            version=result.risk.version,
+            components=[RiskScoreComponentRead(**vars(c)) for c in result.risk.components],
+            insufficient_data_reason=result.risk.insufficient_data_reason,
+        ),
+        trend=EnterpriseTrendRead(**vars(result.trend)),
+        indicators=[EnterpriseIndicatorRead(**vars(i)) for i in result.indicators],
+        patterns=[RecurrencePatternRead(**vars(p)) for p in result.patterns],
+        concentrations=[ConcentrationContributorRead(**vars(c)) for c in result.concentrations],
+        explanations=[ExplanationItemRead(**vars(e)) for e in result.explanations],
+        provenance=ProvenanceRead(**vars(result.provenance)),
+        predictive_context=(
+            PredictiveContextRead(**vars(result.predictive_context)) if result.predictive_context else None
+        ),
+        actions_context=(ActionsContextRead(**vars(result.actions_context)) if result.actions_context else None),
+    )
+
+
+@router.get(
+    "/enterprise",
+    response_model=EnterpriseIntelligenceRead,
+    dependencies=[Depends(require_rate_limit(RateLimitClass.READ))],
+)
+def enterprise_intelligence(
+    organization_id: uuid.UUID = Query(...),
+    as_of: datetime | None = Query(default=None),
+    window_days: int = Query(default=settings.ENTERPRISE_INTELLIGENCE_DEFAULT_WINDOW_DAYS),
+    context: RequestContext = Depends(require_context_permission(Permission.INTELLIGENCE_READ)),
+    db: Session = Depends(get_db),
+) -> EnterpriseIntelligenceRead:
+    """Organization-scope enterprise intelligence (milestone item 14).
+    `organization_id` is the same authorize-then-trust query parameter
+    every other endpoint in this router already uses — never overridable
+    beyond what `require_context_permission()` itself authorized (a
+    machine caller's own pinned `organization_id`, or a human caller's
+    own authorized membership — see `app/api/deps_context.py`)."""
+    _validate_window_days(window_days)
+    result = compute_enterprise_intelligence(
+        db, organization_id=organization_id, scope="organization", as_of=as_of, window_days=window_days
+    )
+    _audit_analytics_query(db, context=context, organization_id=organization_id, endpoint="enterprise")
+    return _to_enterprise_intelligence_read(result)
+
+
+@router.get(
+    "/sites/{site_id}",
+    response_model=EnterpriseIntelligenceRead,
+    dependencies=[Depends(require_rate_limit(RateLimitClass.READ))],
+)
+def site_intelligence(
+    site_id: uuid.UUID,
+    organization_id: uuid.UUID = Query(...),
+    as_of: datetime | None = Query(default=None),
+    window_days: int = Query(default=settings.ENTERPRISE_INTELLIGENCE_DEFAULT_WINDOW_DAYS),
+    context: RequestContext = Depends(require_context_permission(Permission.INTELLIGENCE_READ)),
+    db: Session = Depends(get_db),
+) -> EnterpriseIntelligenceRead:
+    """Site-scope enterprise intelligence (milestone item 14). The site
+    must belong to `organization_id` — a site from a different
+    organization (or a nonexistent id) is a 404, never a 403 (milestone
+    item 15's own "consistent with existing APIs" instruction, mirroring
+    `app/api/v1/predictions.py`)."""
+    _validate_window_days(window_days)
+    _require_owned_site(db, organization_id=organization_id, site_id=site_id)
+    result = compute_enterprise_intelligence(
+        db, organization_id=organization_id, scope="site", site_id=site_id, as_of=as_of, window_days=window_days
+    )
+    _audit_analytics_query(db, context=context, organization_id=organization_id, endpoint="sites")
+    return _to_enterprise_intelligence_read(result)
 
 
 def _audit_analytics_query(db: Session, *, context: RequestContext, organization_id: uuid.UUID, endpoint: str) -> None:

@@ -144,3 +144,64 @@ class IndicatorCategory(str, Enum):
 
     LEADING = "LEADING"
     LAGGING = "LAGGING"
+
+
+# --- SIE Milestone 22: Enterprise Intelligence & Risk Analytics Foundation v0.1 ---
+
+
+class EnterpriseTrendClassification(str, Enum):
+    """The semantic (good/bad), not merely directional, trend label
+    milestone item 6 asks for — deliberately distinct from
+    `TrendDirection` above (`INCREASING`/`DECREASING`), which says
+    nothing about whether an increase is good or bad news for a given
+    metric. `app/intelligence/enterprise_trend.py`'s period-over-period
+    comparison of the primary lagging metric (total INCIDENT count) is
+    the one place this codebase decides "more incidents" is always
+    DETERIORATING and "fewer incidents" is always IMPROVING — see that
+    module's own docstring for the exact, documented, deterministic
+    rule."""
+
+    IMPROVING = "IMPROVING"
+    STABLE = "STABLE"
+    DETERIORATING = "DETERIORATING"
+    INSUFFICIENT_DATA = "INSUFFICIENT_DATA"
+
+
+class RecurrenceClassification(str, Enum):
+    """See `app/intelligence/recurrence.py` for the exact,
+    `settings.ENTERPRISE_RECURRENCE_*`-driven thresholds (milestone item
+    8). `NONE` exists for completeness/testability
+    (`classify_recurrence()` is total over every non-negative count) but
+    is never emitted by the pattern-detection sweep itself — a
+    single-occurrence "pattern" isn't a pattern at all, so it is simply
+    never returned."""
+
+    NONE = "NONE"
+    WATCH = "WATCH"
+    RECURRING = "RECURRING"
+    HIGH_RECURRENCE = "HIGH_RECURRENCE"
+
+
+class ConcentrationClassification(str, Enum):
+    """A ranked contributor's share of its dimension's total, banded —
+    see `app/intelligence/concentration.py` (milestone item 7). Named
+    distinctly from `RiskClassification` below so a 35%
+    "site concentration" reading is never confused with, or accidentally
+    compared numerically against, the overall 0-100 enterprise risk
+    score — the two are unrelated scales measuring unrelated things."""
+
+    LOW = "LOW"
+    MODERATE = "MODERATE"
+    HIGH = "HIGH"
+
+
+class RiskClassification(str, Enum):
+    """The deterministic enterprise risk score's band — see
+    `app/intelligence/risk_score.py` (milestone items 9-10). A
+    prioritization label, never a probability and never a claim of
+    causation — see that module's own docstring."""
+
+    LOW = "LOW"
+    MODERATE = "MODERATE"
+    HIGH = "HIGH"
+    CRITICAL = "CRITICAL"

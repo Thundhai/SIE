@@ -439,6 +439,8 @@ schema changes are always a new migration on top.
 | GET    | `/api/v1/intelligence/analytics/trends`                    | Period-bucketed trend for one named metric — **human OR machine caller**; `intelligence:read` |
 | GET    | `/api/v1/intelligence/analytics/signals`                   | Deterministic risk signals — **human OR machine caller**; `intelligence:read` |
 | GET    | `/api/v1/intelligence/features`                            | Raw computed feature values — **human OR machine caller**; `intelligence:read` |
+| GET    | `/api/v1/intelligence/enterprise`                           | Organization-scope enterprise intelligence: indicators, trend, recurrence, concentration, deterministic risk score, explanations, provenance — **human OR machine caller**; `intelligence:read` (Milestone 22) |
+| GET    | `/api/v1/intelligence/sites/{site_id}`                       | Site-scope enterprise intelligence (same shape as above, plus `predictive_context` when a prediction has been recorded) — **human OR machine caller**; `intelligence:read` (Milestone 22) |
 | POST   | `/api/v1/organizations/{organization_id}/api-clients`     | Provision a machine-client credential (`users:manage`) — returns the raw secret once; optional `expires_at` |
 | GET    | `/api/v1/organizations/{organization_id}/api-clients`     | List an organization's machine clients (`users:manage`, never the secret) |
 | POST   | `/api/v1/organizations/{organization_id}/api-clients/{id}/rotate` | Rotate a machine client's secret (`users:manage`) — org/scopes/identity survive; old secret dies immediately |
@@ -3523,6 +3525,52 @@ published package), no `/api/v2/` (the versioning scheme allows one
 later without breaking `/api/v1/`, but none is built now). See
 ["Known gaps / next phase"](#known-gaps--next-phase) for this
 milestone's own genuine, as-built limitations.
+
+## Enterprise Intelligence & Risk Analytics Architecture
+
+**SIE Milestone 22: Enterprise Intelligence & Risk Analytics Foundation
+v0.1.** Converts the existing normalized `SafetyEvent` data, temporal
+features, indicators, and predictive interfaces into a coherent
+enterprise intelligence layer answering "what is happening, what is
+changing, where is risk concentrated, what patterns are recurring, and
+what evidence supports those conclusions" — for one organization
+(`GET /api/v1/intelligence/enterprise`) or one site
+(`GET /api/v1/intelligence/sites/{site_id}`), as of a chosen moment.
+
+    Safety Events -> point-in-time filtering (events_as_of(), reused unchanged)
+        -> aggregation (current window + immediately preceding equal-length window)
+        -> indicators -> trend analysis -> pattern/recurrence analysis
+        -> risk concentration -> deterministic risk scoring
+        -> explanation + provenance -> Enterprise Intelligence API
+
+Every computation is a pure function over an already-fetched, already
+point-in-time-correct, tenant-scoped event list — only the one
+orchestrator (`app/intelligence/enterprise_intelligence_service.py`)
+touches the database, mirroring `app/intelligence/features.py`'s own
+established split. The deterministic risk score (`enterprise-risk-v1`,
+bounded `0-100`, five documented weighted components, fixed
+LOW/MODERATE/HIGH/CRITICAL bands) is a transparent, rule-based
+prioritization mechanism — **not a validated probability of an incident
+occurring**, and never combined with the separate, already-existing
+predictive model's own calibrated probability
+(`deterministic_risk`/`predictive_risk` always stay two distinct
+fields). Reuses `Permission.INTELLIGENCE_READ` — no new permission. See
+[`docs/ENTERPRISE_INTELLIGENCE_RISK_ANALYTICS.md`](docs/ENTERPRISE_INTELLIGENCE_RISK_ANALYTICS.md)
+for the full architecture: point-in-time semantics, analysis windows,
+every indicator/trend/recurrence/concentration rule, the risk formula
+and its weights, all sufficiency thresholds, and this milestone's own
+limitations.
+
+### What this milestone deliberately does not add
+
+No autonomous intervention, no AI-generated corrective actions, no
+causal inference, no LLM-generated risk scores, no agent workflows, no
+notifications, no frontend intelligence page, no background worker
+architecture, no Redis/Kafka, no external web/social intelligence, no
+predictive-model retraining or new ML model, no automatic ontology or
+terminology changes, no snapshot/cache persistence (computed on demand
+for v0.1 — see the doc's own "Limitations" section for why and what a
+later milestone would add).
 
 ## Enterprise Data Ingestion & Validation Foundation Architecture
 

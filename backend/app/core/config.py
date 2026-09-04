@@ -417,6 +417,55 @@ class Settings(BaseSettings):
     POSTGRES_HOST: str = "localhost"
     POSTGRES_PORT: int = 5432
 
+    # SIE Milestone 22: Enterprise Intelligence & Risk Analytics
+    # Foundation v0.1 (see backend/docs/ENTERPRISE_INTELLIGENCE_RISK_ANALYTICS.md).
+    # This section governs `app/intelligence/enterprise_*.py`,
+    # `app/intelligence/concentration.py`, `app/intelligence/recurrence.py`
+    # and `app/intelligence/risk_score.py` only -- the pre-existing
+    # `INTELLIGENCE_*` settings above (trend/anomaly/signal/sufficiency)
+    # are untouched and still govern `app/intelligence/trends.py`,
+    # `anomaly.py`, `signals.py`. Every threshold below is a documented
+    # *initial* default, not a scientifically validated one -- the same
+    # standing caveat every other threshold in this file carries.
+    #
+    # The closed set of analysis windows this milestone's own endpoints
+    # accept (item 4) -- deliberately a fixed, small vocabulary (not the
+    # open `1..3650` range `GET .../analytics/*` accepts) so "invalid
+    # window" is a real, testable 400, not merely a documented convention.
+    ENTERPRISE_INTELLIGENCE_ALLOWED_WINDOW_DAYS: list[int] = [7, 30, 90, 180]
+    ENTERPRISE_INTELLIGENCE_DEFAULT_WINDOW_DAYS: int = 30
+
+    # Period-over-period trend classification (item 6) --
+    # app/intelligence/enterprise_trend.py. The *combined* (current +
+    # previous period) count of the primary lagging metric (total
+    # INCIDENT events) must reach this many before a trend is classified
+    # at all -- fewer -> INSUFFICIENT_DATA, never a score built on noise.
+    # Above that floor, a percentage change at or beyond this fraction is
+    # DETERIORATING (increase) or IMPROVING (decrease); anything narrower
+    # is STABLE.
+    ENTERPRISE_TREND_MIN_COMBINED_EVENTS: int = 5
+    ENTERPRISE_TREND_CHANGE_THRESHOLD: float = 0.20
+
+    # Recurrence/pattern detection (item 8) --
+    # app/intelligence/recurrence.py. Occurrence-count bands for one
+    # (site, event_type) or (site, event_subtype) combination within the
+    # analysis window. A count of 1 is simply a single event, not a
+    # pattern -- classify_recurrence() below WATCH begins.
+    ENTERPRISE_RECURRENCE_WATCH_MIN: int = 2
+    ENTERPRISE_RECURRENCE_RECURRING_MIN: int = 3
+    ENTERPRISE_RECURRENCE_HIGH_MIN: int = 5
+
+    # Risk concentration (item 7) -- app/intelligence/concentration.py.
+    # A dimension (e.g. "which site") is only ranked at all once its
+    # total population reaches this floor -- a single-event "100%
+    # concentration" at one site is not statistically meaningful and must
+    # never be presented as such. Above that floor, one contributor's
+    # share of the total is banded into LOW/MODERATE/HIGH risk
+    # contribution at these two cut points.
+    ENTERPRISE_CONCENTRATION_MIN_POPULATION: int = 5
+    ENTERPRISE_CONCENTRATION_MODERATE_THRESHOLD: float = 0.20
+    ENTERPRISE_CONCENTRATION_HIGH_THRESHOLD: float = 0.50
+
     @property
     def sqlalchemy_database_uri(self) -> str:
         if self.DATABASE_URL:
