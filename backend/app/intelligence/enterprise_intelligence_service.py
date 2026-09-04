@@ -52,14 +52,19 @@ own docstring).
 
 **`actions_context` (item 18).** Purely factual counts from
 `SafetyAction` — never a claim like "these actions will reduce risk by
-X%", and this module creates no action of its own.
+X%", and this module creates no action of its own. Point-in-time
+filtered (Milestone 22A item 3 — `created_at <= as_of`, see
+`_actions_context()`), and `overdue_action_count` uses each action's own
+`completed_at`/`cancelled_at` transition timestamp rather than its
+current, always-mutable `status` to decide whether it was still open as
+of `as_of` (Milestone 22A item 5 — see `_terminal_as_of()`).
 """
 
 from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -96,6 +101,21 @@ from app.models.site import Site
 from app.predictions.spec import PREDICTION_ENTITY_TYPE
 
 _MAX_EVIDENCE_SAMPLE = 25
+
+
+def _as_utc(value: datetime) -> datetime:
+    """Normalize a possibly offset-naive `datetime` (SQLite does not
+    round-trip `tzinfo` the way PostgreSQL does, even through a
+    `DateTime(timezone=True)` column) to UTC-aware, so it can be safely
+    compared in Python against an always-aware `as_of`/`window_start`.
+    Every value this codebase ever writes to a timestamp column is
+    already UTC (`app.models.base.utcnow`) — this never reinterprets a
+    naive value in the wrong zone, only restores the label SQLite
+    dropped. Mirrors the identical, already-established pattern in
+    `app/intelligence/reliability.py::_as_utc()`,
+    `app/services/api_client_service.py`, `app/predictions/predictor.py`,
+    and others."""
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
 
 
 @dataclass
@@ -157,25 +177,69 @@ def _site_labels(db: Session, *, organization_id: uuid.UUID) -> dict[uuid.UUID, 
     return {site_id: name for site_id, name in rows}
 
 
+def _terminal_as_of(as_of: datetime, completed_at: datetime | None, cancelled_at: datetime | None) -> bool:
+    """Whether a `SafetyAction` had already reached a terminal state
+    (`COMPLETED`/`CANCELLED`) *as of* `as_of` — Milestone 22A item 5.
+    Uses `completed_at`/`cancelled_at`, which the service layer only
+    ever sets once, at the moment of that specific transition (see
+    `app/models/safety_action.py`'s own "Closure semantics" docstring),
+    never the current, always-mutable `status` column: `status` answers
+    "what is this action's state right now", which is the wrong
+    question for a historical `as_of` — an action completed yesterday
+    was still open as of last week, but its `status` column has no
+    memory of that. `completed_at <= as_of` / `cancelled_at <= as_of`
+    answers the question this milestone actually asks correctly, using
+    only fields already on the row (no `SafetyActionHistory` replay —
+    that would be a genuine redesign of this computation, not the
+    focused correction this milestone is)."""
+    if completed_at is not None and _as_utc(completed_at) <= as_of:
+        return True
+    if cancelled_at is not None and _as_utc(cancelled_at) <= as_of:
+        return True
+    return False
+
+
 def _actions_context(
     db: Session, *, organization_id: uuid.UUID, as_of: datetime, site_id: uuid.UUID | None
 ) -> ActionsContext:
-    clauses = [SafetyAction.organization_id == organization_id]
+    """Milestone 22A item 3: `created_at <= as_of` excludes any action
+    that did not yet exist as of the requested `as_of` — a historical
+    `GET .../enterprise?as_of=<a past date>` call must never surface an
+    action created afterward (see
+    `tests/test_enterprise_intelligence_service.py`'s regression test).
+    `open_action_count`/`high_priority_action_count` keep their original
+    "current `status`" definition (never flagged as incorrect — only
+    `overdue_action_count`'s reliance on `status` was, see
+    `_terminal_as_of()` above); both are still explicitly point-in-time
+    filtered by `created_at <= as_of` here.
+    """
+    clauses = [
+        SafetyAction.organization_id == organization_id,
+        SafetyAction.created_at <= as_of,
+    ]
     if site_id is not None:
         clauses.append(SafetyAction.site_id == site_id)
     rows = db.execute(
-        select(SafetyAction.status, SafetyAction.priority, SafetyAction.due_date).where(*clauses)
+        select(
+            SafetyAction.status,
+            SafetyAction.priority,
+            SafetyAction.due_date,
+            SafetyAction.completed_at,
+            SafetyAction.cancelled_at,
+        ).where(*clauses)
     ).all()
-    open_count = sum(1 for status, _, _ in rows if status == ActionStatus.OPEN)
-    overdue_count = sum(
-        1
-        for status, _, due_date in rows
-        if status not in ACTION_TERMINAL_STATUSES and due_date is not None and due_date < as_of
-    )
+    open_count = sum(1 for status, _, _, _, _ in rows if status == ActionStatus.OPEN)
     high_priority_count = sum(
         1
-        for status, priority, _ in rows
+        for status, priority, _, _, _ in rows
         if status not in ACTION_TERMINAL_STATUSES and priority in (ActionPriority.HIGH, ActionPriority.CRITICAL)
+    )
+    overdue_count = sum(
+        1
+        for _, _, due_date, completed_at, cancelled_at in rows
+        if due_date is not None
+        and _as_utc(due_date) < as_of
+        and not _terminal_as_of(as_of, completed_at, cancelled_at)
     )
     return ActionsContext(
         open_action_count=open_count,
@@ -230,13 +294,6 @@ def compute_enterprise_intelligence(
     window_start, _ = window_bounds(as_of, window_days)
     previous_start, previous_end = window_bounds(window_start, window_days)
 
-    current_events = list(
-        db.execute(
-            events_as_of(organization_id=organization_id, as_of=as_of, window_start=window_start, site_id=site_id)
-        )
-        .scalars()
-        .all()
-    )
     previous_events = list(
         db.execute(
             events_as_of(
@@ -246,6 +303,30 @@ def compute_enterprise_intelligence(
         .scalars()
         .all()
     )
+    # Milestone 22A correction: events_as_of()'s window_start filter is
+    # `>=` (shared, unchanged -- see app/intelligence/temporal.py; every
+    # other caller in this codebase relies on that inclusive lower
+    # bound, so it is never touched here). Fetched the same way, the
+    # current window's `window_start >= window_start` and the previous
+    # window's own `as_of <= window_start` overlap at exactly
+    # `event_time == window_start`, double-counting that one instant in
+    # both periods. The two windows are defined as non-overlapping,
+    # contiguous, adjacent periods -- current: `(window_start, as_of]`,
+    # previous: `(previous_start, window_start]` -- so the previous
+    # period's own inclusive upper bound is the single source of truth
+    # for that boundary instant; it is explicitly excluded from the
+    # current period here, never dropped from previous. This is a
+    # scoped filter local to this one current/previous comparison, not
+    # a change to events_as_of()'s own shared, reused semantics.
+    current_events = [
+        e
+        for e in db.execute(
+            events_as_of(organization_id=organization_id, as_of=as_of, window_start=window_start, site_id=site_id)
+        )
+        .scalars()
+        .all()
+        if _as_utc(e.event_time) > window_start
+    ]
 
     event_count = len(current_events)
     data_sufficiency = classify_data_sufficiency(event_count).value

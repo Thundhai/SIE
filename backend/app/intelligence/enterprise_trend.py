@@ -13,28 +13,28 @@ same?*
         current:  2026-08-03 -> 2026-09-01
         previous: 2026-07-04 -> 2026-08-02   (immediately preceding, equal length)
 
-**Boundary semantics (milestone item 4).** The current window is
-`(as_of - window_days, as_of]` (`app/intelligence/temporal.py::window_bounds()`,
-reused unchanged). The previous window is the same length, ending exactly
-where the current one starts: `(as_of - 2*window_days, as_of - window_days]`
-— computed as `window_bounds(window_start, window_days)`, i.e. calling the
-same, one function twice. The two windows are contiguous and
-non-overlapping by construction; a boundary event exactly at
-`as_of - window_days` (the shared edge) falls in the **previous** window
-only (`event_time <=` is the previous window's own `as_of`, and the
-current window's `window_start` is an exclusive lower bound via
-`event_time >= window_start` in `events_as_of()` — so `event_time ==
-as_of - window_days` satisfies `<=` for the previous window's `as_of` and
-also `>=` for the current window's `window_start`... to avoid double-
-counting that instant, the previous period is fetched using
-`events_as_of(as_of=window_start, ...)`, which is `event_time <=
-window_start`; combined with the current period's `event_time >=
-window_start`, an event landing exactly on the shared boundary is counted
-in **both** periods' underlying event lists at the pure-Python level —
-this is a deliberate, documented, tested edge case (an event is data, and
-"which side of midnight" is inherently ambiguous for an inclusive-both-
-ends boundary), not a silent bug. See
-`tests/test_enterprise_intelligence_temporal.py` for the exact assertion.
+**Boundary semantics (milestone item 4; corrected in Milestone 22A —
+see that milestone's own completion report).** The current window is
+`(as_of - window_days, as_of]`; the previous window is the same length,
+ending exactly where the current one starts:
+`(as_of - 2*window_days, as_of - window_days]` — both boundaries
+computed via `app/intelligence/temporal.py::window_bounds()`, called
+twice (`window_bounds(as_of, window_days)` then
+`window_bounds(window_start, window_days)`), never a second,
+independently-hand-written boundary calculation. The two windows are
+**strictly non-overlapping**: an event landing exactly on the shared
+edge (`event_time == as_of - window_days`) belongs to the **previous**
+period only. `events_as_of()`'s own `window_start` filter is `>=`
+(shared, unchanged — every other caller in this codebase relies on that
+inclusive lower bound), so
+`app/intelligence/enterprise_intelligence_service.py::compute_enterprise_intelligence()`
+applies one additional, scoped filter after fetching the current
+window's events (`event_time > window_start`) to exclude that shared
+edge from the current period — the previous period's own inclusive
+upper bound (`events_as_of(as_of=window_start, ...)`, i.e.
+`event_time <= window_start`) is its single source of truth. See
+`tests/test_enterprise_intelligence_service.py`'s exact-boundary test
+for the assertion.
 
 **Point-in-time correctness for the previous period (milestone item 3).**
 The previous period is fetched via

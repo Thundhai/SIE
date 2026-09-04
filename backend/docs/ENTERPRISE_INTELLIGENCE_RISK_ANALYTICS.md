@@ -83,6 +83,14 @@ the exact assertion (an event ingested one day after `as_of`, despite
 having occurred five days before it, contributes `0` to every
 indicator).
 
+**Actions (SIE Milestone 22A item 3).** `_actions_context()` applies the
+same discipline to `SafetyAction`: `created_at <= as_of` excludes any
+action that did not yet exist as of the requested `as_of` from every one
+of `actions_context`'s three counts — a historical
+`GET .../enterprise?as_of=<a past date>` call must never surface an
+action created afterward. See "Actions integration" below for
+`overdue_action_count`'s own additional correction.
+
 ## Analysis windows
 
 `settings.ENTERPRISE_INTELLIGENCE_ALLOWED_WINDOW_DAYS` (default `[7, 30,
@@ -111,12 +119,21 @@ stricter, already-established interpretation of point-in-time
 correctness this codebase uses everywhere, not a new rule invented for
 this milestone.
 
-An event landing exactly on the shared boundary (`event_time == T - N
-days`) is included in *both* windows' underlying event lists at the raw
-query level — documented, tested
-(`tests/test_enterprise_intelligence_service.py`), and treated as
-"which side of midnight" ambiguity inherent to any inclusive-both-ends
-boundary, not a bug.
+**The two windows are strictly non-overlapping (corrected in Milestone
+22A).** `events_as_of()`'s own `window_start` filter is `>=` — shared,
+unchanged, and relied on by every other caller in this codebase — so an
+event landing exactly on the shared boundary (`event_time == T - N
+days`) would satisfy both the current window's `>= window_start` and
+the previous window's `<= window_start` if each were fetched with no
+further adjustment. `compute_enterprise_intelligence()` applies one
+additional, scoped filter after fetching the current window's events
+(`event_time > window_start`) to exclude that shared instant from the
+current period; the previous period's own inclusive upper bound
+(`event_time <= window_start`) is its single source of truth. This is a
+filter local to this one current/previous comparison — `events_as_of()`
+itself is never modified. See
+`tests/test_enterprise_intelligence_service.py`'s exact-boundary test
+for the assertion.
 
 ## Indicators
 
@@ -361,11 +378,41 @@ separately-labeled fields — never combined into one opaque number.
 
 ## Actions integration
 
-`actions_context` reports purely factual counts from `SafetyAction`:
-`open_action_count`, `overdue_action_count` (not terminal, past its
-`due_date`), `high_priority_action_count` (not terminal,
+`actions_context` reports purely factual counts from `SafetyAction`,
+all point-in-time filtered by `created_at <= as_of` (see "Point-in-time
+semantics" above): `open_action_count` (current `status == OPEN`),
+`overdue_action_count` (past its `due_date`, not yet closed as of
+`as_of`), `high_priority_action_count` (current status not terminal,
 `HIGH`/`CRITICAL` priority). Never a claim like "these actions will
 reduce risk by X%"; this endpoint creates no action of its own.
+
+**`overdue_action_count`'s "not yet closed" check (corrected in
+Milestone 22A item 5).** The original implementation checked the
+action's *current* `status` column to decide whether it was still open
+— wrong for a historical `as_of`, because `status` only ever holds the
+action's state right now and has no memory of what it was at any
+earlier point in time. An action that is *currently* `COMPLETED` but was
+only completed a week after the requested `as_of` was genuinely still
+overdue as of that historical moment, and the original check silently
+excluded it. The fix (`_terminal_as_of()` in
+`app/intelligence/enterprise_intelligence_service.py`) instead compares
+`as_of` against the action's own `completed_at`/`cancelled_at`
+transition timestamp — each set exactly once, at the moment of that
+specific transition (see `app/models/safety_action.py`'s own "Closure
+semantics" docstring) — so "was this action still open as of `as_of`"
+is answered correctly using only fields already on the row.
+`open_action_count`/`high_priority_action_count` were not found to have
+this same defect (their definitions never depended on comparing a date
+against `as_of`) and keep their original "current `status`" meaning,
+now also point-in-time filtered by `created_at`. Full historical-status
+reconstruction via `SafetyActionHistory` replay was considered and
+deliberately not built — that would be a genuine redesign of this
+computation, not the focused correction this milestone is; it remains
+available future work if a stricter guarantee is ever needed for
+`open_action_count`/`high_priority_action_count` too. See
+`tests/test_enterprise_intelligence_service.py`'s
+`test_overdue_action_count_uses_completed_at_not_current_status` for the
+exact regression this closes.
 
 ## API
 
@@ -409,6 +456,16 @@ query parameter every other endpoint in this router already uses (see
   "database changes" section) — background jobs, scheduled
   recomputation, and historical snapshot storage are explicitly future
   work, not silently implied by anything in this document.
+* `open_action_count`/`high_priority_action_count` use each action's
+  *current* `status`/`priority` (point-in-time filtered only by
+  `created_at <= as_of`, not fully historically reconstructed) —
+  unlike `overdue_action_count` (corrected in Milestone 22A, see
+  "Actions integration"), a historical `as_of` query against either of
+  these two counts reflects today's status/priority for any action that
+  already existed by `as_of`, not necessarily what that status/priority
+  actually was at that historical moment. Full correctness would require
+  replaying `SafetyActionHistory`, deliberately out of scope for this
+  focused correction.
 
 ## What the score does not mean
 

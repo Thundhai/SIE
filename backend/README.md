@@ -3561,6 +3561,24 @@ every indicator/trend/recurrence/concentration rule, the risk formula
 and its weights, all sufficiency thresholds, and this milestone's own
 limitations.
 
+**Update (SIE Milestone 22A: Enterprise Intelligence Temporal & Metric
+Integrity Correction):** two integrity defects found in the initial
+Milestone 22 implementation are now fixed. (1) The current and previous
+comparison windows could double-count a single event landing exactly on
+their shared boundary; they are now strictly non-overlapping (see the
+doc's own "Boundary semantics" section). (2) `actions_context` had no
+point-in-time filtering at all (an action created after the requested
+`as_of` was still counted), and `overdue_action_count` decided whether
+an action was still open using its *current* `status` rather than its
+point-in-time-correct `completed_at`/`cancelled_at` transition
+timestamp — an action completed after `as_of` but before now was wrongly
+excluded even though it was genuinely overdue as of that historical
+moment. Both are fixed in
+`app/intelligence/enterprise_intelligence_service.py`; see the doc's
+"Point-in-time semantics" and "Actions integration" sections for the
+exact corrected rules, and `tests/test_enterprise_intelligence_service.py`
+for the regression tests.
+
 ### What this milestone deliberately does not add
 
 No autonomous intervention, no AI-generated corrective actions, no
