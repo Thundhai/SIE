@@ -3657,8 +3657,8 @@ milestone; it remains one analytical input a human assessor may consult,
 exposed read-only inside each assessment's own `intelligence_context`.
 
     Organization -> Site -> RiskAssessment (DRAFT -> IN_REVIEW -> APPROVED -> SUPERSEDED)
-        -> RiskAssessmentFinding (governed RiskArea, system evidence vs.
-                                   human assessor_notes, kept in separate columns)
+        -> RiskAssessmentFinding (governed ontology-concept risk area, system evidence
+                                   vs. human assessor_notes, kept in separate columns)
               -> RiskAssessmentControl (type/status/effectiveness)
               -> RiskAssessmentFindingEvidence (event/action/knowledge-document
                                                   references, or a computed
@@ -3688,10 +3688,35 @@ references — never duplicates — existing `SafetyAction`/
 See
 [`docs/RISK_ASSESSMENT_FOUNDATION_V0_1.md`](docs/RISK_ASSESSMENT_FOUNDATION_V0_1.md)
 for the full entity model, risk-matrix methodology and band thresholds,
-governed `RiskArea` vocabulary (referencing already-approved
-`OntologyConcept` rows and the pre-existing `SafetyEventType`/subtype
-vocabulary, never a duplicated one), controls/effectiveness semantics,
-versioning/lineage rules, and this milestone's own limitations.
+the governed risk-area taxonomy (see the Update below), controls/
+effectiveness semantics, versioning/lineage rules, and this milestone's
+own limitations.
+
+**Update (SIE Milestone 25A: Governed Risk-Area & Organization-Extensible
+Risk Taxonomy v0.1):** the closed `RiskArea` Python enum above has been
+**removed**. `RiskAssessmentFinding.risk_area_concept_id` now references
+a governed `app/models/ontology_concept.py::OntologyConcept` row
+directly — the same architecture Milestone 15 already built, reused
+rather than duplicated, extended with two small, additive fields:
+`organization_id` (nullable — `NULL` is SIE's own GLOBAL scope, unchanged;
+a real organization id is that organization's own extension of the
+ontology, governed by its own `ORG_ADMIN` rather than a platform
+administrator) and `is_risk_area_eligible` (a governed, explicit flag —
+not every governed concept is a risk area). SIE's original 11 risk areas
+are seeded, GLOBAL, `APPROVED`, risk-area-eligible concepts (migration
+0017, `app/risk_assessment/risk_area_ontology_seed.py`) — still fully
+usable, but no longer the limit of what SIE's taxonomy can express: an
+organization may introduce its own risk concept (e.g. `DROPPED_OBJECTS`)
+through the existing, unmodified ontology governance lifecycle, with no
+Python enum change and no migration. `resolve_risk_area_concept()`
+(`app/risk_assessment/risk_area_resolution.py`) is the one place a
+finding's concept reference is validated: it must be `APPROVED`,
+`is_risk_area_eligible`, and either GLOBAL or belong to the caller's own
+organization — never an arbitrary string accepted on faith. See
+[`docs/RISK_ASSESSMENT_FOUNDATION_V0_1.md`](docs/RISK_ASSESSMENT_FOUNDATION_V0_1.md)'s
+own "Risk areas" section and
+[`docs/SIE_ENTERPRISE_ONTOLOGY_V0_1.md`](docs/SIE_ENTERPRISE_ONTOLOGY_V0_1.md)'s
+own §13 for the full rationale.
 
 ### What this milestone deliberately does not add
 

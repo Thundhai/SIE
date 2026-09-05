@@ -11,17 +11,35 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timedelta, timezone
 
+import pytest
 from sqlalchemy import select
 
 from app.models.audit_log import AuditLog
+from app.models.ontology_concept import OntologyConcept
 from app.models.risk_assessment import RiskAssessment
 from app.services.api_client_service import api_client_service
 from app.services.permissions import OrganizationRole, Permission
 from tests.conftest import dev_auth_headers
-from tests.intelligence_test_helpers import make_org, make_org_member, make_safety_event, make_site
+from tests.intelligence_test_helpers import (
+    make_org,
+    make_org_member,
+    make_safety_event,
+    make_site,
+    seed_risk_area_ontology_concepts,
+)
 
 _URL = "/api/v1/risk-assessments"
 AS_OF = datetime.now(timezone.utc)
+
+
+@pytest.fixture(autouse=True)
+def _risk_area_concepts(db_session) -> dict[str, uuid.UUID]:
+    """SIE Milestone 25A: every risk-area-bearing finding in this file
+    now references a governed `OntologyConcept`, not a closed enum --
+    seed the same 11 GLOBAL concepts migration 0017 seeds on a real
+    database, autouse so no test in this file has to remember to. See
+    `tests/intelligence_test_helpers.py::seed_risk_area_ontology_concepts()`."""
+    return seed_risk_area_ontology_concepts(db_session)
 
 
 def _bearer(credential) -> dict:
@@ -51,8 +69,23 @@ def _create(client, headers, org_id, **overrides) -> dict:
     return response.json()
 
 
-def _finding_body(**overrides) -> dict:
-    body = {"risk_area": "VEHICLE_SAFETY", "title": "Repeated vehicle incidents"}
+def _risk_area_concept_id(db_session, concept_key: str = "VEHICLE_INCIDENT") -> str:
+    """SIE Milestone 25A: `risk_area` is now a governed
+    `OntologyConcept` reference, not a closed enum string -- resolves the
+    GLOBAL concept `seed_risk_area_ontology_concepts()` (autouse fixture
+    above) already seeded. Defaults to `VEHICLE_INCIDENT`, the concept
+    the old `RiskArea.VEHICLE_SAFETY` enum member mapped to (see
+    `app/risk_assessment/risk_area_ontology_seed.py`)."""
+    concept = db_session.execute(
+        select(OntologyConcept).where(
+            OntologyConcept.concept_key == concept_key, OntologyConcept.organization_id.is_(None)
+        )
+    ).scalar_one()
+    return str(concept.id)
+
+
+def _finding_body(db_session, **overrides) -> dict:
+    body = {"risk_area_concept_id": _risk_area_concept_id(db_session), "title": "Repeated vehicle incidents"}
     body.update(overrides)
     return body
 
@@ -262,7 +295,7 @@ def test_finding_with_a_rating_gets_the_deterministic_inherent_risk(client, db_s
 
     response = client.post(
         f"{_URL}/{assessment['id']}/findings?organization_id={org.id}",
-        json=_finding_body(likelihood=4, consequence=4),
+        json=_finding_body(db_session, likelihood=4, consequence=4),
         headers=headers,
     )
     assert response.status_code == 201
@@ -280,7 +313,7 @@ def test_finding_rejects_an_out_of_range_likelihood(client, db_session):
 
     response = client.post(
         f"{_URL}/{assessment['id']}/findings?organization_id={org.id}",
-        json=_finding_body(likelihood=6, consequence=4),
+        json=_finding_body(db_session, likelihood=6, consequence=4),
         headers=headers,
     )
     assert response.status_code == 422
@@ -294,7 +327,7 @@ def test_finding_requires_likelihood_and_consequence_together(client, db_session
 
     response = client.post(
         f"{_URL}/{assessment['id']}/findings?organization_id={org.id}",
-        json=_finding_body(likelihood=4),
+        json=_finding_body(db_session, likelihood=4),
         headers=headers,
     )
     assert response.status_code == 422
@@ -309,7 +342,7 @@ def test_finding_with_no_controls_has_an_empty_controls_list(client, db_session)
     headers = dev_auth_headers(manager.id)
     assessment = _create(client, headers, org.id)
     created = client.post(
-        f"{_URL}/{assessment['id']}/findings?organization_id={org.id}", json=_finding_body(), headers=headers
+        f"{_URL}/{assessment['id']}/findings?organization_id={org.id}", json=_finding_body(db_session), headers=headers
     ).json()
     assert created["controls"] == []
 
@@ -330,7 +363,7 @@ def test_control_effectiveness_effective(client, db_session):
     headers = dev_auth_headers(manager.id)
     assessment = _create(client, headers, org.id)
     finding = client.post(
-        f"{_URL}/{assessment['id']}/findings?organization_id={org.id}", json=_finding_body(), headers=headers
+        f"{_URL}/{assessment['id']}/findings?organization_id={org.id}", json=_finding_body(db_session), headers=headers
     ).json()
 
     response = _add_control(client, headers, org.id, assessment["id"], finding["id"], effectiveness="EFFECTIVE")
@@ -344,7 +377,7 @@ def test_control_effectiveness_partially_effective(client, db_session):
     headers = dev_auth_headers(manager.id)
     assessment = _create(client, headers, org.id)
     finding = client.post(
-        f"{_URL}/{assessment['id']}/findings?organization_id={org.id}", json=_finding_body(), headers=headers
+        f"{_URL}/{assessment['id']}/findings?organization_id={org.id}", json=_finding_body(db_session), headers=headers
     ).json()
 
     response = _add_control(client, headers, org.id, assessment["id"], finding["id"], effectiveness="PARTIALLY_EFFECTIVE")
@@ -357,7 +390,7 @@ def test_control_effectiveness_ineffective(client, db_session):
     headers = dev_auth_headers(manager.id)
     assessment = _create(client, headers, org.id)
     finding = client.post(
-        f"{_URL}/{assessment['id']}/findings?organization_id={org.id}", json=_finding_body(), headers=headers
+        f"{_URL}/{assessment['id']}/findings?organization_id={org.id}", json=_finding_body(db_session), headers=headers
     ).json()
 
     response = _add_control(client, headers, org.id, assessment["id"], finding["id"], effectiveness="INEFFECTIVE")
@@ -373,7 +406,7 @@ def test_control_effectiveness_defaults_to_not_assessed_never_conflated_with_ine
     headers = dev_auth_headers(manager.id)
     assessment = _create(client, headers, org.id)
     finding = client.post(
-        f"{_URL}/{assessment['id']}/findings?organization_id={org.id}", json=_finding_body(), headers=headers
+        f"{_URL}/{assessment['id']}/findings?organization_id={org.id}", json=_finding_body(db_session), headers=headers
     ).json()
 
     response = _add_control(client, headers, org.id, assessment["id"], finding["id"])
@@ -392,7 +425,7 @@ def test_residual_risk_is_an_independent_assessment_not_a_percentage_reduction(c
     assessment = _create(client, headers, org.id)
     finding = client.post(
         f"{_URL}/{assessment['id']}/findings?organization_id={org.id}",
-        json=_finding_body(likelihood=4, consequence=4),
+        json=_finding_body(db_session, likelihood=4, consequence=4),
         headers=headers,
     ).json()
     assert finding["inherent_risk_score"] == 16
@@ -419,7 +452,7 @@ def test_no_fabricated_percentage_reduction_field_exists(client, db_session):
     assessment = _create(client, headers, org.id)
     finding = client.post(
         f"{_URL}/{assessment['id']}/findings?organization_id={org.id}",
-        json=_finding_body(likelihood=4, consequence=4),
+        json=_finding_body(db_session, likelihood=4, consequence=4),
         headers=headers,
     ).json()
     assert not any("percent" in key.lower() or "reduction" in key.lower() for key in finding)
@@ -564,7 +597,7 @@ def test_evidence_linkage_to_an_event(client, db_session):
 
     response = client.post(
         f"{_URL}/{assessment['id']}/findings?organization_id={org.id}",
-        json=_finding_body(evidence=[{"evidence_type": "EVENT", "reference_id": str(event.id)}]),
+        json=_finding_body(db_session, evidence=[{"evidence_type": "EVENT", "reference_id": str(event.id)}]),
         headers=headers,
     )
     assert response.status_code == 201
@@ -586,7 +619,7 @@ def test_evidence_rejects_a_foreign_organizations_event(client, db_session):
 
     response = client.post(
         f"{_URL}/{assessment['id']}/findings?organization_id={org.id}",
-        json=_finding_body(evidence=[{"evidence_type": "EVENT", "reference_id": str(foreign_event.id)}]),
+        json=_finding_body(db_session, evidence=[{"evidence_type": "EVENT", "reference_id": str(foreign_event.id)}]),
         headers=headers,
     )
     assert response.status_code == 404
@@ -600,7 +633,7 @@ def test_evidence_intelligence_source_linkage_uses_a_reference_label_not_an_id(c
 
     response = client.post(
         f"{_URL}/{assessment['id']}/findings?organization_id={org.id}",
-        json=_finding_body(evidence=[{"evidence_type": "ANOMALY", "reference_label": "anomaly:incident_count"}]),
+        json=_finding_body(db_session, evidence=[{"evidence_type": "ANOMALY", "reference_label": "anomaly:incident_count"}]),
         headers=headers,
     )
     assert response.status_code == 201
@@ -617,7 +650,7 @@ def test_evidence_anomaly_type_rejects_a_reference_id(client, db_session):
 
     response = client.post(
         f"{_URL}/{assessment['id']}/findings?organization_id={org.id}",
-        json=_finding_body(evidence=[{"evidence_type": "ANOMALY", "reference_id": str(uuid.uuid4())}]),
+        json=_finding_body(db_session, evidence=[{"evidence_type": "ANOMALY", "reference_id": str(uuid.uuid4())}]),
         headers=headers,
     )
     assert response.status_code == 422
@@ -795,7 +828,7 @@ def test_event_evidence_isolation(client, db_session):
 
     response = client.post(
         f"{_URL}/{assessment['id']}/findings?organization_id={org_a.id}",
-        json=_finding_body(evidence=[{"evidence_type": "EVENT", "reference_id": str(foreign_event.id)}]),
+        json=_finding_body(db_session, evidence=[{"evidence_type": "EVENT", "reference_id": str(foreign_event.id)}]),
         headers=dev_auth_headers(manager_a.id),
     )
     assert response.status_code == 404
@@ -817,7 +850,7 @@ def test_action_evidence_isolation(client, db_session):
 
     response = client.post(
         f"{_URL}/{assessment['id']}/findings?organization_id={org_a.id}",
-        json=_finding_body(evidence=[{"evidence_type": "ACTION", "reference_id": str(foreign_action.id)}]),
+        json=_finding_body(db_session, evidence=[{"evidence_type": "ACTION", "reference_id": str(foreign_action.id)}]),
         headers=dev_auth_headers(manager_a.id),
     )
     assert response.status_code == 404

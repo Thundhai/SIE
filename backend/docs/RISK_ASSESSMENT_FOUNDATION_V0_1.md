@@ -107,28 +107,117 @@ An approved assessment's own rows (its findings, controls, evidence)
 are likewise never edited in place once the assessment itself is
 `APPROVED` — a substantive change always means opening a new version.
 
-## Risk areas — a governed, closed vocabulary
+## Risk areas — governed ontology concepts, not a closed enum
 
-`RiskArea` (`app/models/risk_assessment_enums.py`) is a closed Python
-enum, not a free-text field. Every member maps to an already-governed
-concept elsewhere in this codebase — never a duplicated or invented
-category:
+> **Corrected by SIE Milestone 25A: Governed Risk-Area &
+> Organization-Extensible Risk Taxonomy v0.1.** This milestone originally
+> represented risk areas as a closed `RiskArea` Python enum (11 members).
+> That enum has been **removed**. `RiskAssessmentFinding.risk_area_concept_id`
+> now references a governed `app/models/ontology_concept.py::OntologyConcept`
+> row directly — the same architecture Milestone 15 (SIE Enterprise
+> Ontology & Data Model Expansion v0.1) already built for the rest of the
+> platform's canonical vocabulary, reused here rather than duplicated.
+> **Risk Assessment risk areas are governed ontology concepts. SIE's
+> initial risk areas are seeded concepts, not the limits of SIE's
+> taxonomy — an organization may introduce additional risk concepts
+> through the existing ontology governance lifecycle, with no Python
+> enum change and no migration. Risk Assessment never accepts an
+> arbitrary, uncontrolled risk category.**
 
-| RiskArea | Source |
+### Eligibility: `is_risk_area_eligible`
+
+Not every governed `OntologyConcept` is a risk area — a concept proposed
+for an unrelated future purpose should never silently become selectable
+here. `is_risk_area_eligible` (a new, additive, governed boolean column
+on `OntologyConcept`) is the one flag that answers "may this concept be
+used as a Risk Assessment risk area at all" — set explicitly, at
+proposal time (`ontology_governance_service.propose_concept(...,
+is_risk_area_eligible=True)`), never inferred from a concept's `layer`
+and never a second, hard-coded list of "which concept_keys count" living
+outside the `ontology_concepts` table itself.
+
+### Global vs. organization-specific concepts
+
+`OntologyConcept.organization_id` is nullable: `NULL` is a **GLOBAL**
+concept (platform-wide, available to every organization — Milestone 15's
+original, still-default scope, governed by a true `PLATFORM_ADMIN`); a
+real organization id is an **organization-specific extension** of the
+ontology (visible, and usable as a risk area, only to that one
+organization — governed by that organization's own `GOVERNANCE_MANAGE`,
+typically its `ORG_ADMIN`). `ontology_governance_service.py`'s existing
+`propose_concept()`/`approve_concept()`/`reject_concept()`/
+`deprecate_concept()` lifecycle is entirely unchanged in shape — only
+the authorization scope (`organization_id`) now varies per concept
+instead of always being platform-wide.
+
+### Resolution and validation — never an arbitrary string
+
+A client creating a finding supplies `risk_area_concept_id` (a UUID, not
+a free-text category) — `app/risk_assessment/risk_area_resolution.py::
+resolve_risk_area_concept()` is the one place this is resolved and
+validated, before a finding is ever created:
+
+  * the concept must exist and be either GLOBAL or belong to the
+    caller's own organization (tenant isolation — a foreign
+    organization's concept is `404`, indistinguishable from one that
+    does not exist at all);
+  * the concept must be `APPROVED` (`PROPOSED`/`REJECTED`/`DEPRECATED`
+    are all rejected with `422`);
+  * the concept must be `is_risk_area_eligible`.
+
+### SIE's initial 11 risk areas
+
+`app/risk_assessment/risk_area_ontology_seed.py` declares the 11
+original risk areas as GLOBAL, `APPROVED`, `is_risk_area_eligible`
+concepts — seeded by migration 0017 itself (not a separate, optional
+artifact-application step), so a completely fresh database has all 11
+usable immediately after `alembic upgrade head`:
+
+| Original risk area | Ontology scope (`layer` / `parent_domain` / `concept_key`) |
 |---|---|
-| `WORKING_AT_HEIGHT`, `PPE_COMPLIANCE`, `ELECTRICAL_SAFETY`, `ENVIRONMENTAL`, `LIFTING_OPERATIONS`, `EQUIPMENT_SAFETY`, `FIRE_SAFETY`, `EMERGENCY_PREPAREDNESS` | Identical strings to the `observation_topic`-layer `OntologyConcept.concept_key` rows already approved by the SIE Enterprise Ontology & Data Model Expansion v0.1 milestone (`config/enterprise_ontology_concepts_v1.json`) |
-| `PROCEDURE_VIOLATION` | Identical to the `event_subtype`-layer `OntologyConcept` row of the same key |
-| `INCIDENT_SAFETY`, `VEHICLE_SAFETY` | Grounded in the pre-existing, canonical `SafetyEventType.INCIDENT` event type and the `VEHICLE_INCIDENT` subtype already relied on throughout `app/intelligence/enterprise_indicators.py` since Milestone 22 |
+| `WORKING_AT_HEIGHT`, `PPE_COMPLIANCE`, `ELECTRICAL_SAFETY`, `ENVIRONMENTAL`, `LIFTING_OPERATIONS`, `EQUIPMENT_SAFETY`, `FIRE_SAFETY`, `EMERGENCY_PREPAREDNESS` | `observation_topic` / `OBSERVATION` / (same key) — already governed by `config/enterprise_ontology_concepts_v1.json`, now additionally flagged `is_risk_area_eligible` |
+| `PROCEDURE_VIOLATION` | `event_subtype` / `OBSERVATION` / `PROCEDURE_VIOLATION` — likewise already governed, now flagged eligible |
+| `INCIDENT_SAFETY` | `event_type` / `None` / `INCIDENT` — backfilled: this pre-existing canonical `SafetyEventType` vocabulary predates `OntologyConcept` entirely and had no governed row until this milestone |
+| `VEHICLE_SAFETY` | `event_subtype` / `INCIDENT` / `VEHICLE_INCIDENT` — backfilled for the identical reason |
 
-`RiskArea` is a static enum rather than a live query against
-`ontology_concepts` deliberately: applying that artifact is a separate,
-explicit, auditable operation
-(`app/services/ontology_concept_artifact_service.py`) a fresh database
-is not guaranteed to have run, and hard-coupling assessment creation to
-it would make this milestone depend on an operational step outside its
-own control — as well as edge toward "a new ontology engine" (out of
-scope). Every value here is still identical to, and traceable back to,
-a real governed concept.
+The last two rows are this milestone's own explicit answer to "if any
+current value has no valid corresponding governed concept, stop and
+report the mismatch rather than silently inventing one": both were
+genuinely missing governed rows, documented and backfilled as the
+smallest additive extension, never silently reinterpreted.
+
+### Historical integrity
+
+`RiskAssessmentFinding` stores `risk_area_concept_id` (an immutable FK,
+never repointed) and `risk_area_ontology_version` (a snapshot of
+`OntologyConcept.ontology_version` at the moment the finding was
+created). A concept's `ontology_version` is, under the existing
+governance lifecycle, set exactly once at approval and never modified
+again — so this snapshot is defense in depth, not a workaround for a
+value that changes today. What *can* change after a finding is created
+is a concept's `status` (`APPROVED -> DEPRECATED`); deprecating a
+concept never retroactively touches a finding that already referenced
+it while it was `APPROVED` — the historical finding still answers
+"which governed concept, at what version, did this refer to at the
+time" by simply reading its own `risk_area_concept_id`/
+`risk_area_ontology_version`, regardless of the concept's current status.
+A **new** finding, however, can no longer reference a `DEPRECATED`
+concept (`resolve_risk_area_concept()` rejects it with `422`).
+
+### Terminology integration, unchanged
+
+The existing flow (Milestones 15-16) is fully reused, never duplicated:
+
+```
+SOURCE TERMINOLOGY -> TERMINOLOGY MAPPING -> GOVERNED ONTOLOGY CONCEPT -> RISK ASSESSMENT
+```
+
+A source term (e.g. "DO", "Dropped Object", "Falling Object") is mapped,
+through the existing, unmodified `terminology_calibration_service.py`,
+onto a governed `OntologyConcept` — and *that* concept, once `APPROVED`
+and `is_risk_area_eligible`, is what a Risk Assessment finding may
+reference. This milestone builds no second, risk-assessment-specific
+terminology mapping mechanism.
 
 ## Findings
 
@@ -158,9 +247,12 @@ ANOMALY / PATTERN                    (already-computed, Milestone 23/24)
 `app/risk_assessment/candidate_generation.py` deterministically surfaces
 candidate findings from the existing intelligence engines — v0.1
 sources exactly `ANOMALOUS` anomalies and `RECURRING`/`HIGH_RECURRENCE`
-patterns, mapped to a `RiskArea` only where the mapping is unambiguous
-(e.g. `vehicle_incident_count` -> `VEHICLE_SAFETY`; a metric or subtype
-with no single clear risk area is skipped, never guessed). Associations,
+patterns, mapped to a governed risk-area concept only where the mapping
+is unambiguous (e.g. `vehicle_incident_count` -> the GLOBAL
+`VEHICLE_INCIDENT` concept; a metric or subtype with no single clear
+mapping, or whose mapped concept is not currently an `APPROVED`,
+`is_risk_area_eligible` GLOBAL concept, is skipped, never guessed —
+see "Risk areas" above). Associations,
 concentrations, indicators, and trend are still fully exposed via
 `intelligence_context` — nothing is hidden — but do not yet auto-draft a
 candidate in this milestone, a deliberate, documented, narrower initial
@@ -341,6 +433,15 @@ approve it. `PLATFORM_ADMIN` bypasses per-organization checks entirely,
 as it already does everywhere else in this codebase
 (`ALL_PERMISSIONS`).
 
+**`risk_assessment:write` never grants ontology governance (SIE
+Milestone 25A).** Being able to create/edit a risk assessment is not the
+same capability as being able to propose or approve an ontology concept
+(`governance:manage`) — an `HSE_ANALYST`/`HSE_MANAGER` can select and
+use any existing, `APPROVED`, risk-area-eligible concept, but cannot
+create a new organization-specific one. Only that organization's own
+`ORG_ADMIN` (or a true `PLATFORM_ADMIN`, for a GLOBAL concept) can govern
+the taxonomy itself — see "Risk areas" above.
+
 ## Audit trail
 
 Every create/update/submit/approve is written to the existing,
@@ -377,7 +478,8 @@ dedicated controls sub-resource exists (folded into the finding
 
 * Candidate generation (v0.1) sources only `ANOMALOUS` anomalies and
   `RECURRING`/`HIGH_RECURRENCE` patterns, and only where the metric/
-  subtype maps unambiguously to one `RiskArea`. Strong associations,
+  subtype maps unambiguously to one GLOBAL, governed risk-area concept.
+  Strong associations,
   notable concentrations, and indicator/trend signals are fully visible
   via `intelligence_context` but do not yet auto-draft a candidate
   finding — a deliberate, narrower initial scope, not an oversight.

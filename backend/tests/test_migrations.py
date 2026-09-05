@@ -65,7 +65,7 @@ def test_fresh_postgres_database_migrates_through_head_with_no_manual_interventi
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0016"
+            assert version == "0017"
 
             enum_types = {
                 row[0]
@@ -267,7 +267,7 @@ def test_downgrade_then_reupgrade_round_trips_cleanly(monkeypatch):
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0016"
+            assert version == "0017"
     finally:
         engine.dispose()
 
@@ -309,7 +309,7 @@ def test_intelligence_migration_downgrade_then_reupgrade_round_trips_cleanly(mon
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0016"
+            assert version == "0017"
 
             tables = {
                 row[0]
@@ -365,7 +365,7 @@ def test_predictive_modeling_migration_downgrade_then_reupgrade_round_trips_clea
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0016"
+            assert version == "0017"
 
             tables = {
                 row[0]
@@ -436,7 +436,7 @@ def test_governance_migration_downgrade_then_reupgrade_round_trips_cleanly(monke
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0016"
+            assert version == "0017"
 
             tables = {
                 row[0]
@@ -525,7 +525,7 @@ def test_enterprise_api_migration_downgrade_then_reupgrade_round_trips_cleanly(m
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0016"
+            assert version == "0017"
 
             tables = {
                 row[0]
@@ -633,7 +633,7 @@ def test_data_ingestion_migration_downgrade_then_reupgrade_round_trips_cleanly(m
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0016"
+            assert version == "0017"
 
             tables = {
                 row[0]
@@ -776,7 +776,7 @@ def test_real_enterprise_terminology_ontology_calibration_migration_downgrade_th
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0016"
+            assert version == "0017"
 
             tables = {
                 row[0]
@@ -851,7 +851,7 @@ def test_sie_enterprise_ontology_migration_downgrade_then_reupgrade_round_trips_
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0016"
+            assert version == "0017"
 
             tables = {
                 row[0]
@@ -882,9 +882,22 @@ def test_sie_enterprise_ontology_migration_downgrade_then_reupgrade_round_trips_
             assert "ontology_version" in concept_columns
             assert "proposed_by_user_id" in concept_columns
             assert "reviewer_user_id" in concept_columns
-            # Not org-scoped -- see app/models/ontology_concept.py's own
-            # "Deliberately NOT OrganizationScopedMixin" docstring note.
-            assert "organization_id" not in concept_columns
+            # SIE Milestone 25A (migration 0017) added a NULLABLE
+            # organization_id -- still not OrganizationScopedMixin (that
+            # mixin is NOT NULL); NULL remains the GLOBAL, platform-wide
+            # scope 0014 originally established. See
+            # app/models/ontology_concept.py's own docstring.
+            concept_org_id_column = next(
+                row
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name, is_nullable FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = 'ontology_concepts' "
+                        "AND column_name = 'organization_id'"
+                    )
+                ).all()
+            )
+            assert concept_org_id_column[1] == "YES"
     finally:
         engine.dispose()
 
@@ -934,7 +947,7 @@ def test_actions_and_intervention_migration_downgrade_then_reupgrade_round_trips
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0016"
+            assert version == "0017"
 
             tables = {
                 row[0]
@@ -1033,7 +1046,7 @@ def test_risk_assessment_migration_downgrade_then_reupgrade_round_trips_cleanly(
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0016"
+            assert version == "0017"
 
             tables = {
                 row[0]
@@ -1075,12 +1088,172 @@ def test_risk_assessment_migration_downgrade_then_reupgrade_round_trips_cleanly(
                 ).all()
             }
             assert "assessment_id" in finding_columns
-            assert "risk_area" in finding_columns
+            # SIE Milestone 25A: risk_area (a closed enum) was replaced by a
+            # governed ontology-concept reference -- see
+            # test_risk_assessment_ontology_taxonomy_migration_downgrade_then_reupgrade_round_trips_cleanly
+            # below for the dedicated 0017 round-trip coverage.
+            assert "risk_area" not in finding_columns
+            assert "risk_area_concept_id" in finding_columns
+            assert "risk_area_ontology_version" in finding_columns
             assert "candidate_status" in finding_columns
             assert "likelihood" in finding_columns
             assert "consequence" in finding_columns
             assert "inherent_risk_score" in finding_columns
             assert "residual_likelihood" in finding_columns
             assert "residual_risk_score" in finding_columns
+    finally:
+        engine.dispose()
+
+
+@requires_postgres
+def test_risk_assessment_ontology_taxonomy_migration_downgrade_then_reupgrade_round_trips_cleanly(monkeypatch):
+    """SIE Milestone 25A: Governed Risk-Area & Organization-Extensible Risk
+    Taxonomy v0.1 (migration 0017). Downgrading to 0016 must restore the
+    original `risk_area` native enum column on `risk_assessment_findings`
+    (correctly backfilled from the concept each existing finding's
+    `risk_area_concept_id` referenced) and remove `ontology_concepts.
+    organization_id`/`is_risk_area_eligible` -- with `risk_assessments`/
+    `safety_actions`/`ontology_concepts` themselves untouched either way.
+    Re-upgrading to head must recreate the Milestone 25A columns and
+    reseed the 11 governed risk-area concepts identically."""
+    engine = _fresh_schema_engine()
+    try:
+        monkeypatch.setattr("app.core.config.settings.DATABASE_URL", PG_TEST_DATABASE_URL)
+        config = _alembic_config()
+
+        command.upgrade(config, "head")
+
+        with engine.connect() as conn:
+            # A real finding exists at head, referencing a governed concept --
+            # proves the downgrade path below actually backfills real data,
+            # not merely an empty table.
+            conn.execute(
+                text(
+                    "INSERT INTO organizations (id, name, status, created_at, updated_at) "
+                    "VALUES (gen_random_uuid(), 'Migration Test Org', 'active', now(), now())"
+                )
+            )
+            org_id = conn.execute(text("SELECT id FROM organizations WHERE name = 'Migration Test Org'")).scalar_one()
+            concept_id = conn.execute(
+                text("SELECT id FROM ontology_concepts WHERE organization_id IS NULL AND concept_key = 'VEHICLE_INCIDENT'")
+            ).scalar_one()
+            assessment_id = conn.execute(
+                text(
+                    "INSERT INTO risk_assessments (id, organization_id, scope, title, status, lineage_id, version, "
+                    "assessment_date, as_of, window_days, methodology_version, created_at, updated_at) "
+                    "VALUES (gen_random_uuid(), :org_id, 'ORGANIZATION', 'Migration Test Assessment', 'DRAFT', "
+                    "gen_random_uuid(), 1, now(), now(), 30, 'risk-assessment-v1', now(), now()) RETURNING id"
+                ),
+                {"org_id": org_id},
+            ).scalar_one()
+            conn.execute(
+                text(
+                    "INSERT INTO risk_assessment_findings (id, organization_id, assessment_id, risk_area_concept_id, "
+                    "risk_area_ontology_version, title, source, status, created_at, updated_at) "
+                    "VALUES (gen_random_uuid(), :org_id, :assessment_id, :concept_id, 1, 'Migration test finding', "
+                    "'MANUAL', 'OPEN', now(), now())"
+                ),
+                {"org_id": org_id, "assessment_id": assessment_id, "concept_id": concept_id},
+            )
+            conn.commit()
+
+        command.downgrade(config, "0016")
+
+        with engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version == "0016"
+
+            # Untouched by 0017's downgrade.
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+                ).all()
+            }
+            assert "risk_assessments" in tables
+            assert "ontology_concepts" in tables
+            assert "safety_actions" in tables
+
+            concept_columns = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = 'ontology_concepts'"
+                    )
+                ).all()
+            }
+            assert "organization_id" not in concept_columns
+            assert "is_risk_area_eligible" not in concept_columns
+
+            finding_columns = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = 'risk_assessment_findings'"
+                    )
+                ).all()
+            }
+            assert "risk_area" in finding_columns
+            assert "risk_area_concept_id" not in finding_columns
+            assert "risk_area_ontology_version" not in finding_columns
+
+            # The real finding's risk_area was correctly backfilled from
+            # the concept it referenced (VEHICLE_INCIDENT -> VEHICLE_SAFETY).
+            risk_area = conn.execute(
+                text("SELECT risk_area FROM risk_assessment_findings WHERE title = 'Migration test finding'")
+            ).scalar_one()
+            assert risk_area == "VEHICLE_SAFETY"
+
+            enum_types = {row[0] for row in conn.execute(text("SELECT typname FROM pg_type WHERE typtype = 'e'")).all()}
+            assert "risk_area" in enum_types
+
+        command.upgrade(config, "head")
+
+        with engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version == "0017"
+
+            concept_columns = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = 'ontology_concepts'"
+                    )
+                ).all()
+            }
+            assert "organization_id" in concept_columns
+            assert "is_risk_area_eligible" in concept_columns
+
+            finding_columns = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = 'risk_assessment_findings'"
+                    )
+                ).all()
+            }
+            assert "risk_area" not in finding_columns
+            assert "risk_area_concept_id" in finding_columns
+            assert "risk_area_ontology_version" in finding_columns
+
+            eligible_count = conn.execute(
+                text("SELECT count(*) FROM ontology_concepts WHERE is_risk_area_eligible = TRUE AND organization_id IS NULL")
+            ).scalar_one()
+            assert eligible_count == 11
+
+            # The finding created before the downgrade correctly resolves
+            # back to VEHICLE_INCIDENT after the round trip.
+            concept_key = conn.execute(
+                text(
+                    "SELECT c.concept_key FROM risk_assessment_findings f "
+                    "JOIN ontology_concepts c ON c.id = f.risk_area_concept_id "
+                    "WHERE f.title = 'Migration test finding'"
+                )
+            ).scalar_one()
+            assert concept_key == "VEHICLE_INCIDENT"
     finally:
         engine.dispose()

@@ -9,42 +9,23 @@ which auto-creates the enum type — safe from migration 0005's
 enum-type-creation defect exactly like `safety_actions`' own columns
 already are; see that module's docstring).
 
-**`RiskArea` — a governed, closed vocabulary, not free text (item 6).**
-Every member maps to an already-established, real vocabulary elsewhere in
-this codebase — never an arbitrary new category invented for this
-milestone alone:
-
-  * `WORKING_AT_HEIGHT`, `PPE_COMPLIANCE`, `ELECTRICAL_SAFETY`,
-    `ENVIRONMENTAL`, `LIFTING_OPERATIONS`, `EQUIPMENT_SAFETY`,
-    `FIRE_SAFETY`, `EMERGENCY_PREPAREDNESS` — identical strings to the
-    `observation_topic`-layer `OntologyConcept.concept_key` rows the SIE
-    Enterprise Ontology & Data Model Expansion v0.1 milestone already
-    approved (`config/enterprise_ontology_concepts_v1.json`,
-    `parent_domain="OBSERVATION"`). Applying that artifact is a separate,
-    explicit, auditable operation (`app/services/ontology_concept_artifact_service.py`)
-    that a fresh database is not guaranteed to have run — so this
-    vocabulary is a static, closed Python enum whose *values* are
-    identical to those governed concept keys, rather than a live,
-    per-request database join against `ontology_concepts` (which would
-    make risk-assessment creation depend on an operational step outside
-    this milestone's own control, and would edge toward "a new ontology
-    engine" — explicitly out of scope, item 21/31).
-  * `PROCEDURE_VIOLATION` — identical to the `event_subtype`-layer
-    `OntologyConcept` row of the same key (also
-    `parent_domain="OBSERVATION"`), covering the milestone's own
-    "Procedure compliance" example risk area.
-  * `INCIDENT_SAFETY`, `VEHICLE_SAFETY` — grounded in the pre-existing,
-    canonical `SafetyEventType`/`event_subtype` vocabulary
-    (`app/models/enums.py::SafetyEventType.INCIDENT`, and the
-    `"VEHICLE_INCIDENT"` subtype already relied on throughout
-    `app/intelligence/enterprise_indicators.py::_vehicle()` since
-    Milestone 22) — this vocabulary layer *is* itself an ontology layer,
-    per `OntologyConcept`'s own docstring ("layer =
-    `event_type`/`event_subtype`"), just one that predates the
-    `OntologyConcept` table.
-
-No `RiskArea` member is a free-form string invented for this milestone
-alone; every one already existed, governed, elsewhere in this codebase.
+**`RiskArea` — removed (SIE Milestone 25A: Governed Risk-Area &
+Organization-Extensible Risk Taxonomy v0.1).** Milestone 25 originally
+represented risk areas as this closed Python enum (11 members, each
+mirroring an already-established concept key elsewhere in this
+codebase). Milestone 25A replaces it entirely:
+`RiskAssessmentFinding.risk_area_concept_id` now references a governed
+`OntologyConcept` row directly (`app/models/ontology_concept.py`) —
+SIE's original 11 risk areas remain fully usable (seeded, as GLOBAL,
+`is_risk_area_eligible=True` concepts, by migration 0017 — see
+`app/risk_assessment/risk_area_ontology_seed.py`), but an organization
+may now extend the taxonomy with its own governed concept (e.g.
+`DROPPED_OBJECTS`) with no Python enum change and no migration. See
+`app/risk_assessment/risk_area_resolution.py` for the one place a
+finding's `risk_area_concept_id` is validated, and
+`docs/RISK_ASSESSMENT_FOUNDATION_V0_1.md` for the full rationale. There
+is deliberately only one authoritative risk-area taxonomy left in this
+codebase (never this enum *and* `OntologyConcept` both).
 
 **Risk matrix vocabulary (items 9-10).** `RiskAssessmentRiskBand` uses
 the same LOW/MODERATE/HIGH/CRITICAL *words* `app/intelligence/enums.py::
@@ -94,24 +75,6 @@ class RiskAssessmentStatus(str, Enum):
     IN_REVIEW = "IN_REVIEW"
     APPROVED = "APPROVED"
     SUPERSEDED = "SUPERSEDED"
-
-
-class RiskArea(str, Enum):
-    """See module docstring — a governed, closed vocabulary referencing
-    already-established concepts, never a duplicate or arbitrary one
-    (item 6)."""
-
-    INCIDENT_SAFETY = "INCIDENT_SAFETY"
-    VEHICLE_SAFETY = "VEHICLE_SAFETY"
-    WORKING_AT_HEIGHT = "WORKING_AT_HEIGHT"
-    PPE_COMPLIANCE = "PPE_COMPLIANCE"
-    ELECTRICAL_SAFETY = "ELECTRICAL_SAFETY"
-    LIFTING_OPERATIONS = "LIFTING_OPERATIONS"
-    ENVIRONMENTAL = "ENVIRONMENTAL"
-    EQUIPMENT_SAFETY = "EQUIPMENT_SAFETY"
-    PROCEDURE_VIOLATION = "PROCEDURE_VIOLATION"
-    FIRE_SAFETY = "FIRE_SAFETY"
-    EMERGENCY_PREPAREDNESS = "EMERGENCY_PREPAREDNESS"
 
 
 class RiskAssessmentRiskBand(str, Enum):
@@ -282,7 +245,6 @@ __all__ = [
     "ControlType",
     "FindingSource",
     "FindingStatus",
-    "RiskArea",
     "RiskAssessmentRiskBand",
     "RiskAssessmentScope",
     "RiskAssessmentStatus",

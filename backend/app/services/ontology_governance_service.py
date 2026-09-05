@@ -12,25 +12,31 @@ rationale).
     APPROVED CANONICAL CONCEPT   -> DEPRECATED (deprecate_concept(),
                                      a later, separate, explicit step)
 
-**Authorization: platform-admin-only, not merely `GOVERNANCE_MANAGE`.**
-Every mutating function below calls `authorization_service.require(...,
-Permission.GOVERNANCE_MANAGE, organization_id=None)`. Passing
-`organization_id=None` is the deliberate mechanism here, not an
-oversight: `AuthorizationService.can()` grants a non-platform-admin
-caller nothing at all once `organization_id` is `None` (there is no
-membership to check permissions against), and grants a genuine
-`PLATFORM_ADMIN` every permission regardless of the `organization_id`
-argument. The net effect -- reusing 100% existing authorization code,
-zero new permission, zero backdoor -- is that **only a human
-`PLATFORM_ADMIN` may govern the ontology**, exactly the same rule
-`app/api/v1/knowledge.py` already enforces for writing GLOBAL knowledge
-("only a human PLATFORM_ADMIN may write GLOBAL knowledge... a machine
-client can never write GLOBAL knowledge at all" -- see that router's own
-docstring). An org's own `GOVERNANCE_MANAGE` holder (an `ORG_ADMIN`)
-cannot govern the ontology through this service, by design: the
-ontology is platform-wide, so no single organization's administrator
-should be able to change what every other tenant's data can be
-classified as.
+**Authorization: platform-admin-only for a GLOBAL concept; org-admin-only
+for an organization-specific one (SIE Milestone 25A).** Every mutating
+function below calls `authorization_service.require(..., Permission.
+GOVERNANCE_MANAGE, organization_id=<the concept's own organization_id>)`.
+For a GLOBAL concept (`organization_id=None`, Milestone 15's original and
+still-default scope) this is exactly the original mechanism, unchanged:
+`AuthorizationService.can()` grants a non-platform-admin caller nothing at
+all once `organization_id` is `None` (there is no membership to check
+permissions against), and grants a genuine `PLATFORM_ADMIN` every
+permission regardless of the `organization_id` argument -- so **only a
+human `PLATFORM_ADMIN` may govern the platform-wide ontology**, exactly
+the same rule `app/api/v1/knowledge.py` already enforces for writing
+GLOBAL knowledge. For an organization-specific concept
+(`organization_id=<some organization>`, Milestone 25A), the identical call
+now authorizes against that organization's own membership instead: an
+`ORG_ADMIN` of that organization (who already holds `GOVERNANCE_MANAGE`
+via `app.services.permissions.ROLE_PERMISSIONS`) may govern *that
+organization's own* concepts, while remaining unable to touch any other
+organization's or the GLOBAL ontology (`can()`'s own membership check
+already enforces this -- zero new authorization code, zero backdoor). A
+Risk Assessment `RISK_ASSESSMENT_WRITE` holder gains no ontology-
+governance capability whatsoever merely by being able to create
+assessments -- `RISK_ASSESSMENT_WRITE != GOVERNANCE_MANAGE`, two
+independent permissions (see `app/api/v1/risk_assessments.py`'s own
+docstring).
 
 **Never a backdoor around `terminology_calibration_service.py`.** This
 module creates and decides `OntologyConcept` rows only -- it never
@@ -175,10 +181,16 @@ def _require_concept(db: Session, *, concept_id: uuid.UUID) -> OntologyConcept:
     return concept
 
 
-def _require_platform_admin(db: Session, *, acting_user_id: uuid.UUID) -> None:
-    """Platform-wide governance -- see this module's own docstring for
-    exactly why `organization_id=None` is the mechanism, not a bug."""
-    authorization_service.require(db, user_id=acting_user_id, permission=_GOVERNANCE_PERMISSION, organization_id=None)
+def _require_governance_permission(
+    db: Session, *, acting_user_id: uuid.UUID, organization_id: uuid.UUID | None
+) -> None:
+    """Platform-wide governance when `organization_id is None`; that
+    organization's own governance when set -- see this module's own
+    docstring ("Authorization") for exactly why passing the concept's own
+    `organization_id` through, unchanged, is the entire mechanism."""
+    authorization_service.require(
+        db, user_id=acting_user_id, permission=_GOVERNANCE_PERMISSION, organization_id=organization_id
+    )
 
 
 def propose_concept(
@@ -190,21 +202,31 @@ def propose_concept(
     definition: str,
     justification: str,
     acting_user_id: uuid.UUID,
+    organization_id: uuid.UUID | None = None,
+    is_risk_area_eligible: bool = False,
 ) -> OntologyConcept:
-    """Creates a new `PROPOSED` concept. Requires platform-admin
-    (`GOVERNANCE_MANAGE`, `organization_id=None`) -- proposing is
-    already a deliberate administrative act here, never automatic and
-    never reachable from an ordinary ingestion request (contrast
+    """Creates a new `PROPOSED` concept. `organization_id=None` (the
+    default) proposes a GLOBAL, platform-wide concept and requires
+    platform-admin; `organization_id=<some organization>` (Milestone 25A)
+    proposes an organization-specific extension of the ontology and
+    requires that organization's own `GOVERNANCE_MANAGE` (typically its
+    `ORG_ADMIN`) -- see this module's own docstring. Proposing is already
+    a deliberate administrative act either way, never automatic and never
+    reachable from an ordinary ingestion request (contrast
     `TerminologyMappingDecision`'s own `REVIEW_CANDIDATE`, which *is*
     surfaced automatically by ingestion-time terminology review; an
     ontology *concept* has no such automatic surfacing path at all --
-    see this module's own docstring)."""
-    _require_platform_admin(db, acting_user_id=acting_user_id)
+    see this module's own docstring). `is_risk_area_eligible` (Milestone
+    25A) is a governed, explicit flag -- set here, at proposal, never
+    inferred from `layer` or from a hard-coded list of concept_keys (see
+    `app/models/ontology_concept.py`'s own docstring)."""
+    _require_governance_permission(db, acting_user_id=acting_user_id, organization_id=organization_id)
     _validate_concept_key(concept_key)
     _validate_layer_and_parent_domain(layer, parent_domain, concept_key)
 
     existing = db.execute(
         select(OntologyConcept).where(
+            OntologyConcept.organization_id == organization_id,
             OntologyConcept.layer == layer,
             OntologyConcept.parent_domain == parent_domain,
             OntologyConcept.concept_key == concept_key,
@@ -212,15 +234,16 @@ def propose_concept(
     ).scalar_one_or_none()
     if existing is not None:
         raise OntologyConceptConflictError(
-            f"A concept already exists at layer={layer!r} parent_domain={parent_domain!r} "
-            f"concept_key={concept_key!r} (id={existing.id}, status={existing.status}). "
-            "Never silently reused or reinterpreted -- a genuinely different definition needs a new concept_key."
+            f"A concept already exists at organization_id={organization_id!s} layer={layer!r} "
+            f"parent_domain={parent_domain!r} concept_key={concept_key!r} (id={existing.id}, "
+            f"status={existing.status}). Never silently reused or reinterpreted -- a genuinely "
+            "different definition needs a new concept_key."
         )
 
     concept = OntologyConcept(
-        layer=layer, parent_domain=parent_domain, concept_key=concept_key,
+        organization_id=organization_id, layer=layer, parent_domain=parent_domain, concept_key=concept_key,
         definition=definition, justification=justification,
-        status=OntologyConceptStatus.PROPOSED,
+        status=OntologyConceptStatus.PROPOSED, is_risk_area_eligible=is_risk_area_eligible,
         proposed_by_user_id=acting_user_id, proposed_at=datetime.now(timezone.utc),
     )
     db.add(concept)
@@ -229,8 +252,11 @@ def propose_concept(
 
     audit_service.log(
         db, action=AuditAction.ONTOLOGY_CONCEPT_PROPOSED, resource_type="OntologyConcept",
-        resource_id=concept.id, organization_id=None, user_id=acting_user_id,
-        metadata={"layer": layer, "parent_domain": parent_domain, "concept_key": concept_key},
+        resource_id=concept.id, organization_id=organization_id, user_id=acting_user_id,
+        metadata={
+            "layer": layer, "parent_domain": parent_domain, "concept_key": concept_key,
+            "is_risk_area_eligible": is_risk_area_eligible,
+        },
     )
     return concept
 
@@ -240,12 +266,13 @@ def approve_concept(
 ) -> OntologyConcept:
     """The one operation that makes a concept eligible for a future
     terminology-mapping decision to target (see `is_valid_concept()`).
-    Requires platform-admin. `ontology_version` must be explicit and
+    Requires platform-admin for a GLOBAL concept, or that organization's
+    own `GOVERNANCE_MANAGE` for an organization-specific one (see this
+    module's own docstring). `ontology_version` must be explicit and
     caller-supplied (never silently incremented) -- see
     `docs/SIE_ENTERPRISE_ONTOLOGY_V0_1.md`'s own "Versioning" section."""
-    _require_platform_admin(db, acting_user_id=acting_user_id)
-
     concept = _require_concept(db, concept_id=concept_id)
+    _require_governance_permission(db, acting_user_id=acting_user_id, organization_id=concept.organization_id)
     if concept.status != OntologyConceptStatus.PROPOSED:
         raise OntologyConceptStateError(
             f"Concept {concept_id} is {concept.status}, not PROPOSED -- only a proposed concept can be approved."
@@ -262,7 +289,7 @@ def approve_concept(
 
     audit_service.log(
         db, action=AuditAction.ONTOLOGY_CONCEPT_APPROVED, resource_type="OntologyConcept",
-        resource_id=concept.id, organization_id=None, user_id=acting_user_id,
+        resource_id=concept.id, organization_id=concept.organization_id, user_id=acting_user_id,
         metadata={
             "layer": concept.layer, "parent_domain": concept.parent_domain, "concept_key": concept.concept_key,
             "ontology_version": ontology_version,
@@ -274,10 +301,11 @@ def approve_concept(
 def reject_concept(db: Session, *, concept_id: uuid.UUID, acting_user_id: uuid.UUID, reason: str) -> OntologyConcept:
     """Rejects a `PROPOSED` concept -- it remains permanently
     not-part-of-the-ontology (never deleted, never silently reused for a
-    different concept later). Requires platform-admin."""
-    _require_platform_admin(db, acting_user_id=acting_user_id)
-
+    different concept later). Requires platform-admin for a GLOBAL
+    concept, or that organization's own `GOVERNANCE_MANAGE` for an
+    organization-specific one."""
     concept = _require_concept(db, concept_id=concept_id)
+    _require_governance_permission(db, acting_user_id=acting_user_id, organization_id=concept.organization_id)
     if concept.status != OntologyConceptStatus.PROPOSED:
         raise OntologyConceptStateError(
             f"Concept {concept_id} is {concept.status}, not PROPOSED -- only a proposed concept can be rejected."
@@ -292,7 +320,7 @@ def reject_concept(db: Session, *, concept_id: uuid.UUID, acting_user_id: uuid.U
 
     audit_service.log(
         db, action=AuditAction.ONTOLOGY_CONCEPT_REJECTED, resource_type="OntologyConcept",
-        resource_id=concept.id, organization_id=None, user_id=acting_user_id,
+        resource_id=concept.id, organization_id=concept.organization_id, user_id=acting_user_id,
         metadata={"layer": concept.layer, "parent_domain": concept.parent_domain, "concept_key": concept.concept_key, "reason": reason},
     )
     return concept
@@ -303,13 +331,16 @@ def deprecate_concept(db: Session, *, concept_id: uuid.UUID, acting_user_id: uui
     lifecycle step (never un-deprecated; a reconsidered concept gets a
     new `concept_key`, exactly like `TerminologyMappingDecision`'s own
     versioning discipline). A `DEPRECATED` concept is no longer eligible
-    for a *new* terminology-mapping decision to target
-    (`is_valid_concept()` excludes it) but nothing here retroactively
-    touches any decision or event that already used it. Requires
-    platform-admin."""
-    _require_platform_admin(db, acting_user_id=acting_user_id)
-
+    for a *new* terminology-mapping decision (`is_valid_concept()`
+    excludes it) or a *new* Risk Assessment finding
+    (`get_eligible_risk_area_concept()` excludes it) to target, but
+    nothing here retroactively touches any decision, event, or finding
+    that already used it (see `app/risk_assessment/risk_area_resolution.py`'s
+    own "historical integrity" docstring section). Requires platform-admin
+    for a GLOBAL concept, or that organization's own `GOVERNANCE_MANAGE`
+    for an organization-specific one."""
     concept = _require_concept(db, concept_id=concept_id)
+    _require_governance_permission(db, acting_user_id=acting_user_id, organization_id=concept.organization_id)
     if concept.status != OntologyConceptStatus.APPROVED:
         raise OntologyConceptStateError(
             f"Concept {concept_id} is {concept.status}, not APPROVED -- only an approved concept can be deprecated."
@@ -322,7 +353,7 @@ def deprecate_concept(db: Session, *, concept_id: uuid.UUID, acting_user_id: uui
 
     audit_service.log(
         db, action=AuditAction.ONTOLOGY_CONCEPT_DEPRECATED, resource_type="OntologyConcept",
-        resource_id=concept.id, organization_id=None, user_id=acting_user_id,
+        resource_id=concept.id, organization_id=concept.organization_id, user_id=acting_user_id,
         metadata={"layer": concept.layer, "parent_domain": concept.parent_domain, "concept_key": concept.concept_key, "reason": reason},
     )
     return concept
@@ -413,6 +444,34 @@ def list_concepts(
     return list(db.execute(query).scalars().all())
 
 
+def get_eligible_risk_area_concept(
+    db: Session, *, concept_id: uuid.UUID, organization_id: uuid.UUID
+) -> OntologyConcept | None:
+    """SIE Milestone 25A -- the one predicate answering "may `organization_id`
+    use this concept as a Risk Assessment risk area right now?" `None`
+    covers every reason no: the concept does not exist, it belongs to a
+    *different* organization (never GLOBAL, never this caller's own --
+    tenant isolation, item 10), it is not `APPROVED` (item 9 -- `PROPOSED`/
+    `REJECTED`/`DEPRECATED` are all excluded), or it was never flagged
+    `is_risk_area_eligible` (item 5 -- a plain, non-risk-area concept can
+    never be used here merely because it happens to be `APPROVED`). A
+    GLOBAL concept (`organization_id IS NULL`) is available to every
+    organization; an organization-specific concept is available only to
+    the organization that owns it (item 8). Deliberately mirrors
+    `is_valid_concept()`'s own shape, extended with the two axes
+    (tenant, eligibility) that function does not need."""
+    concept = db.get(OntologyConcept, concept_id)
+    if concept is None:
+        return None
+    if concept.organization_id is not None and concept.organization_id != organization_id:
+        return None
+    if concept.status != OntologyConceptStatus.APPROVED:
+        return None
+    if not concept.is_risk_area_eligible:
+        return None
+    return concept
+
+
 __all__ = [
     "InvalidOntologyConceptError",
     "OntologyConceptConflictError",
@@ -422,6 +481,7 @@ __all__ = [
     "deprecate_concept",
     "find_concepts_by_key",
     "get_concept_by_scope",
+    "get_eligible_risk_area_concept",
     "is_valid_concept",
     "list_concepts",
     "propose_concept",

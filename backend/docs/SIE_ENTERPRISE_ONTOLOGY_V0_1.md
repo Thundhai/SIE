@@ -522,6 +522,51 @@ Deliberately valid despite the name collision (different layer/namespace):
    would be ontology version 2, following the same governed
    `propose_concept()`/`approve_concept()` path.
 
+## 13. SIE Milestone 25A extension: organization-scoped concepts & risk-area eligibility
+
+Two small, additive extensions to this milestone's model, made when Risk
+Assessment (Milestone 25) was corrected to consume the governed ontology
+rather than a closed enum (`backend/docs/RISK_ASSESSMENT_FOUNDATION_V0_1.md`'s
+own "Risk areas" section has the full rationale; this section records
+only what changed here, in the ontology model/service itself). Neither
+extension reopens §4's 18 terminology decisions, the 3 approved
+mappings, the 15 rejected terms, or the frozen artifact — all of that is
+untouched.
+
+**`organization_id` (nullable).** `NULL` remains this document's own
+original GLOBAL scope, unchanged in every respect (still
+platform-admin-only, still §5's own authorization rule). A real
+organization id is a new, second scope: that organization's own
+extension of the ontology, visible and usable only by that organization,
+governed by that organization's own `GOVERNANCE_MANAGE` (its `ORG_ADMIN`,
+ordinarily) rather than a platform administrator — the *identical*
+`propose_concept()`/`approve_concept()`/`reject_concept()`/
+`deprecate_concept()` functions, unchanged in shape, now simply authorize
+against the concept's own `organization_id` instead of always `None`.
+This lets an organization introduce a concept SIE itself never seeded
+(e.g. `DROPPED_OBJECTS`) without a code change or a migration — see
+`app/risk_assessment/risk_area_ontology_seed.py` and
+`tests/test_risk_assessment_ontology_taxonomy.py` for the full,
+reproducible demonstration.
+
+**`is_risk_area_eligible` (boolean, default `False`).** A second,
+independent, governed flag: whether a concept may be used as a Risk
+Assessment risk area at all. Deliberately not inferred from `layer` (a
+risk area may legitimately sit at `event_type`, `event_subtype`, or
+`observation_topic` — see §3's own layer definitions) and never a
+second, hard-coded "which concept_keys count" list living outside this
+table. Set explicitly, at `propose_concept()` time; the ontology's own
+lifecycle and versioning rules (§5, §6) are otherwise entirely
+unaffected — a concept ineligible for Risk Assessment can still be
+`APPROVED` and used for whatever purpose it was originally proposed for.
+
+**Terminology integration is unchanged.** The flow this document's own
+§7 describes (`SOURCE TERMINOLOGY -> TERMINOLOGY MAPPING -> GOVERNED
+ONTOLOGY CONCEPT`) is exactly what Risk Assessment now sits on top of,
+one layer further: `GOVERNED ONTOLOGY CONCEPT -> RISK ASSESSMENT`. No
+second, risk-assessment-specific terminology mapping mechanism was
+built.
+
 ---
 
 *See the durable artifact,

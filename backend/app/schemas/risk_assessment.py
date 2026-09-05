@@ -22,7 +22,6 @@ from app.models.risk_assessment_enums import (
     ControlType,
     FindingSource,
     FindingStatus,
-    RiskArea,
     RiskAssessmentScope,
     RiskAssessmentStatus,
     RiskCandidateStatus,
@@ -124,11 +123,18 @@ class RiskAssessmentFindingCreate(BaseModel):
     `app/risk_assessment/candidate_generation.py`, automatically, at
     assessment creation (item 15's own "candidate ≠ approved risk"
     boundary: a human authoring a finding directly here is making an
-    assessment, not proposing a candidate for later review)."""
+    assessment, not proposing a candidate for later review).
+
+    `risk_area_concept_id` (SIE Milestone 25A) is the id of a governed
+    `OntologyConcept` -- never an arbitrary string assumed valid; see
+    `app/risk_assessment/risk_area_resolution.py::resolve_risk_area_concept()`,
+    the one place `app/api/v1/risk_assessments.py::create_finding()`
+    resolves and validates it (must be `APPROVED`, `is_risk_area_eligible`,
+    and either GLOBAL or belonging to this same organization)."""
 
     model_config = ConfigDict(extra="forbid")
 
-    risk_area: RiskArea
+    risk_area_concept_id: uuid.UUID
     title: str = Field(..., min_length=1, max_length=_TITLE_MAX_LENGTH)
     description: str | None = Field(default=None, max_length=_DESCRIPTION_MAX_LENGTH)
     assessor_notes: str | None = Field(default=None, max_length=_NOTES_MAX_LENGTH)
@@ -191,12 +197,32 @@ class RiskAssessmentFindingUpdate(BaseModel):
         return self
 
 
+class RiskAreaConceptRead(BaseModel):
+    """SIE Milestone 25A, item 18. Not built via `from_attributes` --
+    `OntologyConcept` has no `label`/`scope` attribute of its own (see
+    `app/api/v1/risk_assessments.py::_to_risk_area_concept_read()`, the
+    one place this is assembled from a finding's own `risk_area_concept`
+    relationship plus its own `risk_area_ontology_version` snapshot).
+    `label` is a deterministic, derived display string (title-cased
+    `concept_key`) -- not a second, persisted, hand-maintained field on
+    `OntologyConcept` (no existing SIE ontology response convention
+    defines one)."""
+
+    concept_id: uuid.UUID
+    concept_key: str
+    label: str
+    layer: str
+    parent_domain: str | None
+    ontology_version: int
+    scope: str  # "GLOBAL" | "ORGANIZATION" -- see OntologyConcept.is_global
+
+
 class RiskAssessmentFindingRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
     assessment_id: uuid.UUID
-    risk_area: RiskArea
+    risk_area: RiskAreaConceptRead
     title: str
     description: str | None
     system_analysis_summary: str | None

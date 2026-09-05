@@ -78,13 +78,13 @@ from app.models.risk_assessment import (
 )
 from app.models.risk_assessment_enums import (
     FindingSource,
-    RiskArea,
     RiskAssessmentScope,
     RiskAssessmentStatus,
     RiskCandidateStatus,
     RiskEvidenceType,
 )
 from app.risk_assessment.candidate_generation import generate_candidate_findings
+from app.risk_assessment.risk_area_resolution import resolve_risk_area_concept
 from app.schemas.enterprise_intelligence import (
     ConcentrationContributorRead,
     EnterpriseAnomalyRead,
@@ -96,6 +96,7 @@ from app.schemas.enterprise_intelligence import (
 )
 from app.schemas.risk_assessment import (
     IntelligenceContextRead,
+    RiskAreaConceptRead,
     RiskAssessmentCreate,
     RiskAssessmentDetailRead,
     RiskAssessmentFindingCreate,
@@ -157,6 +158,7 @@ def _get_owned_assessment_or_404(db: Session, *, organization_id: uuid.UUID, ass
         .where(RiskAssessment.id == assessment_id, RiskAssessment.organization_id == organization_id)
         .options(joinedload(RiskAssessment.findings).joinedload(RiskAssessmentFinding.controls))
         .options(joinedload(RiskAssessment.findings).joinedload(RiskAssessmentFinding.evidence))
+        .options(joinedload(RiskAssessment.findings).joinedload(RiskAssessmentFinding.risk_area_concept))
     ).unique().scalar_one_or_none()
     if assessment is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Risk assessment not found.")
@@ -173,7 +175,11 @@ def _get_owned_finding_or_404(
             RiskAssessmentFinding.assessment_id == assessment_id,
             RiskAssessmentFinding.organization_id == organization_id,
         )
-        .options(joinedload(RiskAssessmentFinding.controls), joinedload(RiskAssessmentFinding.evidence))
+        .options(
+            joinedload(RiskAssessmentFinding.controls),
+            joinedload(RiskAssessmentFinding.evidence),
+            joinedload(RiskAssessmentFinding.risk_area_concept),
+        )
     ).unique().scalar_one_or_none()
     if finding is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Finding not found.")
@@ -198,11 +204,31 @@ def _to_intelligence_context_read(result) -> IntelligenceContextRead:
     )
 
 
+def _to_risk_area_concept_read(finding: RiskAssessmentFinding) -> RiskAreaConceptRead:
+    """SIE Milestone 25A, item 18 -- assembled from the finding's own
+    `risk_area_concept` relationship plus its own
+    `risk_area_ontology_version` *snapshot* (never the concept's own,
+    possibly since-changed, live `ontology_version` -- see
+    `app/models/risk_assessment.py`'s own "historical integrity"
+    docstring section). `label` is derived, not persisted (see
+    `RiskAreaConceptRead`'s own docstring)."""
+    concept = finding.risk_area_concept
+    return RiskAreaConceptRead(
+        concept_id=concept.id,
+        concept_key=concept.concept_key,
+        label=concept.concept_key.replace("_", " ").title(),
+        layer=concept.layer,
+        parent_domain=concept.parent_domain,
+        ontology_version=finding.risk_area_ontology_version,
+        scope="GLOBAL" if concept.organization_id is None else "ORGANIZATION",
+    )
+
+
 def _to_finding_read(finding: RiskAssessmentFinding) -> RiskAssessmentFindingRead:
     return RiskAssessmentFindingRead(
         id=finding.id,
         assessment_id=finding.assessment_id,
-        risk_area=finding.risk_area,
+        risk_area=_to_risk_area_concept_read(finding),
         title=finding.title,
         description=finding.description,
         system_analysis_summary=finding.system_analysis_summary,
@@ -347,7 +373,8 @@ def create_assessment(
                 finding = RiskAssessmentFinding(
                     organization_id=organization_id,
                     assessment_id=assessment.id,
-                    risk_area=RiskArea(draft.risk_area),
+                    risk_area_concept_id=draft.risk_area_concept_id,
+                    risk_area_ontology_version=draft.risk_area_ontology_version,
                     title=draft.title,
                     description=draft.description,
                     system_analysis_summary=draft.system_analysis_summary,
@@ -580,12 +607,16 @@ def create_finding(
     assessment = _get_owned_assessment_or_404(db, organization_id=organization_id, assessment_id=assessment_id)
     require_editable(assessment)
     _validate_evidence_input(db, organization_id=organization_id, evidence_items=body.evidence)
+    risk_area_concept = resolve_risk_area_concept(
+        db, organization_id=organization_id, concept_id=body.risk_area_concept_id
+    )
 
     with assessment_mutation_transaction(db):
         finding = RiskAssessmentFinding(
             organization_id=organization_id,
             assessment_id=assessment.id,
-            risk_area=body.risk_area,
+            risk_area_concept_id=risk_area_concept.id,
+            risk_area_ontology_version=risk_area_concept.ontology_version,
             title=body.title,
             description=body.description,
             assessor_notes=body.assessor_notes,
@@ -615,7 +646,7 @@ def create_finding(
             assessment=assessment,
             user_id=context.user_id,
             caller_kind=context.kind,
-            metadata={"finding_id": str(finding.id), "risk_area": finding.risk_area.value},
+            metadata={"finding_id": str(finding.id), "risk_area_concept_id": str(finding.risk_area_concept_id)},
         )
         db.refresh(finding)
         result = _to_finding_read(finding)
