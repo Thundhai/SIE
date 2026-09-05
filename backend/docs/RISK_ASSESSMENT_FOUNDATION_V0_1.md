@@ -1,5 +1,17 @@
 # SIE Enterprise Risk Assessment Foundation v0.1
 
+> **Extended by SIE Milestone 26: Formal Enterprise Risk Assessment
+> Engine v0.2.** Layers the specific pieces a *formal* assessment record
+> needs on top of the architecture below, without redesigning any of it:
+> `assessment_type`/`reference` fields, a fourth, manual `ARCHIVED`
+> lifecycle state, `linked_action_id` (a finding's response, distinct
+> from an `ACTION` evidence reference — see "Findings"), inherent/
+> residual risk methodology-version snapshots (see "Risk matrix
+> methodology"), and a new, immutable `RiskAssessmentHistory` audit
+> trail dedicated to this domain. See each section's own "Milestone 26"
+> callout below for the specific change; `enterprise-risk-v1` is, again,
+> completely untouched.
+
 **SIE Milestone 25.** Moves SIE from risk *intelligence* (Milestones
 22-24: indicators, trend, patterns, anomalies, associations, and the
 deterministic `enterprise-risk-v1` score) into a structured risk
@@ -68,6 +80,8 @@ the API, or any stored row.
 
 ```
 DRAFT -> IN_REVIEW -> APPROVED -> SUPERSEDED
+  |          |            |
+  +----------+------------+--> ARCHIVED
 ```
 
 * **DRAFT** — fully editable (`PATCH /risk-assessments/{id}`, finding
@@ -79,6 +93,17 @@ DRAFT -> IN_REVIEW -> APPROVED -> SUPERSEDED
 * **SUPERSEDED** — historical only, reached automatically (never via a
   direct client call) when a *later* version in the same lineage is
   itself approved.
+* **ARCHIVED** *(SIE Milestone 26)* — historical only, terminal, reached
+  only via the one new, manually-invoked `POST .../{id}/archive`. Retires
+  an assessment that turned out not to be needed (from `DRAFT`/
+  `IN_REVIEW`) or one that was never superseded by a later version (from
+  `APPROVED`) — distinct from `SUPERSEDED`, which always means "a newer
+  version now exists in this lineage." A `SUPERSEDED` assessment can
+  never itself be archived (there is nothing left to retire — the
+  lineage already moved on). Gated on `risk_assessment:approve`, the
+  same, more-privileged permission `submit`/`approve` require, since
+  archiving is at least as consequential — it can retire an
+  already-`APPROVED` assessment.
 
 `is_allowed_assessment_transition()` (`app/models/risk_assessment_enums.py`)
 is the one source of truth for the matrix above — mirrors
@@ -219,6 +244,26 @@ and `is_risk_area_eligible`, is what a Risk Assessment finding may
 reference. This milestone builds no second, risk-assessment-specific
 terminology mapping mechanism.
 
+## Assessment identity fields
+
+*(SIE Milestone 26.)* Two additional `RiskAssessment` fields, both
+required at the API layer to state upfront why an assessment exists,
+never inferred after the fact:
+
+* `assessment_type` — a governed, native-enum classification of *why*
+  this assessment was performed: `BASELINE`/`PERIODIC`/
+  `INCIDENT_TRIGGERED`/`CHANGE_TRIGGERED`/`TARGETED`. Required on
+  create (existing pre-Milestone-26 rows are backfilled to `BASELINE`,
+  since no row could have declared a type that didn't yet exist). Not
+  automatically carried forward on supersession — like `title`, a
+  superseding version states its own `assessment_type` explicitly (a
+  `PERIODIC` baseline superseded by an `INCIDENT_TRIGGERED`
+  reassessment is a real, expected case).
+* `reference` — an optional, free-text external reference (e.g. an
+  organization's own `"RA-2026-0042"` numbering scheme). A pass-through
+  provenance field, exactly like `SafetyAction.external_reference` —
+  never interpreted or validated by SIE itself.
+
 ## Findings
 
 A `RiskAssessmentFinding` deliberately separates three kinds of content
@@ -275,6 +320,27 @@ No code path in this codebase computes a likelihood or consequence value
 from an anomaly's z-score, a pattern's occurrence count, or an
 association's correlation coefficient. That computation does not exist.
 
+### Linking a finding to its response action
+
+*(SIE Milestone 26.)* `RiskAssessmentFinding.linked_action_id` (nullable
+FK to `SafetyAction`, `ondelete='SET NULL'`) answers "what is the
+organization's actual response to this finding" — architecturally
+distinct from an `ACTION`-type `RiskAssessmentFindingEvidence` row, which
+answers a different question, "why does this finding exist" (an
+already-existing corrective action that evidences the hazard). The two
+are never conflated: a finding may cite an existing action as evidence
+*and separately* link to the action raised in response to it, and either,
+neither, or both may exist at once. Set/cleared via `PATCH
+.../findings/{finding_id}` (`{"linked_action_id": "<uuid>"}` to link,
+`{"linked_action_id": null}` to explicitly unlink) — validated with the
+identical tenant-isolation rule every other evidence reference already
+uses (`validate_action_reference()`; a foreign organization's action is
+`404`). Linking/unlinking each write their own dedicated
+`RiskAssessmentHistory` entry and `AuditLog` action (see "Audit trail"
+below) — distinct from a general "finding updated" event, so "was this
+finding ever linked to a response action, and when" is always a direct,
+unambiguous query rather than a diff over free-text change comments.
+
 ## Risk matrix methodology
 
 ```
@@ -308,6 +374,24 @@ consequence judgment. `enterprise-risk-v1` is a completely different
 computation (event-volume-weighted, 0-100, no human judgment involved)
 and is never used as, or substituted for, an inherent-risk rating
 anywhere in this codebase.
+
+### Methodology-version snapshots (historical integrity)
+
+*(SIE Milestone 26.)* Alongside the score/classification pair, rating a
+finding also snapshots `RiskRating.calculation_version` (today,
+`risk-assessment-v1`) onto the finding itself —
+`inherent_risk_methodology_version` when `likelihood`/`consequence` is
+set, `residual_risk_methodology_version` when
+`residual_likelihood`/`residual_consequence` is set. Both stay `NULL` on
+an unrated finding — never backfilled to a version that was never
+actually used to compute anything. This is the same "what did we
+actually calculate, and with which version of the methodology" guarantee
+`risk_area_ontology_version` already provides for the risk-area
+reference (see "Historical integrity" above): if `risk-assessment-v1` is
+ever superseded by a `risk-assessment-v2` (a changed band, a changed
+scale), an already-rated finding's own snapshot still answers "this was
+computed under v1" — regardless of what the *current* default
+calculation version is by the time anyone reads it back.
 
 ## Controls and effectiveness
 
@@ -446,9 +530,39 @@ the taxonomy itself — see "Risk areas" above.
 
 Every create/update/submit/approve is written to the existing,
 platform-wide `AuditLog` (`app/services/audit_service.py`) — no second
-audit-log system. New `AuditAction` members:
+audit-log system. `AuditAction` members:
 `RISK_ASSESSMENT_CREATED`/`_UPDATED`/`_SUBMITTED`/`_APPROVED`/
-`_SUPERSEDED`/`_FINDING_CREATED`/`_FINDING_UPDATED`.
+`_SUPERSEDED`/`_ARCHIVED` *(Milestone 26)*/`_FINDING_CREATED`/
+`_FINDING_UPDATED`/`_FINDING_RISK_RATED` *(Milestone 26; covers both an
+inherent and a residual rating change)*/`_FINDING_ACTION_LINKED`/
+`_FINDING_ACTION_UNLINKED` *(Milestone 26)*.
+
+### `RiskAssessmentHistory` — a domain-scoped record, not a second `AuditLog`
+
+*(SIE Milestone 26, item 9.)* A new, append-only,
+`OrganizationScopedMixin` table (`app/models/risk_assessment_history.py`)
+mirrors `SafetyActionHistory`'s own established Milestone 17 precedent
+exactly: one row per assessment- or finding-level change
+(`ASSESSMENT_CREATED`/`_UPDATED`/`_SUBMITTED`/`_APPROVED`/`_SUPERSEDED`/
+`_ARCHIVED`, `FINDING_CREATED`/`_UPDATED`/`_RISK_RATED`/
+`_RESIDUAL_RATED`/`_ACTION_LINKED`/`_ACTION_UNLINKED`), carrying
+`assessment_id`, an optional `finding_id`, `from_status`/`to_status`,
+`changed_by_user_id`/`changed_by_api_client_id`, `request_id`, and an
+optional free-text `comment`. `change_type` is a plain string (via the
+typo-guard `RiskAssessmentHistoryChangeType` convenience class), not a
+native enum — identical to `SafetyActionHistory.change_type`'s own
+reasoning: a fixed, closed vocabulary of change *kinds* internal to this
+codebase, never a client-facing governed value, so a native enum's
+migration overhead buys nothing here.
+
+**This is deliberately not a second `AuditLog`.** `AuditLog` is the
+platform-wide, cross-domain "what happened, who did it, from where"
+record every resource type already writes to; `RiskAssessmentHistory` is
+this domain's own, queryable "what changed on *this specific
+assessment/finding*, and in what order" timeline — the same relationship
+`SafetyActionHistory` already has with `AuditLog`. Every mutation in this
+domain writes to *both*, in the same transaction, never one without the
+other (see "Transaction integrity" below).
 
 ## API
 
@@ -459,20 +573,50 @@ GET    /api/v1/risk-assessments/{id}
 PATCH  /api/v1/risk-assessments/{id}
 POST   /api/v1/risk-assessments/{id}/submit
 POST   /api/v1/risk-assessments/{id}/approve
+POST   /api/v1/risk-assessments/{id}/archive      (SIE Milestone 26)
 GET    /api/v1/risk-assessments/{id}/findings
 POST   /api/v1/risk-assessments/{id}/findings
 PATCH  /api/v1/risk-assessments/{id}/findings/{finding_id}
 ```
 
-The first eight are the milestone's own named minimum. The ninth
-(`PATCH .../findings/{finding_id}`) is one deliberate addition beyond
-that list: without it, a system-generated candidate finding would have
-no path to ever be reviewed, rated, or given controls — which would
+The first eight (minus `archive`) are the Milestone 25 spec's own named
+minimum. `PATCH .../findings/{finding_id}` is one deliberate addition
+beyond that list: without it, a system-generated candidate finding would
+have no path to ever be reviewed, rated, or given controls — which would
 make the "candidate ≠ approved risk" architecture unreachable through
-this API. No "create new version"/"supersede" endpoint exists (folded
-into `POST /risk-assessments` via `supersedes_assessment_id`); no
-dedicated controls sub-resource exists (folded into the finding
-`PATCH`).
+this API. `POST .../{id}/archive` is Milestone 26's own one new route —
+the sole, manual, human-invoked path to `ARCHIVED` (see "Assessment
+lifecycle" above); every other transition already had a route. No
+"create new version"/"supersede" endpoint exists (folded into `POST
+/risk-assessments` via `supersedes_assessment_id`); no dedicated controls
+sub-resource exists (folded into the finding `PATCH`).
+
+## Idempotent creation
+
+*(SIE Milestone 26.)* `POST /risk-assessments` accepts an optional
+`Idempotency-Key` header, using the identical, already-established
+mechanism `POST /actions` (`app/core/idempotency.py`) already uses:
+replaying the same key with an identical request body returns the
+original `201` response verbatim rather than creating a second
+assessment; replaying the same key with a materially different body is a
+`409`. See "Transaction integrity" below for how this composes with the
+rest of the create path's own single transaction.
+
+## Transaction integrity
+
+*(SIE Milestone 26, item 9 — "the lesson from Milestone 17.")* Every
+mutating endpoint in this domain wraps its assessment/finding row
+changes, `RiskAssessmentHistory` entry/entries, `AuditLog` entry, and (for
+create) the `IdempotencyKey` response record in one transaction
+(`assessment_mutation_transaction()`, already the existing Milestone 25
+pattern — reused, not duplicated). A failure at any point — including
+one injected *after* an intermediate write has already flushed, such as
+the audit call failing after history has already been recorded — rolls
+back the entire transaction: no assessment, no finding, no history row,
+no audit row, and no idempotency record survive a partial failure. See
+`tests/test_risk_assessment_transaction_integrity.py` for the dedicated
+regression coverage (mirrors `tests/test_actions_transaction_integrity.py`'s
+own established pattern).
 
 ## Limitations
 

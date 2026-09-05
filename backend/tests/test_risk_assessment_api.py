@@ -55,6 +55,7 @@ def _create_body(**overrides) -> dict:
     body = {
         "scope": "ORGANIZATION",
         "title": "Enterprise Q3 Assessment",
+        "assessment_type": "BASELINE",
         "assessment_date": AS_OF.isoformat(),
         "as_of": AS_OF.isoformat(),
         "generate_candidates": False,

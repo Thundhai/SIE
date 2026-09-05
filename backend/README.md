@@ -3718,6 +3718,33 @@ own "Risk areas" section and
 [`docs/SIE_ENTERPRISE_ONTOLOGY_V0_1.md`](docs/SIE_ENTERPRISE_ONTOLOGY_V0_1.md)'s
 own §13 for the full rationale.
 
+**Update (SIE Milestone 26: Formal Enterprise Risk Assessment Engine
+v0.2):** turns the foundation above into a proper, auditable enterprise
+assessment capability, without redesigning any of it or touching
+`enterprise-risk-v1`. `RiskAssessment` gains a required, governed
+`assessment_type` (`BASELINE`/`PERIODIC`/`INCIDENT_TRIGGERED`/
+`CHANGE_TRIGGERED`/`TARGETED`) and an optional free-text `reference`. The
+lifecycle gains a fourth, terminal, manually-invoked state,
+`ARCHIVED` (`POST .../{id}/archive`, gated on `risk_assessment:approve`)
+— distinct from `SUPERSEDED`, which is always automatic. A finding may
+now `linked_action_id` a `SafetyAction` as its actual response,
+architecturally distinct from citing one as `ACTION` evidence. Rating a
+finding now also snapshots `inherent_risk_methodology_version`/
+`residual_risk_methodology_version` (today, `risk-assessment-v1`) —
+historical integrity for the risk-matrix version itself, mirroring what
+`risk_area_ontology_version` already does for the risk-area reference.
+A new, append-only `RiskAssessmentHistory` table (mirrors
+`SafetyActionHistory`'s own Milestone 17 precedent) records every
+assessment/finding-level change as its own queryable domain timeline —
+alongside, never instead of, the existing platform-wide `AuditLog`.
+`POST /risk-assessments` now supports an `Idempotency-Key` header
+(identical mechanism to `POST /actions`), and every mutating endpoint's
+row changes/history/audit/idempotency writes share one transaction
+boundary (the "lesson from Milestone 17": a failure partway through
+rolls back everything, never a partial write). See
+[`docs/RISK_ASSESSMENT_FOUNDATION_V0_1.md`](docs/RISK_ASSESSMENT_FOUNDATION_V0_1.md)'s
+own Milestone 26 callouts throughout for the full detail.
+
 ### What this milestone deliberately does not add
 
 No AI-generated final risk ratings, no automatic approval, no autonomous

@@ -106,6 +106,31 @@ too (set explicitly, at creation, to the parent's own
 tenant-scoped parent, `ON DELETE CASCADE`" precedent exactly: a
 finding/control/evidence row has no meaning independent of the
 assessment and organization it belongs to.
+
+**SIE Milestone 26: Formal Enterprise Risk Assessment Engine v0.2 —
+additive extensions.** `RiskAssessment` gains `assessment_type` (a
+governed, compact `AssessmentType` vocabulary, required at creation —
+why this assessment exists) and `reference` (an optional human-facing
+reference code/number, distinct from `title`). `RiskAssessmentStatus`
+gains `ARCHIVED` (see that enum's own docstring). `RiskAssessmentFinding`
+gains `linked_action_id` (an optional reference to an existing
+`SafetyAction` — a structured link, distinct from an `ACTION`-type
+`RiskAssessmentFindingEvidence` row, which records "this action is
+evidence a risk exists"; `linked_action_id` instead records "this action
+is the response to this finding") and
+`inherent_risk_methodology_version`/`residual_risk_methodology_version`
+(a snapshot of `app/risk_assessment/risk_matrix.py::
+RISK_ASSESSMENT_CALCULATION_VERSION` at the moment each rating was
+calculated — the same historical-integrity reasoning as
+`risk_area_ontology_version` above, applied to the risk-matrix
+methodology itself: if a future milestone ever introduces a
+`risk-assessment-v2` calculation, an already-rated finding's own
+methodology version stays exactly what it was rated under). See
+`app/models/risk_assessment_history.py` for the new, per-mutation
+history table this milestone also introduces (mirrors
+`SafetyActionHistory`'s own established pattern — see that model's own
+docstring for why this is distinct from, and never a replacement for,
+`AuditLog`).
 """
 
 from __future__ import annotations
@@ -119,6 +144,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base, OrganizationScopedMixin, TimestampMixin, UUIDPrimaryKeyMixin
 from app.models.risk_assessment_enums import (
+    AssessmentType,
     ControlEffectiveness,
     ControlStatus,
     ControlType,
@@ -150,6 +176,12 @@ class RiskAssessment(UUIDPrimaryKeyMixin, OrganizationScopedMixin, TimestampMixi
     )
 
     title: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Optional human-facing reference code/number (e.g. "RA-2026-014"),
+    # distinct from title -- SIE Milestone 26, item 1.
+    reference: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    assessment_type: Mapped[AssessmentType] = mapped_column(
+        SAEnum(AssessmentType, name="risk_assessment_type", native_enum=True), nullable=False
+    )
     status: Mapped[RiskAssessmentStatus] = mapped_column(
         SAEnum(RiskAssessmentStatus, name="risk_assessment_status", native_enum=True),
         nullable=False,
@@ -280,6 +312,22 @@ class RiskAssessmentFinding(UUIDPrimaryKeyMixin, OrganizationScopedMixin, Timest
     residual_consequence: Mapped[int | None] = mapped_column(Integer, nullable=True)
     residual_risk_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
     residual_risk_classification: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
+    # Snapshot of RISK_ASSESSMENT_CALCULATION_VERSION at the moment each
+    # rating was set -- historical integrity for the risk-matrix
+    # methodology itself (SIE Milestone 26, item 6). NULL until the
+    # corresponding rating is set.
+    inherent_risk_methodology_version: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    residual_risk_methodology_version: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
+    # --- Linked action (SIE Milestone 26, item 2) -----------------------------------------
+    # The response to this finding -- distinct from an ACTION-type
+    # RiskAssessmentFindingEvidence row, which records evidence a risk
+    # exists, not a response to it. Optional, settable/clearable via
+    # PATCH .../findings/{finding_id}.
+    linked_action_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("safety_actions.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
     assessment: Mapped["RiskAssessment"] = relationship(back_populates="findings")
     risk_area_concept: Mapped["OntologyConcept"] = relationship()  # noqa: F821

@@ -17,6 +17,7 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.models.risk_assessment_enums import (
+    AssessmentType,
     ControlEffectiveness,
     ControlStatus,
     ControlType,
@@ -177,6 +178,12 @@ class RiskAssessmentFindingUpdate(BaseModel):
     residual_consequence: int | None = Field(default=None, ge=1, le=5)
     controls: list[RiskControlCreate] | None = None
     evidence_add: list[RiskEvidenceCreate] | None = None
+    # SIE Milestone 26, item 2: the response to this finding. Settable to
+    # link, or explicitly `null` to unlink -- distinguished from "not
+    # supplied at all" via `model_fields_set`, the same pattern already
+    # used for every other field here (see
+    # `app/api/v1/risk_assessments.py::update_finding()`).
+    linked_action_id: uuid.UUID | None = None
 
     @field_validator("candidate_status")
     @classmethod
@@ -242,6 +249,9 @@ class RiskAssessmentFindingRead(BaseModel):
     residual_consequence: int | None
     residual_risk_score: int | None
     residual_risk_classification: str | None
+    inherent_risk_methodology_version: str | None
+    residual_risk_methodology_version: str | None
+    linked_action_id: uuid.UUID | None
     controls: list[RiskControlRead]
     evidence: list[RiskEvidenceRead]
     created_at: datetime
@@ -266,6 +276,8 @@ class RiskAssessmentCreate(BaseModel):
     scope: RiskAssessmentScope
     site_id: uuid.UUID | None = None
     title: str = Field(..., min_length=1, max_length=_TITLE_MAX_LENGTH)
+    reference: str | None = Field(default=None, max_length=100)
+    assessment_type: AssessmentType
     assessment_date: datetime
     as_of: datetime | None = None
     window_days: int | None = Field(default=None, gt=0)
@@ -295,6 +307,8 @@ class RiskAssessmentUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     title: str | None = Field(default=None, max_length=_TITLE_MAX_LENGTH)
+    reference: str | None = Field(default=None, max_length=100)
+    assessment_type: AssessmentType | None = None
     assessment_date: datetime | None = None
     as_of: datetime | None = None
     window_days: int | None = Field(default=None, gt=0)
@@ -331,6 +345,8 @@ class RiskAssessmentRead(BaseModel):
     scope: RiskAssessmentScope
     site_id: uuid.UUID | None
     title: str
+    reference: str | None
+    assessment_type: AssessmentType
     status: RiskAssessmentStatus
     lineage_id: uuid.UUID
     version: int

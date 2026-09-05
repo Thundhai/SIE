@@ -48,6 +48,7 @@ def _create_assessment(client, headers, org_id) -> dict:
     body = {
         "scope": "ORGANIZATION",
         "title": "Taxonomy Test Assessment",
+        "assessment_type": "BASELINE",
         "assessment_date": AS_OF.isoformat(),
         "as_of": AS_OF.isoformat(),
         "generate_candidates": False,

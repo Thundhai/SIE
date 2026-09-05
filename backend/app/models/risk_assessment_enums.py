@@ -64,17 +64,40 @@ class RiskAssessmentScope(str, Enum):
 
 class RiskAssessmentStatus(str, Enum):
     """The assessment lifecycle (item 4). `APPROVED` is not directly
-    editable and `SUPERSEDED` is historical-only/fully terminal — see
-    `is_allowed_assessment_transition()` below. `SUPERSEDED` is reached
-    only as the automatic side effect of a new version, in the same
-    lineage, being approved (`app/services/risk_assessment_service.py::
-    open_new_version()`) — there is no direct client-invoked "supersede"
-    operation in this milestone's own minimum API surface (item 22)."""
+    editable and `SUPERSEDED`/`ARCHIVED` are historical-only/fully
+    terminal — see `is_allowed_assessment_transition()` below.
+    `SUPERSEDED` is reached only as the automatic side effect of a new
+    version, in the same lineage, being approved
+    (`app/services/risk_assessment_service.py::open_new_version()`) —
+    there is no direct client-invoked "supersede" operation. `ARCHIVED`
+    (SIE Milestone 26: Formal Enterprise Risk Assessment Engine v0.2) is
+    the one manual, terminal retirement path — a human explicitly
+    archives an assessment (`POST .../{id}/archive`) at any
+    pre-`SUPERSEDED` stage, whether abandoning a draft that is no longer
+    needed or retiring a once-`APPROVED` assessment that was never
+    replaced by a new version. Distinct from `SUPERSEDED`: that always
+    means "a newer version exists"; `ARCHIVED` never implies one does."""
 
     DRAFT = "DRAFT"
     IN_REVIEW = "IN_REVIEW"
     APPROVED = "APPROVED"
     SUPERSEDED = "SUPERSEDED"
+    ARCHIVED = "ARCHIVED"
+
+
+class AssessmentType(str, Enum):
+    """SIE Milestone 26, item 1: a governed, compact vocabulary for why
+    an assessment exists at all — mirrors
+    `app.models.safety_action_enums.ActionType`'s own "intentionally
+    compact, not a complete framework" precedent. Required at creation
+    (never inferred), so a reader of the assessment list always knows
+    what triggered it without reading free-text `title`."""
+
+    BASELINE = "BASELINE"
+    PERIODIC = "PERIODIC"
+    INCIDENT_TRIGGERED = "INCIDENT_TRIGGERED"
+    CHANGE_TRIGGERED = "CHANGE_TRIGGERED"
+    TARGETED = "TARGETED"
 
 
 class RiskAssessmentRiskBand(str, Enum):
@@ -205,19 +228,23 @@ class RiskEvidenceType(str, Enum):
     OTHER = "OTHER"
 
 
-# --- Assessment lifecycle transition matrix (item 4, item 23) -------------------------
+# --- Assessment lifecycle transition matrix (item 4, item 23; ARCHIVED added Milestone 26) --
 
 _ALLOWED_ASSESSMENT_TRANSITIONS: dict[RiskAssessmentStatus, frozenset[RiskAssessmentStatus]] = {
-    RiskAssessmentStatus.DRAFT: frozenset({RiskAssessmentStatus.IN_REVIEW}),
-    RiskAssessmentStatus.IN_REVIEW: frozenset({RiskAssessmentStatus.APPROVED}),
+    RiskAssessmentStatus.DRAFT: frozenset({RiskAssessmentStatus.IN_REVIEW, RiskAssessmentStatus.ARCHIVED}),
+    RiskAssessmentStatus.IN_REVIEW: frozenset({RiskAssessmentStatus.APPROVED, RiskAssessmentStatus.ARCHIVED}),
     # APPROVED -> SUPERSEDED happens only as the automatic side effect of
     # approving a new version in the same lineage (see
     # app/services/risk_assessment_service.py::open_new_version()) --
     # still expressed here so is_allowed_assessment_transition() stays the
     # single source of truth for "is this transition ever legal at all",
     # exactly like app/models/safety_action_enums.py's own matrix.
-    RiskAssessmentStatus.APPROVED: frozenset({RiskAssessmentStatus.SUPERSEDED}),
+    # APPROVED -> ARCHIVED is the one manual, human-invoked retirement of
+    # an approved assessment that was never superseded by a new version
+    # (POST .../{id}/archive, SIE Milestone 26).
+    RiskAssessmentStatus.APPROVED: frozenset({RiskAssessmentStatus.SUPERSEDED, RiskAssessmentStatus.ARCHIVED}),
     RiskAssessmentStatus.SUPERSEDED: frozenset(),
+    RiskAssessmentStatus.ARCHIVED: frozenset(),
 }
 
 #: Only these two statuses may ever be mutated via PATCH (item 23:
@@ -240,6 +267,7 @@ def is_allowed_assessment_transition(current: str, target: str) -> bool:
 
 __all__ = [
     "ASSESSMENT_EDITABLE_STATUSES",
+    "AssessmentType",
     "ControlEffectiveness",
     "ControlStatus",
     "ControlType",

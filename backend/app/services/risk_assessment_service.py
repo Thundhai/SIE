@@ -31,6 +31,19 @@ distinguishing signal that would leak a foreign record's existence).
 non-persisted intelligence result — no existence check applies; the
 schema layer (`app/schemas/risk_assessment.py`) already forbids a
 `reference_id` for those types.
+
+**SIE Milestone 26: Formal Enterprise Risk Assessment Engine v0.2 —
+`record_history()`.** Every mutating route now also writes a
+`RiskAssessmentHistory` row (`app/models/risk_assessment_history.py`),
+in the exact same `assessment_mutation_transaction()` block as the
+assessment/finding row itself, its `AuditLog` entry, and (for
+`POST /risk-assessments`) the replayable `IdempotencyKey` response --
+"Assessment + Finding + History + Audit + Idempotency... a single
+transaction boundary" (item 9, "the lesson from Milestone 17"): a
+failure anywhere in that block rolls all of it back, never a partially
+-written mutation. `record_history()` mirrors
+`safety_action_service.record_history()`'s own `commit=False` contract
+exactly.
 """
 
 from __future__ import annotations
@@ -56,6 +69,7 @@ from app.models.risk_assessment_enums import (
     RiskEvidenceType,
     is_allowed_assessment_transition,
 )
+from app.models.risk_assessment_history import RiskAssessmentHistory, RiskAssessmentHistoryChangeType
 from app.models.safety_action import SafetyAction
 from app.risk_assessment.risk_matrix import calculate_risk
 from app.services.audit_service import AuditAction, audit_service
@@ -68,6 +82,7 @@ from app.services.safety_action_service import (
 __all__ = [
     "AuditAction",
     "MAX_TITLE_LENGTH",
+    "RiskAssessmentHistoryChangeType",
     "assessment_mutation_transaction",
     "audit_assessment_event",
     "calculate_and_set_inherent_risk",
@@ -76,6 +91,7 @@ __all__ = [
     "is_rated_finding",
     "normalize_as_utc",
     "open_new_version",
+    "record_history",
     "require_editable",
     "require_transition",
     "supersede_previous_version_if_any",
@@ -179,12 +195,16 @@ def audit_assessment_event(
 def calculate_and_set_inherent_risk(finding: RiskAssessmentFinding, *, likelihood: int, consequence: int) -> None:
     """The one place `inherent_risk_score`/`inherent_risk_classification`
     are ever set — always via `app/risk_assessment/risk_matrix.py`'s
-    deterministic calculation, never `enterprise-risk-v1` (item 10)."""
+    deterministic calculation, never `enterprise-risk-v1` (item 10).
+    Also snapshots `RISK_ASSESSMENT_CALCULATION_VERSION` onto the finding
+    (SIE Milestone 26, item 6 -- historical integrity for the
+    methodology itself, not just the concept it rates)."""
     rating = calculate_risk(likelihood, consequence)
     finding.likelihood = rating.likelihood
     finding.consequence = rating.consequence
     finding.inherent_risk_score = rating.score
     finding.inherent_risk_classification = rating.classification
+    finding.inherent_risk_methodology_version = rating.calculation_version
 
 
 def calculate_and_set_residual_risk(finding: RiskAssessmentFinding, *, likelihood: int, consequence: int) -> None:
@@ -199,6 +219,7 @@ def calculate_and_set_residual_risk(finding: RiskAssessmentFinding, *, likelihoo
     finding.residual_consequence = rating.consequence
     finding.residual_risk_score = rating.score
     finding.residual_risk_classification = rating.classification
+    finding.residual_risk_methodology_version = rating.calculation_version
 
 
 def require_editable(assessment: RiskAssessment) -> None:
@@ -251,6 +272,8 @@ def open_new_version(
         scope=previous.scope,
         site_id=previous.site_id,
         title=previous.title,
+        reference=previous.reference,
+        assessment_type=previous.assessment_type,
         status=RiskAssessmentStatus.DRAFT,
         lineage_id=previous.lineage_id,
         version=previous.version + 1,
@@ -275,7 +298,14 @@ def open_new_version(
     return new_version
 
 
-def supersede_previous_version_if_any(db: Session, assessment: RiskAssessment) -> RiskAssessment | None:
+def supersede_previous_version_if_any(
+    db: Session,
+    assessment: RiskAssessment,
+    *,
+    changed_by_user_id: uuid.UUID | None = None,
+    changed_by_api_client_id: uuid.UUID | None = None,
+    request_id: str | None = None,
+) -> RiskAssessment | None:
     """Called only when `assessment` is being approved (item 18): if it
     was opened via `open_new_version()` (`supersedes_id` set), the
     version it replaces transitions `APPROVED -> SUPERSEDED` at this
@@ -283,7 +313,10 @@ def supersede_previous_version_if_any(db: Session, assessment: RiskAssessment) -
     docstring for why. A no-op if `supersedes_id` is unset, or if the
     referenced version is somehow no longer `APPROVED` (defensive; the
     create-time check in `open_new_version()` already guarantees this in
-    the normal flow)."""
+    the normal flow). Records a `RiskAssessmentHistory` entry against the
+    *previous* version itself (SIE Milestone 26) -- the row a client
+    rendering that older assessment's own history would need to see why
+    it stopped being current."""
     if assessment.supersedes_id is None:
         return None
     previous = db.execute(
@@ -294,6 +327,17 @@ def supersede_previous_version_if_any(db: Session, assessment: RiskAssessment) -
     if previous is not None and previous.status == RiskAssessmentStatus.APPROVED:
         previous.status = RiskAssessmentStatus.SUPERSEDED
         db.flush()
+        record_history(
+            db,
+            assessment=previous,
+            change_type=RiskAssessmentHistoryChangeType.ASSESSMENT_SUPERSEDED,
+            from_status=RiskAssessmentStatus.APPROVED.value,
+            to_status=RiskAssessmentStatus.SUPERSEDED.value,
+            changed_by_user_id=changed_by_user_id,
+            changed_by_api_client_id=changed_by_api_client_id,
+            request_id=request_id,
+            comment=f"Superseded by version {assessment.version} (id={assessment.id}).",
+        )
     return previous
 
 
@@ -333,3 +377,48 @@ def is_rated_finding(finding: RiskAssessmentFinding) -> bool:
     approved risk" boundary) -- `candidate_status is None` (a manually
     authored finding) or `ACCEPTED` (a reviewed-and-accepted candidate)."""
     return finding.candidate_status is None or finding.candidate_status == RiskCandidateStatus.ACCEPTED
+
+
+def record_history(
+    db: Session,
+    *,
+    assessment: RiskAssessment,
+    change_type: str,
+    finding_id: uuid.UUID | None = None,
+    from_status: str | None = None,
+    to_status: str | None = None,
+    changed_by_user_id: uuid.UUID | None,
+    changed_by_api_client_id: uuid.UUID | None,
+    request_id: str | None,
+    comment: str | None = None,
+    commit: bool = False,
+) -> RiskAssessmentHistory:
+    """SIE Milestone 26, items 8-9. Mirrors
+    `safety_action_service.record_history()`'s own `commit=False`
+    contract exactly: every `app/api/v1/risk_assessments.py` call site
+    passes `commit=False` (the default here, unlike that function's own
+    `commit=True` default -- chosen because every call site in this
+    module's own domain is already inside `assessment_mutation_transaction()`,
+    with no call site left over that wants an independent commit), so
+    this only `db.add()`s and `db.flush()`s, leaving the enclosing
+    transaction to commit it together with the assessment/finding
+    mutation and `AuditLog` entry it belongs with."""
+    entry = RiskAssessmentHistory(
+        organization_id=assessment.organization_id,
+        assessment_id=assessment.id,
+        finding_id=finding_id,
+        change_type=change_type,
+        from_status=from_status,
+        to_status=to_status,
+        changed_by_user_id=changed_by_user_id,
+        changed_by_api_client_id=changed_by_api_client_id,
+        request_id=request_id,
+        comment=comment,
+    )
+    db.add(entry)
+    if commit:
+        db.commit()
+        db.refresh(entry)
+    else:
+        db.flush()
+    return entry

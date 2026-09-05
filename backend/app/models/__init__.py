@@ -37,6 +37,7 @@ from app.models.risk_assessment import (
     RiskAssessmentFinding,
     RiskAssessmentFindingEvidence,
 )
+from app.models.risk_assessment_history import RiskAssessmentHistory
 from app.models.safety_action import SafetyAction
 from app.models.safety_action_history import SafetyActionHistory
 from app.models.safety_event import SafetyEvent
@@ -75,6 +76,7 @@ __all__ = [
     "RiskAssessmentControl",
     "RiskAssessmentFinding",
     "RiskAssessmentFindingEvidence",
+    "RiskAssessmentHistory",
     "SafetyAction",
     "SafetyActionHistory",
     "SafetyEvent",
