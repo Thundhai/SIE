@@ -86,6 +86,21 @@ class Permission(str, Enum):
     GOVERNANCE_MANAGE = "governance:manage"
     USERS_READ = "users:read"
     USERS_MANAGE = "users:manage"
+    # SIE Milestone 25: Enterprise Risk Assessment Foundation v0.1, item
+    # 21. Checked against the existing vocabulary first, per that item's
+    # own instruction: creating/editing/approving a formal risk
+    # assessment is not "reading intelligence" (INTELLIGENCE_READ),
+    # "reading/writing raw event data" (SAFETY_DATA_*), "managing an
+    # intervention" (INTERVENTION_*), or "managing ontology/terminology
+    # governance" (GOVERNANCE_*) -- it is a genuinely new capability, so
+    # three new permissions are introduced here rather than overloading
+    # one of those. Approval is deliberately its own permission, more
+    # privileged than write (item 21's own instruction: "Approval should
+    # be more privileged than viewing" -- and, by the same reasoning
+    # applied one step further, more privileged than drafting too).
+    RISK_ASSESSMENT_READ = "risk_assessment:read"
+    RISK_ASSESSMENT_WRITE = "risk_assessment:write"
+    RISK_ASSESSMENT_APPROVE = "risk_assessment:approve"
 
 
 ALL_PERMISSIONS: frozenset[Permission] = frozenset(Permission)
@@ -118,6 +133,9 @@ ROLE_PERMISSIONS: dict[OrganizationRole, frozenset[Permission]] = {
             Permission.INTERVENTION_CLOSE,
             Permission.GOVERNANCE_READ,
             Permission.USERS_READ,
+            Permission.RISK_ASSESSMENT_READ,
+            Permission.RISK_ASSESSMENT_WRITE,
+            Permission.RISK_ASSESSMENT_APPROVE,
         }
     ),
     OrganizationRole.HSE_ANALYST: frozenset(
@@ -132,6 +150,8 @@ ROLE_PERMISSIONS: dict[OrganizationRole, frozenset[Permission]] = {
             Permission.PREDICTION_READ,
             Permission.INTERVENTION_READ,
             Permission.GOVERNANCE_READ,
+            Permission.RISK_ASSESSMENT_READ,
+            Permission.RISK_ASSESSMENT_WRITE,
         }
     ),
     OrganizationRole.HSE_USER: frozenset(
@@ -144,6 +164,7 @@ ROLE_PERMISSIONS: dict[OrganizationRole, frozenset[Permission]] = {
             Permission.INTELLIGENCE_READ,
             Permission.PREDICTION_READ,
             Permission.INTERVENTION_READ,
+            Permission.RISK_ASSESSMENT_READ,
         }
     ),
     OrganizationRole.VIEWER: frozenset(
@@ -156,6 +177,7 @@ ROLE_PERMISSIONS: dict[OrganizationRole, frozenset[Permission]] = {
             Permission.PREDICTION_READ,
             Permission.INTERVENTION_READ,
             Permission.GOVERNANCE_READ,
+            Permission.RISK_ASSESSMENT_READ,
         }
     ),
 }

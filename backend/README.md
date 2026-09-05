@@ -3646,6 +3646,64 @@ terminology changes, no snapshot/cache persistence (computed on demand
 for v0.1 — see the doc's own "Limitations" section for why and what a
 later milestone would add).
 
+## Enterprise Risk Assessment Architecture
+
+**SIE Milestone 25: Enterprise Risk Assessment Foundation v0.1.** Moves
+SIE from risk *intelligence* (indicators/trend/patterns/anomalies/
+associations/`enterprise-risk-v1`, Milestones 22-24) into a structured
+risk *assessment* capability sitting above all of it — without modifying
+any of it. `app/intelligence/risk_score.py` is untouched by this
+milestone; it remains one analytical input a human assessor may consult,
+exposed read-only inside each assessment's own `intelligence_context`.
+
+    Organization -> Site -> RiskAssessment (DRAFT -> IN_REVIEW -> APPROVED -> SUPERSEDED)
+        -> RiskAssessmentFinding (governed RiskArea, system evidence vs.
+                                   human assessor_notes, kept in separate columns)
+              -> RiskAssessmentControl (type/status/effectiveness)
+              -> RiskAssessmentFindingEvidence (event/action/knowledge-document
+                                                  references, or a computed
+                                                  anomaly/pattern/association label)
+
+A finding's `likelihood x consequence` inherent-risk rating
+(`risk-assessment-v1`, `app/risk_assessment/risk_matrix.py`) and its
+independently-assessed residual rating (never a percentage reduction
+mathematically derived from control effectiveness) are always a
+human/governed judgment — never derived from `enterprise-risk-v1`, an
+anomaly's z-score, or an association's correlation coefficient.
+`app/risk_assessment/candidate_generation.py` deterministically surfaces
+candidate findings (`IDENTIFIED`, no rating) from `ANOMALOUS` anomalies
+and `RECURRING`/`HIGH_RECURRENCE` patterns — a human must explicitly
+accept a candidate (`ACCEPTED`) and separately supply a rating before it
+becomes a real assessed risk; this is enforced at the API layer, not
+merely by convention (the milestone's own hardest architectural rule:
+"candidate ≠ approved risk").
+
+Three new permissions (`risk_assessment:read`/`:write`/`:approve`) —
+approval is more privileged than writing, which is more privileged than
+reading. Reuses `events_as_of()` for every temporal lookup (no second
+implementation), the existing `AuditLog` (no second audit system), and
+references — never duplicates — existing `SafetyAction`/
+`KnowledgeDocument` rows for evidence.
+
+See
+[`docs/RISK_ASSESSMENT_FOUNDATION_V0_1.md`](docs/RISK_ASSESSMENT_FOUNDATION_V0_1.md)
+for the full entity model, risk-matrix methodology and band thresholds,
+governed `RiskArea` vocabulary (referencing already-approved
+`OntologyConcept` rows and the pre-existing `SafetyEventType`/subtype
+vocabulary, never a duplicated one), controls/effectiveness semantics,
+versioning/lineage rules, and this milestone's own limitations.
+
+### What this milestone deliberately does not add
+
+No AI-generated final risk ratings, no automatic approval, no autonomous
+corrective actions, no causal inference, no predictive model replacing
+assessment, no HAZOP/Bow-Tie/LOPA/FMEA/JSA engine, no quantitative risk
+assessment or Monte Carlo simulation, no financial or environmental
+impact modelling, no automatic regulatory compliance determination, no
+LLM-generated assessment conclusions, no frontend Risk Assessment
+screen, no notifications, no workflow automation, no external
+regulatory databases, no new RAG engine, no new ontology engine.
+
 ## Enterprise Data Ingestion & Validation Foundation Architecture
 
     external system -> POST /api/v1/data/ingestion  (machine-client, safety_data:write)

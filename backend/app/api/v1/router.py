@@ -16,6 +16,7 @@ from app.api.v1 import (
     predictions,
     rag,
     retrieval,
+    risk_assessments,
     sites,
 )
 
@@ -34,5 +35,6 @@ api_router.include_router(events.router)
 api_router.include_router(actions.router)
 api_router.include_router(predictions.router)
 api_router.include_router(model_governance.router)
+api_router.include_router(risk_assessments.router)
 api_router.include_router(api_clients.router)
 api_router.include_router(auth.router)

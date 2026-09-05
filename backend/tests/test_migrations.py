@@ -65,7 +65,7 @@ def test_fresh_postgres_database_migrates_through_head_with_no_manual_interventi
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0015"
+            assert version == "0016"
 
             enum_types = {
                 row[0]
@@ -267,7 +267,7 @@ def test_downgrade_then_reupgrade_round_trips_cleanly(monkeypatch):
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0015"
+            assert version == "0016"
     finally:
         engine.dispose()
 
@@ -309,7 +309,7 @@ def test_intelligence_migration_downgrade_then_reupgrade_round_trips_cleanly(mon
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0015"
+            assert version == "0016"
 
             tables = {
                 row[0]
@@ -365,7 +365,7 @@ def test_predictive_modeling_migration_downgrade_then_reupgrade_round_trips_clea
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0015"
+            assert version == "0016"
 
             tables = {
                 row[0]
@@ -436,7 +436,7 @@ def test_governance_migration_downgrade_then_reupgrade_round_trips_cleanly(monke
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0015"
+            assert version == "0016"
 
             tables = {
                 row[0]
@@ -525,7 +525,7 @@ def test_enterprise_api_migration_downgrade_then_reupgrade_round_trips_cleanly(m
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0015"
+            assert version == "0016"
 
             tables = {
                 row[0]
@@ -633,7 +633,7 @@ def test_data_ingestion_migration_downgrade_then_reupgrade_round_trips_cleanly(m
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0015"
+            assert version == "0016"
 
             tables = {
                 row[0]
@@ -776,7 +776,7 @@ def test_real_enterprise_terminology_ontology_calibration_migration_downgrade_th
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0015"
+            assert version == "0016"
 
             tables = {
                 row[0]
@@ -851,7 +851,7 @@ def test_sie_enterprise_ontology_migration_downgrade_then_reupgrade_round_trips_
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0015"
+            assert version == "0016"
 
             tables = {
                 row[0]
@@ -934,7 +934,7 @@ def test_actions_and_intervention_migration_downgrade_then_reupgrade_round_trips
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0015"
+            assert version == "0016"
 
             tables = {
                 row[0]
@@ -978,5 +978,109 @@ def test_actions_and_intervention_migration_downgrade_then_reupgrade_round_trips
             assert "change_type" in history_columns
             assert "from_status" in history_columns
             assert "to_status" in history_columns
+    finally:
+        engine.dispose()
+
+
+@requires_postgres
+def test_risk_assessment_migration_downgrade_then_reupgrade_round_trips_cleanly(monkeypatch):
+    """0016's own downgrade/re-upgrade round trip (SIE Milestone 25:
+    Enterprise Risk Assessment Foundation v0.1) -- `risk_assessments`/
+    `risk_assessment_findings`/`risk_assessment_controls`/
+    `risk_assessment_finding_evidence` must disappear on downgrade to
+    0015 and reappear correctly on re-upgrade, with nothing 0015 or
+    earlier disturbed either way -- including `safety_actions`, proving
+    0016 never touches the table it sits alongside. Also exercises the
+    native-enum-type downgrade path for all ten new enum types (mirrors
+    0015's own precedent -- see 0016's own docstring note)."""
+    engine = _fresh_schema_engine()
+    try:
+        monkeypatch.setattr("app.core.config.settings.DATABASE_URL", PG_TEST_DATABASE_URL)
+        config = _alembic_config()
+
+        command.upgrade(config, "head")
+        command.downgrade(config, "0015")
+
+        with engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version == "0015"
+
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+                ).all()
+            }
+            assert "risk_assessments" not in tables
+            assert "risk_assessment_findings" not in tables
+            assert "risk_assessment_controls" not in tables
+            assert "risk_assessment_finding_evidence" not in tables
+            # Untouched by 0016's downgrade.
+            assert "safety_actions" in tables
+            assert "ontology_concepts" in tables
+
+            enum_types = {row[0] for row in conn.execute(text("SELECT typname FROM pg_type WHERE typtype = 'e'")).all()}
+            for name in (
+                "risk_assessment_scope", "risk_assessment_status", "risk_area", "risk_finding_source",
+                "risk_finding_status", "risk_candidate_status", "risk_control_type", "risk_control_status",
+                "risk_control_effectiveness", "risk_evidence_type",
+            ):
+                assert name not in enum_types
+            # Not dropped/redefined by this migration's downgrade.
+            assert "safety_action_status" in enum_types
+
+        command.upgrade(config, "head")
+
+        with engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version == "0016"
+
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+                ).all()
+            }
+            assert "risk_assessments" in tables
+            assert "risk_assessment_findings" in tables
+            assert "risk_assessment_controls" in tables
+            assert "risk_assessment_finding_evidence" in tables
+
+            assessment_columns = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = 'risk_assessments'"
+                    )
+                ).all()
+            }
+            assert "organization_id" in assessment_columns
+            assert "scope" in assessment_columns
+            assert "site_id" in assessment_columns
+            assert "status" in assessment_columns
+            assert "lineage_id" in assessment_columns
+            assert "version" in assessment_columns
+            assert "supersedes_id" in assessment_columns
+            assert "as_of" in assessment_columns
+            assert "methodology_version" in assessment_columns
+
+            finding_columns = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = 'risk_assessment_findings'"
+                    )
+                ).all()
+            }
+            assert "assessment_id" in finding_columns
+            assert "risk_area" in finding_columns
+            assert "candidate_status" in finding_columns
+            assert "likelihood" in finding_columns
+            assert "consequence" in finding_columns
+            assert "inherent_risk_score" in finding_columns
+            assert "residual_likelihood" in finding_columns
+            assert "residual_risk_score" in finding_columns
     finally:
         engine.dispose()

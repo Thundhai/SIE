@@ -107,6 +107,18 @@ OPENAPI_TAGS = [
             "See `docs/ACTIONS_DOMAIN.md`."
         ),
     },
+    {
+        "name": "risk-assessments",
+        "description": (
+            "Structured enterprise risk assessments sitting above (never replacing) the "
+            "deterministic `enterprise-risk-v1` score — governed risk areas, findings with "
+            "evidence, an explicit likelihood x consequence risk matrix (`risk-assessment-v1`), "
+            "controls and their effectiveness, an independently-assessed residual risk, and a "
+            "versioned DRAFT -> IN_REVIEW -> APPROVED -> SUPERSEDED lifecycle "
+            "(`risk_assessment:read`/`:write`/`:approve`). See "
+            "`docs/RISK_ASSESSMENT_FOUNDATION_V0_1.md`."
+        ),
+    },
 ]
 
 _MACHINE_BEARER_DESCRIPTION = (

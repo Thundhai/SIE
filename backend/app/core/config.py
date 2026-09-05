@@ -520,6 +520,30 @@ class Settings(BaseSettings):
     # always, never scaling with event volume or organization size, so no
     # additional bound is needed (item 19's own "if required" caveat).
 
+    # SIE Milestone 25: Enterprise Risk Assessment Foundation v0.1 (see
+    # backend/docs/ENTERPRISE_INTELLIGENCE_RISK_ANALYTICS.md's own
+    # "Risk assessment methodology" section). Governs
+    # app/risk_assessment/risk_matrix.py -- the deterministic
+    # likelihood x consequence -> risk-band calculation applied to both
+    # inherent and residual risk (item 9's own worked example: 5x5=25,
+    # 1x1=1). Both dimensions are a governed 1-5 integer scale (item 9);
+    # these three thresholds are the upper (inclusive) bound of
+    # LOW/MODERATE/HIGH -- anything above HIGH_MAX is CRITICAL.
+    # Documented *initial* defaults, not a claim that this is universally
+    # applicable to every client's own corporate risk matrix (item 9's
+    # own explicit caveat).
+    RISK_ASSESSMENT_LOW_MAX: int = 4
+    RISK_ASSESSMENT_MODERATE_MAX: int = 9
+    RISK_ASSESSMENT_HIGH_MAX: int = 16
+    RISK_ASSESSMENT_METHODOLOGY_VERSION: str = "risk-assessment-v1"
+    # The default analysis window used to compute an assessment's
+    # read-only, never-persisted `intelligence_context` (item 26) --
+    # reuses ENTERPRISE_INTELLIGENCE_DEFAULT_WINDOW_DAYS's own identical
+    # default (30) for consistency, but kept as its own setting since a
+    # risk assessment's window is conceptually independent of the
+    # enterprise intelligence endpoints' own.
+    RISK_ASSESSMENT_DEFAULT_WINDOW_DAYS: int = 30
+
     @property
     def sqlalchemy_database_uri(self) -> str:
         if self.DATABASE_URL:

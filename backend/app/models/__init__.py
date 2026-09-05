@@ -31,6 +31,12 @@ from app.models.organization import Organization
 from app.models.organization_membership import OrganizationMembership
 from app.models.prediction import Prediction
 from app.models.prediction_outcome import PredictionOutcome
+from app.models.risk_assessment import (
+    RiskAssessment,
+    RiskAssessmentControl,
+    RiskAssessmentFinding,
+    RiskAssessmentFindingEvidence,
+)
 from app.models.safety_action import SafetyAction
 from app.models.safety_action_history import SafetyActionHistory
 from app.models.safety_event import SafetyEvent
@@ -65,6 +71,10 @@ __all__ = [
     "OrganizationMembership",
     "Prediction",
     "PredictionOutcome",
+    "RiskAssessment",
+    "RiskAssessmentControl",
+    "RiskAssessmentFinding",
+    "RiskAssessmentFindingEvidence",
     "SafetyAction",
     "SafetyActionHistory",
     "SafetyEvent",
