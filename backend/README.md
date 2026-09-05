@@ -3579,6 +3579,30 @@ moment. Both are fixed in
 exact corrected rules, and `tests/test_enterprise_intelligence_service.py`
 for the regression tests.
 
+**Update (SIE Milestone 23: Enterprise Intelligence Explainability &
+Anomaly Foundation v0.1):** adds deterministic, explainable anomaly
+detection as a new `anomalies` array on both existing endpoints — never
+a new endpoint, never a change to `enterprise-risk-v1`. Each of seven
+supported metrics (`incident_count`, `near_miss_count`,
+`observation_count`, `unsafe_observation_count`,
+`vehicle_incident_count`, `injury_event_count`,
+`property_damage_event_count`) is scored independently against its own
+recent-history baseline using `app/intelligence/anomaly.py::
+detect_anomaly()` (the pre-existing z-score-against-baseline function,
+extended additively with a new `direction` field —
+`ABOVE_BASELINE`/`BELOW_BASELINE`/`NONE` — rather than replaced).
+Baseline depth is data-driven (one shared query, not one per metric) and
+point-in-time-correct via the same `events_as_of()` foundation this
+package already relies on everywhere. Anomaly findings are exposed as a
+wholly separate dimension from the deterministic risk score — anomaly ≠
+risk — and every anomaly explanation is a deterministic string
+substitution of already-computed numbers, never LLM-generated. See
+[`docs/ENTERPRISE_INTELLIGENCE_RISK_ANALYTICS.md`](docs/ENTERPRISE_INTELLIGENCE_RISK_ANALYTICS.md)'s
+own "Anomaly detection methodology" section for the full baseline/
+z-score/threshold/zero-stdev/evidence rules, and
+`tests/test_enterprise_anomaly.py`/`tests/test_intelligence_anomaly.py`/
+`tests/test_enterprise_anomaly_api.py` for the regression tests.
+
 ### What this milestone deliberately does not add
 
 No autonomous intervention, no AI-generated corrective actions, no

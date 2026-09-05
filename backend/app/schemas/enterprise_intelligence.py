@@ -75,6 +75,26 @@ class ConcentrationContributorRead(BaseModel):
     calculation_version: str
 
 
+class EnterpriseAnomalyRead(BaseModel):
+    metric: str
+    label: str
+    status: str
+    direction: str
+    current_value: float
+    baseline_mean: float | None
+    baseline_stdev: float | None
+    z_score: float | None
+    baseline_period_count: int
+    current_period_start: datetime
+    current_period_end: datetime
+    window_days: int
+    supporting_event_count: int
+    baseline_window_start: datetime | None
+    baseline_window_end: datetime | None
+    supporting_event_ids: list[uuid.UUID]
+    calculation_version: str
+
+
 class RiskScoreComponentRead(BaseModel):
     key: str
     label: str
@@ -149,6 +169,7 @@ class EnterpriseIntelligenceRead(BaseModel):
     indicators: list[EnterpriseIndicatorRead]
     patterns: list[RecurrencePatternRead]
     concentrations: list[ConcentrationContributorRead]
+    anomalies: list[EnterpriseAnomalyRead]
     explanations: list[ExplanationItemRead]
     provenance: ProvenanceRead
     predictive_context: PredictiveContextRead | None = None

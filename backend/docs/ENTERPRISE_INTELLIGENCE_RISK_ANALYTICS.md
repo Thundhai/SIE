@@ -429,6 +429,190 @@ query parameter every other endpoint in this router already uses (see
 403s) for a nonexistent or cross-tenant site, mirroring
 `app/api/v1/predictions.py`'s own established pattern. An unsupported
 `window_days` is a `400`; a malformed `as_of` is FastAPI's own `422`.
+Both responses now also carry an `anomalies` array (Milestone 23 — see
+"Anomaly detection methodology" above) — an additive field on the same
+existing endpoints, never a new endpoint.
+
+## Anomaly detection methodology
+
+**SIE Milestone 23: Enterprise Intelligence Explainability & Anomaly
+Foundation v0.1.** Extends the "what happened / how much / is the trend
+improving / what is the deterministic risk level" chain above with two
+more questions:
+
+```
+What happened?  -> What is changing?  -> What is unusual?  -> How unusual is it?  -> What evidence produced that conclusion?
+(indicators)       (trend)               (this section)       (z-score)              (bounded supporting_event_ids)
+```
+
+An anomaly answers *is this statistically unusual relative to this
+entity's own recent history* — nothing more. It is a separate,
+additive `anomalies` array on the existing enterprise/site responses
+(item 13), never a new endpoint and never folded into the deterministic
+risk score (see "Relationship with the risk score" below).
+
+**Reuses the existing anomaly foundation, does not replace it.** Every
+anomaly here is produced by `app/intelligence/anomaly.py::detect_anomaly()`
+— the same z-score-against-baseline function already used by
+`app/predictions/feature_snapshot_service.py` and
+`app/validation/enterprise_dataset_validation.py`. This milestone extends
+that function additively (a new `direction` field, described below);
+there is no second, competing anomaly-scoring implementation anywhere in
+this codebase.
+
+**Supported metrics — a closed, genuinely-supported vocabulary (item
+1).** Exactly seven: `incident_count`, `near_miss_count`,
+`observation_count`, `unsafe_observation_count`,
+`vehicle_incident_count`, `injury_event_count`,
+`property_damage_event_count`. Each reuses the identical
+event-type/subtype predicates Milestone 22's own indicators already use
+(`app/intelligence/enterprise_indicators.py`'s `_vehicle`/`_injury`/
+`_property_damage`, `app/intelligence/signals.py`'s
+`is_unsafe_observation`) — no metric here is manufactured; every one has
+a genuine underlying data representation already relied on elsewhere in
+this codebase.
+
+**Baseline methodology.** The baseline for a metric is the sequence of
+per-period counts for that same metric over the most recent complete
+`window_days`-length periods immediately preceding the current window —
+the identical bucketing primitive (`app/intelligence/temporal.py::
+bucketed_counts()`) `app/intelligence/signals.py` already uses for its
+own baseline comparisons, which itself delegates every bucket's query to
+`events_as_of()`. Baseline depth is data-driven, not assumed: before
+scanning any metric, one shared query (not one per metric) finds this
+organization's (or site's) own earliest point-in-time-correct event and
+derives how many complete periods actually precede the current window,
+capped at `settings.ENTERPRISE_ANOMALY_BASELINE_PERIODS_MAX` (default
+`6`) — "recent history", not "the organization's entire history".
+
+**Point-in-time integrity (item 3).** Every event contributing to a
+current value, a baseline count, or a supporting-evidence id satisfies
+`event_time <= as_of AND ingestion_time <= as_of`, inherited entirely
+from `events_as_of()` — no second, hand-written temporal filter exists
+in the anomaly module. The current period's counts come from
+`current_events`, the same already-fetched, already point-in-time- and
+Milestone-22A-boundary-corrected event list the orchestrator builds for
+indicators/trend, so the current-period side of every metric costs zero
+additional queries. Baseline buckets end exactly at `window_start`
+(mirroring `app/intelligence/signals.py::_baseline_bucket_counts()`'s
+own established convention), so the shared boundary instant belongs to
+the baseline's own last bucket only, never double-counted against the
+current period.
+
+**Z-score methodology.** For a metric's current value `x` and baseline
+values `[b_1, ..., b_n]`:
+
+```
+mean  = fmean(baseline values)
+stdev = population standard deviation of baseline values
+z     = (x - mean) / stdev
+|z| >= threshold -> ANOMALOUS, else NORMAL
+```
+
+Population (not sample) standard deviation is used deliberately — the
+baseline periods are treated as the entire relevant population of recent
+history, not a sample drawn from a larger one.
+
+**Minimum baseline (item 7).** Fewer than
+`settings.INTELLIGENCE_ANOMALY_MIN_BASELINE_PERIODS` (default `4`)
+available baseline periods (reused unchanged from the pre-existing
+anomaly foundation) makes every metric `INSUFFICIENT_DATA` immediately —
+`bucketed_counts()` is never even called in that case, so this costs no
+extra queries either. One metric being `INSUFFICIENT_DATA` never
+invalidates any other metric's own result; each of the seven metrics is
+evaluated and reported independently.
+
+**Zero-standard-deviation behavior.** A perfectly constant baseline
+(`stdev == 0`) never divides by zero: `z_score` is reported as `None`
+(undefined — never fabricated as `0` or `∞`), and the classification is
+decided directly — `ANOMALOUS` if the current value differs at all from
+that constant baseline, `NORMAL` if it exactly matches it. `direction`
+is still computed in this case (see below).
+
+**Anomaly threshold.** `settings.INTELLIGENCE_ANOMALY_Z_SCORE_THRESHOLD`
+(default `2.0`, reused unchanged from the pre-existing anomaly
+foundation) — `|z| >= 2.0` is `ANOMALOUS`. Both this threshold and the
+minimum-baseline setting above are versioned, explicit settings-module
+values, never scattered magic numbers, and are exercised at their exact
+boundary by `tests/test_intelligence_anomaly.py`'s threshold-boundary
+tests (`z = 1.95` NORMAL, `z = 2.0` and `z = 2.05` ANOMALOUS, and the
+symmetric negative-`z` cases).
+
+**Direction (item 5).** `AnomalyDirection` —
+`ABOVE_BASELINE`/`BELOW_BASELINE`/`NONE` — is a vocabulary deliberately
+kept separate from `AnomalyStatus` (`NORMAL`/`ANOMALOUS`/
+`INSUFFICIENT_DATA`, reused unchanged): "unusually high" and "unusually
+low" are both `ANOMALOUS`, but operationally very different findings, so
+they are never collapsed into one undifferentiated signal. `direction`
+answers "which way" and is reported whenever the current value differs
+from the baseline mean at all — independent of whether that difference
+clears the anomaly threshold (a value slightly above the mean is still
+meaningfully `ABOVE_BASELINE` even while classified `NORMAL`). An
+increase is never automatically treated as "bad" by this module — it has
+no severity vocabulary at all, only direction and magnitude.
+
+**Evidence (item 9).** Each anomalous metric's result carries: the
+current period's value and window, the baseline periods' start/end and
+count, `baseline_mean`/`baseline_stdev`/`z_score`, `direction`, the exact
+`supporting_event_count` for the current period, and a bounded (≤20)
+sample of `supporting_event_ids` drawn only from the already tenant-
+scoped `current_events` list. This is factual evidence only — *what* is
+unusual and *how* unusual — never a causal claim. Permitted: "Incident
+count was 8 this period versus a historical baseline mean of 2.4."
+Never produced by this module: "poor supervision caused the spike" —
+there is no vocabulary here capable of generating the latter (mirrors
+`app/intelligence/association.py`'s own hard causal boundary).
+
+**Explanation service (item 10).** `app/intelligence/explanations.py::
+_anomaly_explanations()` generates one deterministic `ExplanationItem`
+per `ANOMALOUS` metric — the same "substitute already-computed numbers
+into a fixed string template" mechanism the rest of this document's
+explanation layer already uses (see "Explanation layer" above). No LLM,
+no free-form prose, nothing generated beyond string substitution of
+already-computed values; `evidence_reference` is `anomaly:<metric>` for
+every item, tracing straight back to that metric's own `EnterpriseAnomalyResult`.
+
+**Relationship with the risk score (item 11).** `enterprise-risk-v1`
+(`app/intelligence/risk_score.py`) is **not modified by this milestone at
+all** — anomaly findings are exposed as a wholly separate dimension
+(`deterministic_risk` / `anomalies` / `predictive_context` all stay
+distinct fields on the same response), and no anomaly ever contributes
+points to the risk score. **Anomaly ≠ Risk**: an anomalous metric is a
+statistically unusual pattern, not automatically a dangerous one (an
+unusually *high* observation count, for instance, is often a leading-
+indicator success story, not a hazard) — see "What an anomaly does not
+mean" below.
+
+**Organization and site scope (item 12).** Identical scope architecture
+to Milestone 22's own indicators/trend/recurrence/concentration: a site
+scan is verified to belong to the requesting organization before any
+query runs (404, never a raw lookup, for a foreign or nonexistent site),
+and every event id anywhere in an anomaly result comes from the same
+tenant-scoped `events_as_of()` call already used for the rest of the
+response — no cross-tenant aggregation is possible.
+
+**Performance (item 16).** A naive implementation would issue N metrics
+× N baseline periods × N queries. This module instead issues at most
+one shared baseline-depth query plus one `bucketed_counts()` call per
+metric (skipped entirely for every metric when baseline depth is
+insufficient) — reusing the existing bucketing/period infrastructure
+rather than a new one, and reusing `current_events` for the entire
+current-period side at zero additional queries. No Redis, no background
+workers, no new caching layer.
+
+**Configuration.** All three thresholds live in `app/core/config.py`,
+none scattered as inline magic numbers:
+
+| Setting | Default | Governs |
+|---|---|---|
+| `INTELLIGENCE_ANOMALY_MIN_BASELINE_PERIODS` (reused) | 4 | Minimum baseline periods before a metric can be scored at all |
+| `INTELLIGENCE_ANOMALY_Z_SCORE_THRESHOLD` (reused) | 2.0 | `|z|` threshold for `ANOMALOUS` |
+| `ENTERPRISE_ANOMALY_BASELINE_PERIODS_MAX` (new) | 6 | Upper bound on how many recent periods are used as baseline |
+
+**What an anomaly does not mean.** An anomaly identifies statistical
+unusualness relative to the defined baseline. It does not establish
+causation, severity, probability of an incident, or operational root
+cause.
 
 ## Limitations
 
@@ -466,6 +650,17 @@ query parameter every other endpoint in this router already uses (see
   actually was at that historical moment. Full correctness would require
   replaying `SafetyActionHistory`, deliberately out of scope for this
   focused correction.
+* Anomaly detection (Milestone 23) scores each of the seven supported
+  metrics independently against its own recent history — it does not
+  detect anomalies in combinations of metrics, seasonal/cyclical
+  patterns (e.g. a metric that is always higher on a particular weekday),
+  or anomalies at a granularity finer than `window_days`. A metric can be
+  `ANOMALOUS` in isolation while remaining unremarkable in the context
+  other metrics would provide; correlating across metrics is deliberately
+  left to the reviewer, not automated here (see "Explicitly out of
+  scope" in the completion report for the full list of what this
+  milestone does not build, including LLM-generated explanations, causal
+  inference, and anomaly alerts/notifications).
 
 ## What the score does not mean
 

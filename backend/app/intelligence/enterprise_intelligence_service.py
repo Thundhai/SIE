@@ -8,9 +8,18 @@ Intelligence & Risk Analytics Foundation v0.1, item 1.
         -> trend analysis                 (app/intelligence/enterprise_trend.py)
         -> pattern / recurrence analysis  (app/intelligence/recurrence.py)
         -> risk concentration             (app/intelligence/concentration.py)
+        -> anomaly detection              (app/intelligence/enterprise_anomaly.py -- SIE Milestone 23)
         -> deterministic risk scoring     (app/intelligence/risk_score.py)
         -> explanation + provenance       (app/intelligence/explanations.py, this module)
         -> Enterprise Intelligence API    (app/api/v1/intelligence.py)
+
+**`anomalies` (SIE Milestone 23: Enterprise Intelligence Explainability
+& Anomaly Foundation v0.1, item 11).** A separate intelligence
+dimension, sibling to `deterministic_risk`/`predictive_context` — never
+folded into `enterprise-risk-v1`'s score or components
+(`app/intelligence/risk_score.py` is untouched by Milestone 23).
+Something can be statistically unusual without representing elevated
+safety risk, and this codebase never conflates the two.
 
 This module is the one place that touches the database for this
 milestone's own computation — every sibling module above is a pure
@@ -36,7 +45,13 @@ organization-wide site id->name lookup, one actions lookup, plus (site
 scope only) one latest-prediction lookup. Every downstream computation
 (indicators, trend, concentration, recurrence, risk score, explanations)
 is a pure function over these already-fetched lists — never a query in a
-loop.
+loop. Anomaly detection (Milestone 23) adds one more shared query (the
+earliest-event lookup — see
+`app/intelligence/enterprise_anomaly.py::_available_baseline_periods()`)
+plus, only when enough history exists, one bounded `bucketed_counts()`
+sweep per supported metric (seven, a fixed constant — never proportional
+to event volume) — reusing `current_events` for every metric's current-
+period side, so this never re-queries the current window.
 
 **`predictive_context` (item 17).** Populated only from an
 *already-recorded* `Prediction` row (the latest one for this site) — this
@@ -75,6 +90,8 @@ from app.intelligence.concentration import (
     ConcentrationContributor,
     compute_concentration,
 )
+from app.intelligence.anomaly import ANOMALY_CALCULATION_VERSION
+from app.intelligence.enterprise_anomaly import EnterpriseAnomalyResult, compute_enterprise_anomalies
 from app.intelligence.enterprise_indicators import (
     ENTERPRISE_INDICATOR_CALCULATION_VERSION,
     EnterpriseIndicator,
@@ -165,6 +182,7 @@ class EnterpriseIntelligenceResult:
     trend: EnterpriseTrendResult
     patterns: list[RecurrencePattern]
     concentrations: list[ConcentrationContributor]
+    anomalies: list[EnterpriseAnomalyResult]
     risk: RiskScoreResult
     explanations: list[ExplanationItem]
     provenance: Provenance
@@ -350,6 +368,15 @@ def compute_enterprise_intelligence(
     patterns = detect_recurrence(
         current_events, window_start=window_start, window_end=as_of, window_days=window_days, site_labels=site_labels
     )
+    anomalies = compute_enterprise_anomalies(
+        db,
+        organization_id=organization_id,
+        site_id=site_id,
+        current_events=current_events,
+        as_of=as_of,
+        window_start=window_start,
+        window_days=window_days,
+    )
 
     risk = compute_risk_score(indicators=indicators, trend=trend, recurrence_patterns=patterns, event_count=event_count)
     explanations = generate_explanations(
@@ -358,6 +385,7 @@ def compute_enterprise_intelligence(
         recurrence_patterns=patterns,
         concentration_contributors=concentrations,
         indicators_by_key=indicators_by_key,
+        anomalies=anomalies,
     )
 
     provenance = Provenance(
@@ -378,6 +406,7 @@ def compute_enterprise_intelligence(
             "recurrence": ENTERPRISE_RECURRENCE_CALCULATION_VERSION,
             "concentration": ENTERPRISE_CONCENTRATION_CALCULATION_VERSION,
             "risk_score": ENTERPRISE_RISK_SCORE_VERSION,
+            "anomaly": ANOMALY_CALCULATION_VERSION,
         },
     )
 
@@ -393,6 +422,7 @@ def compute_enterprise_intelligence(
         trend=trend,
         patterns=patterns,
         concentrations=concentrations,
+        anomalies=anomalies,
         risk=risk,
         explanations=explanations,
         provenance=provenance,

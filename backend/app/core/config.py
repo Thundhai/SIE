@@ -466,6 +466,21 @@ class Settings(BaseSettings):
     ENTERPRISE_CONCENTRATION_MODERATE_THRESHOLD: float = 0.20
     ENTERPRISE_CONCENTRATION_HIGH_THRESHOLD: float = 0.50
 
+    # SIE Milestone 23: Enterprise Intelligence Explainability & Anomaly
+    # Foundation v0.1 (see backend/docs/ENTERPRISE_INTELLIGENCE_RISK_ANALYTICS.md).
+    # Reuses the pre-existing INTELLIGENCE_ANOMALY_MIN_BASELINE_PERIODS
+    # (minimum baseline periods required before a non-INSUFFICIENT_DATA
+    # result) and INTELLIGENCE_ANOMALY_Z_SCORE_THRESHOLD (the |z| cutoff)
+    # above unchanged -- both already existed and already govern
+    # app/intelligence/anomaly.py::detect_anomaly(), the same function
+    # this milestone's own app/intelligence/enterprise_anomaly.py calls.
+    # This is the one genuinely new anomaly setting this milestone adds:
+    # a cap on how many *preceding* periods are ever fetched as baseline,
+    # even when an organization/site has far more history available --
+    # bounds the per-metric query cost and keeps the baseline "recent
+    # history", not "all of history since the beginning of time".
+    ENTERPRISE_ANOMALY_BASELINE_PERIODS_MAX: int = 6
+
     @property
     def sqlalchemy_database_uri(self) -> str:
         if self.DATABASE_URL:

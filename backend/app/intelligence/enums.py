@@ -119,6 +119,24 @@ class AnomalyStatus(str, Enum):
     INSUFFICIENT_DATA = "INSUFFICIENT_DATA"
 
 
+class AnomalyDirection(str, Enum):
+    """Whether the current value sits above, below, or exactly at its
+    baseline mean — SIE Milestone 23: Enterprise Intelligence
+    Explainability & Anomaly Foundation v0.1, item 5. Deliberately
+    separate from `AnomalyStatus`: "unusually high" and "unusually low"
+    are both `ANOMALOUS`, but operationally very different, and this
+    codebase never collapses the two into one undifferentiated signal
+    (milestone item 5's own instruction — "do not automatically call
+    every increase 'bad'"). `NONE` covers both `INSUFFICIENT_DATA` (no
+    baseline to compare against) and the exact-equality case (current
+    value equals the baseline mean precisely — no direction at all, not
+    an arbitrary tie-break)."""
+
+    ABOVE_BASELINE = "ABOVE_BASELINE"
+    BELOW_BASELINE = "BELOW_BASELINE"
+    NONE = "NONE"
+
+
 class RiskSignalType(str, Enum):
     """The deterministic signal types the milestone's own example list
     names (item 22). Every one of these is a rule-based detection over

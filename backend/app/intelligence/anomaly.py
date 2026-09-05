@@ -11,6 +11,21 @@ specifically because it is fully explainable (every number in
 
 No deep learning, no learned model — see the milestone's own instruction
 ("Do not implement deep-learning anomaly detection yet").
+
+**`direction` (SIE Milestone 23: Enterprise Intelligence Explainability
+& Anomaly Foundation v0.1, item 5) — additive, non-breaking.** Every
+existing caller of `detect_anomaly()`
+(`app/predictions/feature_snapshot_service.py`,
+`app/validation/enterprise_dataset_validation.py`,
+`tests/evaluation/calibration_harness.py`) reads only `.status`/
+`.z_score`/`.calculation_version` and is unaffected by this new field.
+`direction` answers "which way", independent of `status` ("how
+unusual") — `ABOVE_BASELINE`/`BELOW_BASELINE` is reported whenever the
+current value differs from the baseline mean, *whether or not* that
+difference clears the anomaly threshold (a value slightly above the
+mean is still meaningfully `ABOVE_BASELINE`, even when classified
+`NORMAL`) — see `app/intelligence/enums.py::AnomalyDirection`'s own
+docstring for why this is kept distinct from `status`.
 """
 
 from __future__ import annotations
@@ -19,10 +34,18 @@ import statistics
 from dataclasses import dataclass
 
 from app.core.config import settings
-from app.intelligence.enums import AnomalyStatus
+from app.intelligence.enums import AnomalyDirection, AnomalyStatus
 
 ANOMALY_CALCULATION_VERSION = "anomaly-v1"
 ANOMALY_METHOD = "z-score against rolling baseline mean/population-standard-deviation"
+
+
+def _direction(current_value: float, mean: float) -> AnomalyDirection:
+    if current_value > mean:
+        return AnomalyDirection.ABOVE_BASELINE
+    if current_value < mean:
+        return AnomalyDirection.BELOW_BASELINE
+    return AnomalyDirection.NONE
 
 
 @dataclass
@@ -35,6 +58,7 @@ class AnomalyResult:
     baseline_period_count: int = 0
     calculation_version: str = ANOMALY_CALCULATION_VERSION
     method: str = ANOMALY_METHOD
+    direction: str = AnomalyDirection.NONE.value  # AnomalyDirection value
 
 
 def detect_anomaly(
@@ -73,6 +97,7 @@ def detect_anomaly(
             baseline_stdev=0.0,
             z_score=None,
             baseline_period_count=len(baseline_values),
+            direction=_direction(current_value, mean).value,
         )
 
     z = (current_value - mean) / stdev
@@ -84,4 +109,5 @@ def detect_anomaly(
         baseline_stdev=round(stdev, 4),
         z_score=round(z, 4),
         baseline_period_count=len(baseline_values),
+        direction=_direction(current_value, mean).value,
     )

@@ -24,6 +24,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.intelligence.concentration import ConcentrationContributor
+from app.intelligence.enterprise_anomaly import EnterpriseAnomalyResult
 from app.intelligence.enterprise_indicators import EnterpriseIndicator
 from app.intelligence.enterprise_trend import EnterpriseTrendResult
 from app.intelligence.recurrence import RecurrencePattern
@@ -155,6 +156,48 @@ def _concentration_explanations(contributors: list[ConcentrationContributor]) ->
     return items
 
 
+def _anomaly_explanation(anomaly: EnterpriseAnomalyResult) -> ExplanationItem | None:
+    """SIE Milestone 23: Enterprise Intelligence Explainability & Anomaly
+    Foundation v0.1, item 10. Only `ANOMALOUS` metrics get an
+    explanation sentence (mirrors this module's own established
+    convention — `_concentration_explanations()` above only explains
+    `HIGH`/`MODERATE` contributors, never every dimension). Every number
+    in the message is read directly off `anomaly` — nothing generated,
+    nothing causal (milestone item 9's own worked example: "Incident
+    count was 8 this period versus a historical baseline mean of 2.4"
+    is permitted; "poor supervision caused the spike" is not, and this
+    function has no vocabulary capable of producing it)."""
+    if anomaly.status != "ANOMALOUS" or anomaly.baseline_mean is None:
+        return None
+    difference = anomaly.current_value - anomaly.baseline_mean
+    sign = "+" if difference >= 0 else ""
+    if anomaly.z_score is not None:
+        message = (
+            f"{anomaly.label} was {anomaly.current_value:g} this period versus a historical baseline mean of "
+            f"{anomaly.baseline_mean:g} ({sign}{difference:g}, z={anomaly.z_score:g}) -- {anomaly.direction}."
+        )
+    else:
+        # Zero-variance baseline (app/intelligence/anomaly.py's own
+        # documented "z-score is undefined, not fabricated" case).
+        message = (
+            f"{anomaly.label} was {anomaly.current_value:g} this period versus a constant historical baseline of "
+            f"{anomaly.baseline_mean:g} ({sign}{difference:g}) -- {anomaly.direction}."
+        )
+    return ExplanationItem(
+        code=f"ANOMALY_{anomaly.metric.upper()}_{anomaly.direction}",
+        message=message,
+        value=anomaly.current_value,
+        baseline=anomaly.baseline_mean,
+        contribution=None,
+        evidence_reference=f"anomaly:{anomaly.metric}",
+    )
+
+
+def _anomaly_explanations(anomalies: list[EnterpriseAnomalyResult]) -> list[ExplanationItem]:
+    items = [_anomaly_explanation(a) for a in anomalies]
+    return [item for item in items if item is not None]
+
+
 def generate_explanations(
     *,
     risk: RiskScoreResult,
@@ -162,13 +205,15 @@ def generate_explanations(
     recurrence_patterns: list[RecurrencePattern],
     concentration_contributors: list[ConcentrationContributor],
     indicators_by_key: dict[str, EnterpriseIndicator],
+    anomalies: list[EnterpriseAnomalyResult] | None = None,
 ) -> list[ExplanationItem]:
     """Pure function over already-computed sibling results. Order:
     risk-score component drivers first (each maps 1:1 to a component that
     actually contributed points), then the trend explanation, then
-    recurrence patterns, then notable concentration contributors -- the
-    same order a human reviewer would want to read them in (score
-    drivers, then supporting context)."""
+    recurrence patterns, then notable concentration contributors, then
+    anomalous metrics (SIE Milestone 23) -- the same order a human
+    reviewer would want to read them in (score drivers, then supporting
+    context, then statistically unusual signals)."""
     items: list[ExplanationItem] = []
     items.extend(_risk_component_explanations(risk, indicators_by_key))
     trend_item = _trend_explanation(trend, risk)
@@ -176,4 +221,5 @@ def generate_explanations(
         items.append(trend_item)
     items.extend(_recurrence_explanations(recurrence_patterns))
     items.extend(_concentration_explanations(concentration_contributors))
+    items.extend(_anomaly_explanations(anomalies or []))
     return items
