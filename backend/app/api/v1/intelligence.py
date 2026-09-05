@@ -65,6 +65,7 @@ from app.schemas.enterprise_intelligence import (
     ConcentrationContributorRead,
     DataSufficiencyRead,
     EnterpriseAnomalyRead,
+    EnterpriseAssociationRead,
     EnterpriseIndicatorRead,
     EnterpriseIntelligenceRead,
     EnterpriseTrendRead,
@@ -383,6 +384,7 @@ def _to_enterprise_intelligence_read(result: EnterpriseIntelligenceResult) -> En
         patterns=[RecurrencePatternRead(**vars(p)) for p in result.patterns],
         concentrations=[ConcentrationContributorRead(**vars(c)) for c in result.concentrations],
         anomalies=[EnterpriseAnomalyRead(**vars(a)) for a in result.anomalies],
+        associations=[EnterpriseAssociationRead(**vars(a)) for a in result.associations],
         explanations=[ExplanationItemRead(**vars(e)) for e in result.explanations],
         provenance=ProvenanceRead(**vars(result.provenance)),
         predictive_context=(

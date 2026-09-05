@@ -3603,6 +3603,38 @@ z-score/threshold/zero-stdev/evidence rules, and
 `tests/test_enterprise_anomaly.py`/`tests/test_intelligence_anomaly.py`/
 `tests/test_enterprise_anomaly_api.py` for the regression tests.
 
+**Update (SIE Milestone 24: Enterprise Intelligence Pattern &
+Correlation Foundation v0.1):** adds deterministic cross-metric
+association analysis as a new `associations` array on both existing
+endpoints — never a new endpoint, never a change to `enterprise-risk-v1`.
+Pattern detection needed no new production code at all: Milestone 22's
+own `recurrence.py` (unchanged) already detects the `(site, event_type)`/
+`(site, event_subtype)` recurring patterns this milestone's own spec
+asks for, already exposed via the pre-existing `patterns` array. The new
+work is `app/intelligence/enterprise_association.py`: for every one of
+the `C(7, 2) = 21` pairs among the identical seven metrics anomaly
+detection already supports, a Pearson correlation
+(`app/intelligence/association.py::detect_association()`, a pre-existing
+function from an earlier milestone, extended additively with a new
+six-value `classification` field —
+`STRONG_POSITIVE`/`MODERATE_POSITIVE`/`WEAK`/`MODERATE_NEGATIVE`/
+`STRONG_NEGATIVE`/`INSUFFICIENT_DATA` — rather than replaced) over
+aligned, data-driven historical periods. Query strategy stays flat: one
+shared earliest-event query plus one query per period (never per metric,
+never per pair) — every pair's series are derived from that same
+already-fetched, per-period event list in memory. Never `NaN`/`Infinity`:
+a constant series becomes the explicit `INSUFFICIENT_DATA` state.
+Association findings are a wholly separate dimension from the
+deterministic risk score — association ≠ risk, exactly as anomaly ≠ risk
+— and every association explanation is a deterministic string
+substitution, never LLM-generated, never a causal claim. See
+[`docs/ENTERPRISE_INTELLIGENCE_RISK_ANALYTICS.md`](docs/ENTERPRISE_INTELLIGENCE_RISK_ANALYTICS.md)'s
+own "Pattern & association methodology" section for the full
+aligned-periods/correlation/threshold/zero-variance/evidence rules, and
+`tests/test_enterprise_association.py`/
+`tests/test_intelligence_association.py`/
+`tests/test_enterprise_association_api.py` for the regression tests.
+
 ### What this milestone deliberately does not add
 
 No autonomous intervention, no AI-generated corrective actions, no

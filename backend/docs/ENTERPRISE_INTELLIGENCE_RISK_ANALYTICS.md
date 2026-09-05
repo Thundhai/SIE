@@ -431,7 +431,9 @@ query parameter every other endpoint in this router already uses (see
 `window_days` is a `400`; a malformed `as_of` is FastAPI's own `422`.
 Both responses now also carry an `anomalies` array (Milestone 23 — see
 "Anomaly detection methodology" above) — an additive field on the same
-existing endpoints, never a new endpoint.
+existing endpoints, never a new endpoint. Milestone 24 adds one more:
+`associations` (see "Pattern & association methodology" below) —
+again additive, again the same two endpoints, no new API surface.
 
 ## Anomaly detection methodology
 
@@ -614,6 +616,204 @@ unusualness relative to the defined baseline. It does not establish
 causation, severity, probability of an incident, or operational root
 cause.
 
+## Pattern & association methodology
+
+**SIE Milestone 24: Enterprise Intelligence Pattern & Correlation
+Foundation v0.1.** Extends the chain once more:
+
+```
+What happened?  ->  What is changing?  ->  What is unusual?  ->  How unusual is it?
+    ->  What patterns repeatedly occur?  ->  What safety dimensions appear associated?
+        ->  What evidence supports that observation?
+```
+
+Two distinct, separate findings — never combined into one score, and
+neither ever folded into `enterprise-risk-v1` (see "Relationship with
+the risk score" below, mirroring Milestone 23's identical rule for
+anomalies).
+
+### Pattern methodology
+
+**Built entirely on the pre-existing recurrence infrastructure — nothing
+new was written for pattern detection itself (item 1's own instruction:
+"use the existing recurrence infrastructure as the foundation rather
+than replacing it").** `app/intelligence/recurrence.py`
+(see "Recurrence methodology" above) already detects exactly two of this
+milestone's named pattern shapes — `(site, event_type)` and `(site,
+event_subtype)` — and each `RecurrencePattern` is, by construction,
+already "a repeated event category within a defined period" (item 1's
+third example): every pattern carries `window_start`/`window_end`/
+`window_days` alongside its `count`. The `patterns` array on both
+endpoints (already present since Milestone 22) *is* this milestone's
+pattern-detection deliverable; Milestone 24 adds no second, competing
+implementation.
+
+**Recurrence definition & temporal rules — unchanged from Milestone
+22/22A.** A pattern is `count >= 2` occurrences of the same `(site,
+event_type)` or `(site, event_subtype)` combination within the current
+window; every contributing event already satisfies `events_as_of()`'s
+`event_time <= as_of AND ingestion_time <= as_of` guarantee and the
+Milestone 22A non-overlapping current/previous window-boundary rule,
+because `detect_recurrence()` is a pure function over the same
+already-fetched, already-corrected `current_events` list every other
+sibling computation in this document uses — see "Point-in-time
+semantics" above.
+
+**Pattern evidence.** `occurrence count` (`count`), `first occurrence`
+(`first_seen`), `last occurrence` (`last_seen`), and `period coverage`
+(the window itself, `window_start`/`window_end`/`window_days`) are all
+already exposed on every `RecurrencePattern` — enough structured
+information for a caller to tell "8 times over 30 days" apart from "8
+times on one day" without this codebase ever needing a separate,
+opaque "pattern score" (item 3's own instruction): compare
+`last_seen - first_seen` yourself. `supporting_event_ids` is bounded to
+20 entries; `count` is always the real, unbounded total.
+
+**One combination this milestone deliberately does not add: "event type
++ observation topic."** The ontology has no field distinct from
+`event_subtype` that represents an "observation topic" (see
+`app/models/safety_event.py`'s own documented, deliberately free-form
+`event_subtype`) — and `recurrence.py`'s population is, by Milestone 22's
+own explicit, tested design decision, restricted to `INCIDENT`/
+`NEAR_MISS` only (adverse signal repeating, not routine activity;
+`OBSERVATION` is excluded). Expanding that population to cover
+`OBSERVATION` topics would be a genuine change to `recurrence.py`'s
+existing, tested scope, not the "build on top of, don't replace" this
+milestone's own item 1 calls for — documented here as a known,
+deliberate limitation (see "Limitations" below), not silently glossed
+over.
+
+### Association methodology
+
+**Reuses the existing association foundation.** `app/intelligence/
+association.py`'s `detect_association()` (a Pearson correlation over two
+aligned period series, pre-existing from an earlier milestone) is the
+*only* correlation formula in this codebase — `app/intelligence/
+enterprise_association.py` (new) calls it once per supported metric
+pair, never reimplements it.
+
+**Supported metrics — the identical, closed seven-metric vocabulary
+anomaly detection already established (item 16):** `incident_count`,
+`near_miss_count`, `observation_count`, `unsafe_observation_count`,
+`vehicle_incident_count`, `injury_event_count`,
+`property_damage_event_count`. Exactly `C(7, 2) = 21` unordered pairs,
+always — a fixed constant, never scaling with event volume or
+organization size, and never accepting an arbitrary caller-supplied
+metric name (there is no `metric_a=<anything>` parameter anywhere in
+this API).
+
+**Aligned periods.** For each pair, both metrics' counts are read from
+the *same* set of consecutive, non-overlapping `window_days`-length
+periods ending at `as_of` — up to
+`settings.ENTERPRISE_ASSOCIATION_MAX_PERIODS` (6) of them, computed
+data-driven from this organization's (or site's) own earliest
+point-in-time-correct event (built from `events_as_of()` itself, exactly
+mirroring `app/intelligence/enterprise_anomaly.py::
+_available_baseline_periods()`'s established pattern — see that
+module's own docstring). Unlike the anomaly baseline (which deliberately
+*excludes* the current window, since a baseline must stay independent of
+the value being compared against it), association periods *include* the
+most recent period ending at `as_of` — there is no separate "current
+value" to keep apart from the series here; co-movement is about recent
+history as a whole, current period included.
+
+**Query strategy (item 15).** One shared earliest-event query, plus (only
+when enough history exists) exactly one query *per period* — never one
+per metric and never one per pair. Every one of the 21 pairs' two series
+are derived from that same already-fetched, per-period event list in
+memory (each metric's predicate applied in Python), and every pairwise
+correlation is pure in-memory arithmetic afterward. No Redis, no
+background workers, no distributed processing.
+
+**Pearson correlation.** For aligned series `A`/`B` of length `n`:
+
+```
+r = Pearson correlation coefficient of A and B    (population statistics, statistics.correlation())
+```
+
+**Minimum periods.** `settings.ENTERPRISE_ASSOCIATION_MIN_PERIODS`
+(default `4`, matching `INTELLIGENCE_ANOMALY_MIN_BASELINE_PERIODS` for
+consistency) — fewer aligned periods than this and every pair is reported
+`INSUFFICIENT_DATA` immediately, with `period_count` reflecting the real
+(possibly zero) count, never a fabricated correlation from two or three
+observations (item 7).
+
+**Classification thresholds (item 5).**
+`settings.ENTERPRISE_ASSOCIATION_STRONG_THRESHOLD` (`0.7`) and
+`settings.ENTERPRISE_ASSOCIATION_MODERATE_THRESHOLD` (`0.4`), documented
+*initial* defaults:
+
+```
+r >= 0.7                    -> STRONG_POSITIVE
+0.4 <= r < 0.7              -> MODERATE_POSITIVE
+-0.4 < r < 0.4              -> WEAK
+-0.7 < r <= -0.4            -> MODERATE_NEGATIVE
+r <= -0.7                   -> STRONG_NEGATIVE
+(insufficient periods /
+ undefined correlation)     -> INSUFFICIENT_DATA
+```
+
+**Zero-variance behavior (item 6).** A constant series (every period has
+the identical count) makes the Pearson correlation coefficient
+mathematically undefined — `statistics.correlation()` raises, and this
+codebase converts that directly into the explicit, governed
+`INSUFFICIENT_DATA` state (`correlation_coefficient: null`), never a
+fabricated `0`, `NaN`, or `Infinity` reaching an API consumer. The exact
+same rule covers two identical series (perfectly, trivially correlated —
+reported `STRONG_POSITIVE`, `r = 1.0`) and two exactly inverse series
+(reported `STRONG_NEGATIVE`, `r = -1.0`) — both are well-defined,
+non-constant cases, computed normally.
+
+**Interpretation.** `r` measures *co-movement* over the aligned periods
+above — nothing more. A `STRONG_POSITIVE` classification between two
+metrics means they tended to rise and fall together across those
+periods; it says nothing about which (if either) drove the other, and
+nothing about a third, unmeasured factor driving both. See "Relationship
+with the risk score" below and the "association vs. causation" statement
+that closes this section.
+
+### Relationship with the risk score (item 8)
+
+`enterprise-risk-v1` (`app/intelligence/risk_score.py`) is **not modified
+by this milestone at all** — associations are exposed as a wholly
+separate dimension (`deterministic_risk` / `anomalies` / `patterns` /
+`associations` / `predictive_context` all stay distinct fields on the
+same response), and no association ever contributes points to the risk
+score. **Association ≠ risk**, the same way anomaly ≠ risk: a strong
+positive association between, say, unsafe observations and incidents is
+a statistical observation about co-movement — often actually good news
+(more leading-indicator reporting activity happening alongside incident
+activity), never an automatic "+20" to the risk score.
+
+### Evidence & provenance (items 9, 14)
+
+Every association result exposes: `metric_a`/`metric_b` (and their human
+labels), `classification`, `correlation_coefficient`, `period_count`,
+the aligned `period_start`/`period_end`/`window_days` (so the periods are
+fully reconstructable from the response alone), the underlying
+`values_a`/`values_b` period series, `calculation_version`
+(`"association-v1"`, also recorded in `provenance.calculation_versions`
+as `"association"`), and a bounded (≤20), de-duplicated sample of
+`supporting_event_ids` drawn only from events that satisfy either
+metric's predicate in the aligned periods — factual only, no PII beyond
+the event id itself.
+
+### Deterministic explanation (item 10)
+
+`app/intelligence/explanations.py::_association_explanations()` — the
+same "substitute already-computed numbers into a fixed string template"
+mechanism this document's explanation layer already uses for every other
+finding (see "Explanation layer" above). Only non-`WEAK`,
+non-`INSUFFICIENT_DATA` pairs get a sentence, e.g. *"Incident count and
+near-miss count showed a strong positive association across 6 historical
+periods (r=0.91)."* No LLM, no free-form prose, and never a causal claim
+— *"near misses caused the increase in incidents"* is not a sentence this
+function's vocabulary can produce.
+
+**Association measures statistical co-movement between supported safety
+metrics over aligned periods. It does not establish causation,
+mechanism, probability, or root cause.**
+
 ## Limitations
 
 * The default weights, reference counts, and thresholds throughout this
@@ -661,6 +861,25 @@ cause.
   scope" in the completion report for the full list of what this
   milestone does not build, including LLM-generated explanations, causal
   inference, and anomaly alerts/notifications).
+* Pattern detection (Milestone 24, reusing Milestone 22's `recurrence.py`
+  unchanged) covers `(site, event_type)` and `(site, event_subtype)`
+  recurrence only, over `INCIDENT`/`NEAR_MISS` events — an "event type +
+  observation topic" pattern (one of the milestone's own named examples)
+  is not built: the ontology has no field distinct from `event_subtype`
+  representing an observation topic, and `recurrence.py`'s population is
+  a deliberate, tested Milestone 22 scope decision this milestone does
+  not expand (see "Pattern methodology" above).
+* Association analysis (Milestone 24) is pairwise and linear (Pearson
+  correlation) only — it does not detect non-linear relationships, lagged
+  relationships (metric A this period predicting metric B next period),
+  or associations among three or more metrics at once. A pair reported
+  `WEAK` may still share a real, non-linear or lagged relationship this
+  method cannot see; a genuinely strong association between two metrics
+  never implies anything about a third, unmeasured factor driving both.
+  Correlating across more than two metrics, and any causal
+  interpretation whatsoever, is deliberately left to the human reviewer
+  (see "Association methodology" above and the completion report's
+  "out-of-scope confirmation").
 
 ## What the score does not mean
 

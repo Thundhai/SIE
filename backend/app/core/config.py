@@ -481,6 +481,45 @@ class Settings(BaseSettings):
     # history", not "all of history since the beginning of time".
     ENTERPRISE_ANOMALY_BASELINE_PERIODS_MAX: int = 6
 
+    # SIE Milestone 24: Enterprise Intelligence Pattern & Correlation
+    # Foundation v0.1 (see backend/docs/ENTERPRISE_INTELLIGENCE_RISK_ANALYTICS.md).
+    # Governs app/intelligence/association.py (the pre-existing, milestone
+    # item 26/54 Pearson-correlation function, extended additively -- its
+    # own two pre-existing parameters, `min_periods`/`threshold`, now
+    # default from the two settings below rather than a hardcoded literal,
+    # with identical default *values* so no pre-existing caller's or
+    # test's behavior changes) and app/intelligence/enterprise_association.py
+    # (this milestone's new multi-metric pairwise scan).
+    #
+    # Minimum aligned periods before a pair's correlation is computed at
+    # all (item 7) -- fewer -> INSUFFICIENT_DATA, never a correlation
+    # computed from two or three observations. Matches
+    # INTELLIGENCE_ANOMALY_MIN_BASELINE_PERIODS's own default (4) for
+    # consistency across this codebase's statistical foundations.
+    ENTERPRISE_ASSOCIATION_MIN_PERIODS: int = 4
+    # Upper bound on how many recent periods are ever fetched to build the
+    # aligned metric vectors, even when far more history exists -- mirrors
+    # ENTERPRISE_ANOMALY_BASELINE_PERIODS_MAX's identical rationale:
+    # "recent history", not "all of history since the beginning of time".
+    ENTERPRISE_ASSOCIATION_MAX_PERIODS: int = 6
+    # The pre-existing `outcome` field's own threshold
+    # (ASSOCIATION_OBSERVED vs. NO_ASSOCIATION_OBSERVED) -- unchanged
+    # value (0.5), now centralized here instead of a literal default
+    # argument.
+    ENTERPRISE_ASSOCIATION_OBSERVED_THRESHOLD: float = 0.5
+    # The new, finer six-value `AssociationClassification` band (item 5).
+    # |r| >= STRONG -> STRONG_POSITIVE/STRONG_NEGATIVE;
+    # MODERATE <= |r| < STRONG -> MODERATE_POSITIVE/MODERATE_NEGATIVE;
+    # |r| < MODERATE -> WEAK. Documented *initial* defaults -- the same
+    # standing caveat every other threshold in this file carries.
+    ENTERPRISE_ASSOCIATION_STRONG_THRESHOLD: float = 0.7
+    ENTERPRISE_ASSOCIATION_MODERATE_THRESHOLD: float = 0.4
+    # No MAX_PAIRS setting: the association-eligible metric vocabulary
+    # (app/intelligence/enterprise_association.py::SUPPORTED_ASSOCIATION_METRICS)
+    # is a fixed, closed set of 7 metrics -- exactly 21 unordered pairs,
+    # always, never scaling with event volume or organization size, so no
+    # additional bound is needed (item 19's own "if required" caveat).
+
     @property
     def sqlalchemy_database_uri(self) -> str:
         if self.DATABASE_URL:

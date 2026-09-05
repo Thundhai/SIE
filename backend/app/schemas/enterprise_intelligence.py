@@ -95,6 +95,23 @@ class EnterpriseAnomalyRead(BaseModel):
     calculation_version: str
 
 
+class EnterpriseAssociationRead(BaseModel):
+    metric_a: str
+    metric_b: str
+    label_a: str
+    label_b: str
+    classification: str
+    correlation_coefficient: float | None
+    period_count: int
+    period_start: datetime | None
+    period_end: datetime | None
+    window_days: int
+    values_a: list[float]
+    values_b: list[float]
+    supporting_event_ids: list[uuid.UUID]
+    calculation_version: str
+
+
 class RiskScoreComponentRead(BaseModel):
     key: str
     label: str
@@ -170,6 +187,7 @@ class EnterpriseIntelligenceRead(BaseModel):
     patterns: list[RecurrencePatternRead]
     concentrations: list[ConcentrationContributorRead]
     anomalies: list[EnterpriseAnomalyRead]
+    associations: list[EnterpriseAssociationRead]
     explanations: list[ExplanationItemRead]
     provenance: ProvenanceRead
     predictive_context: PredictiveContextRead | None = None

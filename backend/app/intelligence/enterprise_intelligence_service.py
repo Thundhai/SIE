@@ -9,6 +9,7 @@ Intelligence & Risk Analytics Foundation v0.1, item 1.
         -> pattern / recurrence analysis  (app/intelligence/recurrence.py)
         -> risk concentration             (app/intelligence/concentration.py)
         -> anomaly detection              (app/intelligence/enterprise_anomaly.py -- SIE Milestone 23)
+        -> cross-metric association       (app/intelligence/enterprise_association.py -- SIE Milestone 24)
         -> deterministic risk scoring     (app/intelligence/risk_score.py)
         -> explanation + provenance       (app/intelligence/explanations.py, this module)
         -> Enterprise Intelligence API    (app/api/v1/intelligence.py)
@@ -20,6 +21,16 @@ folded into `enterprise-risk-v1`'s score or components
 (`app/intelligence/risk_score.py` is untouched by Milestone 23).
 Something can be statistically unusual without representing elevated
 safety risk, and this codebase never conflates the two.
+
+**`associations` (SIE Milestone 24: Enterprise Intelligence Pattern &
+Correlation Foundation v0.1, item 8).** Another separate intelligence
+dimension, sibling to `anomalies`/`patterns` — also never folded into
+`enterprise-risk-v1` (untouched by Milestone 24 too, exactly as
+Milestone 23 left it). Association ≠ risk, the same way anomaly ≠ risk:
+a strong correlation between two metrics is a statistical observation
+about co-movement, never an automatic risk-score adjustment and never a
+causal claim (see `app/intelligence/association.py`'s own hard causal
+boundary).
 
 This module is the one place that touches the database for this
 milestone's own computation — every sibling module above is a pure
@@ -51,7 +62,13 @@ earliest-event lookup — see
 plus, only when enough history exists, one bounded `bucketed_counts()`
 sweep per supported metric (seven, a fixed constant — never proportional
 to event volume) — reusing `current_events` for every metric's current-
-period side, so this never re-queries the current window.
+period side, so this never re-queries the current window. Cross-metric
+association (Milestone 24) adds one more shared earliest-event query
+(`app/intelligence/enterprise_association.py::_available_periods()`)
+plus, only when enough history exists, one query *per period* (not per
+metric or per pair) fetching every event in that period — every one of
+the 21 supported metric pairs then derives its two series from that same
+already-fetched, per-period event list in memory.
 
 **`predictive_context` (item 17).** Populated only from an
 *already-recorded* `Prediction` row (the latest one for this site) — this
@@ -92,6 +109,8 @@ from app.intelligence.concentration import (
 )
 from app.intelligence.anomaly import ANOMALY_CALCULATION_VERSION
 from app.intelligence.enterprise_anomaly import EnterpriseAnomalyResult, compute_enterprise_anomalies
+from app.intelligence.association import ASSOCIATION_CALCULATION_VERSION
+from app.intelligence.enterprise_association import EnterpriseAssociationResult, compute_enterprise_associations
 from app.intelligence.enterprise_indicators import (
     ENTERPRISE_INDICATOR_CALCULATION_VERSION,
     EnterpriseIndicator,
@@ -183,6 +202,7 @@ class EnterpriseIntelligenceResult:
     patterns: list[RecurrencePattern]
     concentrations: list[ConcentrationContributor]
     anomalies: list[EnterpriseAnomalyResult]
+    associations: list[EnterpriseAssociationResult]
     risk: RiskScoreResult
     explanations: list[ExplanationItem]
     provenance: Provenance
@@ -377,6 +397,13 @@ def compute_enterprise_intelligence(
         window_start=window_start,
         window_days=window_days,
     )
+    associations = compute_enterprise_associations(
+        db,
+        organization_id=organization_id,
+        site_id=site_id,
+        as_of=as_of,
+        window_days=window_days,
+    )
 
     risk = compute_risk_score(indicators=indicators, trend=trend, recurrence_patterns=patterns, event_count=event_count)
     explanations = generate_explanations(
@@ -386,6 +413,7 @@ def compute_enterprise_intelligence(
         concentration_contributors=concentrations,
         indicators_by_key=indicators_by_key,
         anomalies=anomalies,
+        associations=associations,
     )
 
     provenance = Provenance(
@@ -407,6 +435,7 @@ def compute_enterprise_intelligence(
             "concentration": ENTERPRISE_CONCENTRATION_CALCULATION_VERSION,
             "risk_score": ENTERPRISE_RISK_SCORE_VERSION,
             "anomaly": ANOMALY_CALCULATION_VERSION,
+            "association": ASSOCIATION_CALCULATION_VERSION,
         },
     )
 
@@ -423,6 +452,7 @@ def compute_enterprise_intelligence(
         patterns=patterns,
         concentrations=concentrations,
         anomalies=anomalies,
+        associations=associations,
         risk=risk,
         explanations=explanations,
         provenance=provenance,

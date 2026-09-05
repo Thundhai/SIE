@@ -25,6 +25,7 @@ from dataclasses import dataclass
 
 from app.intelligence.concentration import ConcentrationContributor
 from app.intelligence.enterprise_anomaly import EnterpriseAnomalyResult
+from app.intelligence.enterprise_association import EnterpriseAssociationResult
 from app.intelligence.enterprise_indicators import EnterpriseIndicator
 from app.intelligence.enterprise_trend import EnterpriseTrendResult
 from app.intelligence.recurrence import RecurrencePattern
@@ -32,6 +33,13 @@ from app.intelligence.risk_score import RiskScoreResult
 
 _MAX_RECURRENCE_EXPLANATIONS = 5
 _MAX_CONCENTRATION_EXPLANATIONS = 5
+_MAX_ASSOCIATION_EXPLANATIONS = 5
+_NOTABLE_ASSOCIATION_CLASSIFICATIONS = (
+    "STRONG_POSITIVE",
+    "MODERATE_POSITIVE",
+    "MODERATE_NEGATIVE",
+    "STRONG_NEGATIVE",
+)
 
 
 @dataclass
@@ -198,6 +206,58 @@ def _anomaly_explanations(anomalies: list[EnterpriseAnomalyResult]) -> list[Expl
     return [item for item in items if item is not None]
 
 
+_ASSOCIATION_STRENGTH_WORDS = {
+    "STRONG_POSITIVE": "strong positive",
+    "MODERATE_POSITIVE": "moderate positive",
+    "MODERATE_NEGATIVE": "moderate negative",
+    "STRONG_NEGATIVE": "strong negative",
+}
+
+
+def _association_explanation(association: EnterpriseAssociationResult) -> ExplanationItem | None:
+    """SIE Milestone 24: Enterprise Intelligence Pattern & Correlation
+    Foundation v0.1, item 10. Only notable (non-`WEAK`, non-
+    `INSUFFICIENT_DATA`) pairs get an explanation sentence -- mirrors this
+    module's own established convention (`_concentration_explanations()`
+    above only explains `HIGH`/`MODERATE` contributors, never every
+    dimension). Every number is read directly off `association` --
+    nothing generated, and never a causal claim (milestone item 10's own
+    worked example: "Incident count and near-miss count showed a strong
+    positive association across 6 historical periods (r=0.91)" is
+    permitted; "near misses caused the increase in incidents" is not, and
+    this function has no vocabulary capable of producing it)."""
+    if association.classification not in _NOTABLE_ASSOCIATION_CLASSIFICATIONS:
+        return None
+    if association.correlation_coefficient is None:
+        return None
+    strength = _ASSOCIATION_STRENGTH_WORDS[association.classification]
+    message = (
+        f"{association.label_a} and {association.label_b} showed a {strength} association across "
+        f"{association.period_count} historical periods (r={association.correlation_coefficient:g})."
+    )
+    return ExplanationItem(
+        code=f"ASSOCIATION_{association.metric_a.upper()}_{association.metric_b.upper()}_{association.classification}",
+        message=message,
+        value=association.correlation_coefficient,
+        baseline=None,
+        contribution=None,
+        evidence_reference=f"association:{association.metric_a}:{association.metric_b}",
+    )
+
+
+def _association_explanations(associations: list[EnterpriseAssociationResult]) -> list[ExplanationItem]:
+    """Unlike `_recurrence_explanations()`/`_concentration_explanations()`
+    (whose inputs already arrive ranked by strength/count), `associations`
+    is in a fixed, deterministic metric-pair declaration order, not
+    sorted by strength (item 14's own "reconstructable" requirement) --
+    so this filters for notable classifications *first*, then bounds the
+    result to `_MAX_ASSOCIATION_EXPLANATIONS`, rather than slicing the
+    fixed-order input before filtering (which could arbitrarily drop a
+    genuinely notable pair that happens to sort late)."""
+    items = [_association_explanation(a) for a in associations]
+    return [item for item in items if item is not None][:_MAX_ASSOCIATION_EXPLANATIONS]
+
+
 def generate_explanations(
     *,
     risk: RiskScoreResult,
@@ -206,14 +266,16 @@ def generate_explanations(
     concentration_contributors: list[ConcentrationContributor],
     indicators_by_key: dict[str, EnterpriseIndicator],
     anomalies: list[EnterpriseAnomalyResult] | None = None,
+    associations: list[EnterpriseAssociationResult] | None = None,
 ) -> list[ExplanationItem]:
     """Pure function over already-computed sibling results. Order:
     risk-score component drivers first (each maps 1:1 to a component that
     actually contributed points), then the trend explanation, then
     recurrence patterns, then notable concentration contributors, then
-    anomalous metrics (SIE Milestone 23) -- the same order a human
-    reviewer would want to read them in (score drivers, then supporting
-    context, then statistically unusual signals)."""
+    anomalous metrics (SIE Milestone 23), then notable cross-metric
+    associations (SIE Milestone 24) -- the same order a human reviewer
+    would want to read them in (score drivers, then supporting context,
+    then statistically unusual signals, then co-movement across metrics)."""
     items: list[ExplanationItem] = []
     items.extend(_risk_component_explanations(risk, indicators_by_key))
     trend_item = _trend_explanation(trend, risk)
@@ -222,4 +284,5 @@ def generate_explanations(
     items.extend(_recurrence_explanations(recurrence_patterns))
     items.extend(_concentration_explanations(concentration_contributors))
     items.extend(_anomaly_explanations(anomalies or []))
+    items.extend(_association_explanations(associations or []))
     return items

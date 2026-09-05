@@ -213,6 +213,33 @@ class ConcentrationClassification(str, Enum):
     HIGH = "HIGH"
 
 
+# --- SIE Milestone 24: Enterprise Intelligence Pattern & Correlation Foundation v0.1 ---
+
+
+class AssociationClassification(str, Enum):
+    """Strength/direction band for a Pearson correlation between two
+    aligned metric period-series — SIE Milestone 24: Enterprise
+    Intelligence Pattern & Correlation Foundation v0.1, item 5. A finer
+    vocabulary than `app/intelligence/association.py`'s own pre-existing,
+    unchanged `outcome` field (`ASSOCIATION_OBSERVED`/
+    `NO_ASSOCIATION_OBSERVED`/`INSUFFICIENT_DATA`) — that field is kept
+    exactly as-is for backward compatibility with its pre-existing
+    callers/tests; `classification` is the new, richer band this
+    milestone's own `EnterpriseAssociationResult` exposes. Deliberately
+    has no `CAUSATION_*` member and never will — see
+    `app/intelligence/association.py`'s own hard causal boundary, which
+    this vocabulary is designed to make structurally impossible to
+    violate: there is no member here that could be read as a causal
+    claim, only strength and direction of co-movement."""
+
+    STRONG_POSITIVE = "STRONG_POSITIVE"
+    MODERATE_POSITIVE = "MODERATE_POSITIVE"
+    WEAK = "WEAK"
+    MODERATE_NEGATIVE = "MODERATE_NEGATIVE"
+    STRONG_NEGATIVE = "STRONG_NEGATIVE"
+    INSUFFICIENT_DATA = "INSUFFICIENT_DATA"
+
+
 class RiskClassification(str, Enum):
     """The deterministic enterprise risk score's band — see
     `app/intelligence/risk_score.py` (milestone items 9-10). A

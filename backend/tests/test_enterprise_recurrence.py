@@ -145,3 +145,47 @@ def test_site_label_is_used_when_provided():
     )
     subtype_pattern = next(p for p in patterns if p.event_subtype == "VEHICLE_INCIDENT")
     assert subtype_pattern.site_label == "Site 04"
+
+
+# --- SIE Milestone 24: Enterprise Intelligence Pattern & Correlation
+# Foundation v0.1, item 1's own instruction to build pattern detection on
+# the existing recurrence infrastructure rather than replacing it -- the
+# following two tests close item 17's "Patterns" test list (deterministic
+# pattern key, period coverage), the two cases not already covered above
+# by test_first_seen_and_last_seen_reflect_the_actual_event_times() and
+# test_supporting_event_ids_are_bounded(). ------------------------------
+
+
+def test_pattern_key_is_deterministic_and_reflects_site_type_and_subtype():
+    events = _events(3, site_id=SITE_A, event_subtype="VEHICLE_INCIDENT")
+    first = _detect(events)
+    second = _detect(events)
+    type_pattern = next(p for p in first if p.event_subtype is None)
+    subtype_pattern = next(p for p in first if p.event_subtype == "VEHICLE_INCIDENT")
+    assert type_pattern.pattern_key == f"site:{SITE_A}|event_type:INCIDENT"
+    assert subtype_pattern.pattern_key == f"site:{SITE_A}|event_type:INCIDENT|event_subtype:VEHICLE_INCIDENT"
+    # Repeated detection over the same events produces the identical key.
+    assert {p.pattern_key for p in first} == {p.pattern_key for p in second}
+
+
+def test_period_coverage_distinguishes_spread_out_from_same_day_recurrence():
+    """Milestone item 3's own worked example: a pattern occurring "8 times
+    over 30 days" is materially different from "8 times on one day" --
+    `first_seen`/`last_seen` (already exposed on every `RecurrencePattern`)
+    give a caller everything needed to tell them apart, with no separate
+    opaque "pattern score" required."""
+    spread_out = _events(8, site_id=SITE_A, event_subtype="VEHICLE_INCIDENT", start_days_ago=1)
+    same_day = [
+        make_safety_event(
+            organization_id=ORG_ID, site_id=SITE_B, event_type="INCIDENT", event_subtype="VEHICLE_INCIDENT",
+            event_time=AS_OF - timedelta(hours=i),
+        )
+        for i in range(8)
+    ]
+    patterns = _detect(spread_out + same_day)
+    spread_pattern = next(p for p in patterns if p.site_id == SITE_A and p.event_subtype == "VEHICLE_INCIDENT")
+    same_day_pattern = next(p for p in patterns if p.site_id == SITE_B and p.event_subtype == "VEHICLE_INCIDENT")
+
+    assert spread_pattern.count == same_day_pattern.count == 8
+    assert (spread_pattern.last_seen - spread_pattern.first_seen).days >= 7
+    assert (same_day_pattern.last_seen - same_day_pattern.first_seen).days == 0
