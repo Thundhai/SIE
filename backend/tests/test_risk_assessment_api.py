@@ -358,7 +358,18 @@ def _add_control(client, headers, org_id, assessment_id, finding_id, **overrides
     )
 
 
-def test_control_effectiveness_effective(client, db_session):
+@pytest.mark.parametrize("effectiveness_value", ["EFFECTIVE", "PARTIALLY_EFFECTIVE", "INEFFECTIVE"])
+def test_legacy_control_patch_rejects_effectiveness_field(client, db_session, effectiveness_value):
+    """SIE Milestone 29A correction: this legacy bulk-replace-via-
+    finding-PATCH path (`RiskControlCreate`) previously accepted and
+    directly applied an `effectiveness` value -- a second, ungoverned
+    mutation path for the same field the SIE Milestone 29 dedicated
+    `POST .../controls/{control_id}/assess-effectiveness` endpoint
+    governs (explicit rating, non-blank rationale, attribution,
+    timestamp, history, audit, idempotency). `effectiveness` no longer
+    exists on this schema at all, so `extra="forbid"` now rejects it
+    outright with a `422` regardless of the value supplied -- it is
+    never silently discarded or silently applied."""
     org = make_org(db_session)
     manager = make_org_member(db_session, org.id, role=OrganizationRole.HSE_MANAGER)
     headers = dev_auth_headers(manager.id)
@@ -367,35 +378,10 @@ def test_control_effectiveness_effective(client, db_session):
         f"{_URL}/{assessment['id']}/findings?organization_id={org.id}", json=_finding_body(db_session), headers=headers
     ).json()
 
-    response = _add_control(client, headers, org.id, assessment["id"], finding["id"], effectiveness="EFFECTIVE")
-    assert response.status_code == 200
-    assert response.json()["controls"][0]["effectiveness"] == "EFFECTIVE"
-
-
-def test_control_effectiveness_partially_effective(client, db_session):
-    org = make_org(db_session)
-    manager = make_org_member(db_session, org.id, role=OrganizationRole.HSE_MANAGER)
-    headers = dev_auth_headers(manager.id)
-    assessment = _create(client, headers, org.id)
-    finding = client.post(
-        f"{_URL}/{assessment['id']}/findings?organization_id={org.id}", json=_finding_body(db_session), headers=headers
-    ).json()
-
-    response = _add_control(client, headers, org.id, assessment["id"], finding["id"], effectiveness="PARTIALLY_EFFECTIVE")
-    assert response.json()["controls"][0]["effectiveness"] == "PARTIALLY_EFFECTIVE"
-
-
-def test_control_effectiveness_ineffective(client, db_session):
-    org = make_org(db_session)
-    manager = make_org_member(db_session, org.id, role=OrganizationRole.HSE_MANAGER)
-    headers = dev_auth_headers(manager.id)
-    assessment = _create(client, headers, org.id)
-    finding = client.post(
-        f"{_URL}/{assessment['id']}/findings?organization_id={org.id}", json=_finding_body(db_session), headers=headers
-    ).json()
-
-    response = _add_control(client, headers, org.id, assessment["id"], finding["id"], effectiveness="INEFFECTIVE")
-    assert response.json()["controls"][0]["effectiveness"] == "INEFFECTIVE"
+    response = _add_control(
+        client, headers, org.id, assessment["id"], finding["id"], effectiveness=effectiveness_value
+    )
+    assert response.status_code == 422
 
 
 def test_control_effectiveness_defaults_to_not_assessed_never_conflated_with_ineffective(client, db_session):

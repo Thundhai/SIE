@@ -90,6 +90,25 @@ class RiskEvidenceRead(BaseModel):
 
 
 class RiskControlCreate(BaseModel):
+    """Nested control payload for the legacy Milestone 25
+    bulk-replace-via-finding-PATCH path (`RiskAssessmentFindingUpdate.controls`).
+
+    SIE Milestone 29A correction: this schema previously carried an
+    `effectiveness` field, letting a client set a control's effectiveness
+    directly through this path with none of the Milestone 29 governance
+    requirements (explicit rating, non-blank rationale, attribution,
+    timestamp, history, audit, idempotency) -- a second, ungoverned
+    mutation path for the same semantic field. That field is now removed
+    entirely (not merely ignored if sent): with `extra="forbid"` below, a
+    client that still sends `{"effectiveness": "..."}` here gets a `422`
+    rather than having it silently discarded or, worse, silently applied.
+    A control created/replaced through this path is always created
+    `NOT_ASSESSED` (the model's own default) -- exactly like the dedicated
+    `RiskAssessmentControlCreate` used by
+    `POST .../findings/{finding_id}/controls`. The one path that may ever
+    set a control's `effectiveness` is
+    `POST .../controls/{control_id}/assess-effectiveness`."""
+
     model_config = ConfigDict(extra="forbid")
 
     description: str = Field(..., min_length=1, max_length=_DESCRIPTION_MAX_LENGTH)
@@ -97,7 +116,6 @@ class RiskControlCreate(BaseModel):
     status: ControlStatus = ControlStatus.PROPOSED
     owner_user_id: uuid.UUID | None = None
     reference: str | None = Field(default=None, max_length=_REFERENCE_MAX_LENGTH)
-    effectiveness: ControlEffectiveness = ControlEffectiveness.NOT_ASSESSED
 
 
 class RiskControlRead(BaseModel):
@@ -281,7 +299,14 @@ class RiskAssessmentFindingUpdate(BaseModel):
     *replaces* the finding's entire control set atomically -- the
     simplest v0.1 semantics that still fully supports items 11-13
     without a dedicated controls sub-resource (item 22's own "keep the
-    milestone focused" instruction)."""
+    milestone focused" instruction).
+
+    SIE Milestone 29A correction: a replaced control's `effectiveness`
+    can no longer be set through this path (`RiskControlCreate`, the
+    schema backing `controls`, dropped that field entirely) -- use
+    `POST .../controls/{control_id}/assess-effectiveness` after
+    replacing/creating a control, which is now the single authoritative
+    mutation path for `RiskAssessmentControl.effectiveness`."""
 
     model_config = ConfigDict(extra="forbid")
 

@@ -44,6 +44,23 @@
 > residual risk) and adds no new deletion path. See "Control
 > effectiveness assessment & evidence" below for the full detail.
 
+> **Extended by SIE Milestone 29A: Risk Assessment Control Effectiveness
+> Mutation Integrity Correction v0.1.** A narrow corrective milestone: the
+> legacy Milestone 25 `PATCH .../findings/{finding_id}` bulk-replace-
+> `controls` path could previously set a control's `effectiveness`
+> directly, alongside the new Milestone 29 dedicated
+> `POST .../controls/{control_id}/assess-effectiveness` endpoint — two
+> mutation paths for the same semantic field, one of them ungoverned. The
+> legacy path's nested control schema (`RiskControlCreate`) no longer
+> carries an `effectiveness` field at all: a client that still sends one
+> gets a `422` (structural rejection, never silent discard). **Control
+> effectiveness now has exactly one authoritative mutation path.** No
+> historical data was touched — a pre-M29A control's `effectiveness` set
+> through the old path, with `NULL` rationale/attribution, remains
+> exactly as it was; it is never retroactively fabricated or rewritten.
+> No migration was required. See "Control effectiveness assessment &
+> evidence" below for the corrected write-path diagram.
+
 **SIE Milestone 25.** Moves SIE from risk *intelligence* (Milestones
 22-24: indicators, trend, patterns, anomalies, associations, and the
 deterministic `enterprise-risk-v1` score) into a structured risk
@@ -553,7 +570,11 @@ replaces it: a dedicated `.../controls` sub-resource now also exists,
 for the finer-grained per-control workflow (create one control without
 resending the whole array, assess its effectiveness with an attributed
 rationale, link it to specific evidence) the bulk-replace path was never
-designed for.
+designed for. **SIE Milestone 29A** closes one gap this left open: the
+bulk-replace path's nested control schema no longer carries an
+`effectiveness` field at all — every control it creates/replaces starts
+`NOT_ASSESSED`, exactly like the dedicated path. See "Single
+authoritative mutation path (SIE Milestone 29A)" below.
 
 ## Control effectiveness assessment & evidence (SIE Milestone 29)
 
@@ -613,12 +634,15 @@ are an assessor's own expert judgment, not the more privileged
 **Control existence is not proof of effectiveness — and this milestone
 never blurs the two.** A brand-new control (via either the dedicated
 `POST .../controls` or the legacy bulk-replace path) is always
-`NOT_ASSESSED` until a human explicitly assesses it. Nothing in this
-codebase ever infers effectiveness from a linked `SafetyAction`'s status
-— a `COMPLETED` action that was raised to implement a control does not
-mark that control `EFFECTIVE` (mirrors SIE Milestone 27's own
-"a completed action never automatically closes a finding" principle one
-level down, at the control instead of the finding).
+`NOT_ASSESSED` until a human explicitly assesses it — see "Single
+authoritative mutation path (SIE Milestone 29A)" below for how the
+legacy path's own ability to set `effectiveness` directly was closed.
+Nothing in this codebase ever infers effectiveness from a linked
+`SafetyAction`'s status — a `COMPLETED` action that was raised to
+implement a control does not mark that control `EFFECTIVE` (mirrors SIE
+Milestone 27's own "a completed action never automatically closes a
+finding" principle one level down, at the control instead of the
+finding).
 
 **`RiskAssessmentControlEvidence`** links a control to an *existing*
 `RiskAssessmentFindingEvidence` row belonging to the same finding —
@@ -678,6 +702,88 @@ score," no management recommendation. Because controls (like findings)
 are immutable once the assessment is no longer editable, this section
 carries no `computed_at` of its own — it is part of the same historical
 snapshot as everything else in the report except `action_response_summary`.
+
+## Single authoritative mutation path (SIE Milestone 29A)
+
+> **SIE Milestone 29A: Risk Assessment Control Effectiveness Mutation
+> Integrity Correction v0.1.** A narrow, corrective milestone: SIE
+> Milestone 29 built a dedicated, governed effectiveness-assessment
+> action, but never closed the legacy Milestone 25 path that could still
+> set the same field directly. This section documents the fix.
+
+**The inconsistency.** `PATCH .../findings/{finding_id}` with a
+`controls` list (the pre-existing Milestone 25 bulk-replace path)
+accepted a nested `effectiveness` value on each control and applied it
+directly — no rating validation beyond enum membership, no rationale, no
+attribution, no timestamp, no dedicated history/audit event, no
+idempotency. `POST .../controls/{control_id}/assess-effectiveness` (SIE
+Milestone 29) enforces all of that. Two mutation paths existed for one
+semantic field, and only one of them was governed.
+
+**Control effectiveness now has exactly one authoritative mutation
+path: `POST .../controls/{control_id}/assess-effectiveness`.**
+`RiskControlCreate` — the schema backing the legacy `controls` array —
+no longer declares an `effectiveness` field at all. Because every write
+schema in this file uses `extra="forbid"`, a client that still sends
+`{"effectiveness": "..."}` through the legacy path gets a `422`
+naming the field, not a silently-dropped value and not a silently-applied
+one. The route itself never reaches its own body: FastAPI/Pydantic
+rejects the request before `update_finding()` executes, so no partial
+state, no history row, and no audit row are ever written for it.
+
+```
+CONTROL
+  |
+  +-- metadata mutation (description/control_type/status/owner/reference)
+  |      |
+  |      +-- PATCH .../controls/{control_id}                  (SIE Milestone 29)
+  |      +-- PATCH .../findings/{finding_id} controls[]        (SIE Milestone 25,
+  |                                                              effectiveness-blind)
+  |
+  +-- effectiveness mutation
+         |
+         +-- ONLY POST .../controls/{control_id}/assess-effectiveness (SIE Milestone 29)
+```
+
+**Every other legacy behavior is untouched.** The bulk-replace path
+still replaces a finding's entire control set atomically, and
+`description`/`control_type`/`status`/`owner_user_id`/`reference` remain
+fully mutable through it — this correction closes exactly the one field
+the spec identified, nothing more. A control created or replaced through
+the legacy path is simply always `NOT_ASSESSED` (the model's own column
+default) until a human assesses it through the one dedicated path,
+identical to a control created through `POST .../controls`.
+
+**No fabricated history.** A control whose `effectiveness` was set
+through the legacy path *before* this correction shipped is untouched:
+its `effectiveness` value stays exactly what it was, and its
+`effectiveness_rationale`/`assessed_at`/`assessed_by_user_id` stay
+`NULL` — that is honest historical state (an effectiveness value with no
+rationale or attribution behind it), never something this milestone
+retroactively invents, backfills, or bulk-reprocesses. Reading such a
+control continues to work exactly as before; only *writing* a new
+effectiveness value through the legacy path is now impossible.
+
+**No new history/audit mechanism.** The dedicated endpoint's own
+`CONTROL_EFFECTIVENESS_ASSESSED` history/audit writes (see "Control
+effectiveness assessment & evidence" above) are unchanged and remain the
+only place an effectiveness change is recorded — there was never a
+second, legacy history mechanism to remove, since the legacy path never
+wrote history for `effectiveness` changes at all (it only recorded
+`FINDING_UPDATED`, covering the control-set replacement in general).
+
+**Immutability is unaffected.** `require_editable()` already gated the
+legacy `controls` field and the dedicated endpoint identically; closing
+the `effectiveness` gap didn't touch that gate, so effectiveness (like
+every other control field) remains impossible to change once an
+assessment is `APPROVED`/`SUPERSEDED`/`ARCHIVED` — only a new assessment
+version, per the existing versioning rules, can carry a changed
+assessment.
+
+**No migration.** This correction is schema/API/service/test-level only
+— `RiskAssessmentControl.effectiveness` (the database column) is
+untouched, and no existing row was modified. Alembic head remains
+`0020`.
 
 ## Residual risk
 
@@ -850,7 +956,8 @@ POST   /api/v1/risk-assessments/{id}/approve
 POST   /api/v1/risk-assessments/{id}/archive      (SIE Milestone 26)
 GET    /api/v1/risk-assessments/{id}/findings
 POST   /api/v1/risk-assessments/{id}/findings
-PATCH  /api/v1/risk-assessments/{id}/findings/{finding_id}
+PATCH  /api/v1/risk-assessments/{id}/findings/{finding_id}                (effectiveness-blind as of SIE Milestone 29A --
+                                                                             see "Single authoritative mutation path" below)
 POST   /api/v1/risk-assessments/{id}/findings/{finding_id}/actions        (SIE Milestone 27)
 POST   /api/v1/risk-assessments/{id}/findings/{finding_id}/actions/link   (SIE Milestone 27)
 DELETE /api/v1/risk-assessments/{id}/findings/{finding_id}/actions/{action_id}  (SIE Milestone 27)
@@ -1041,6 +1148,12 @@ milestone.
   on-demand, no-snapshot tradeoff Milestone 22 already documented for
   the enterprise intelligence endpoints) — an accepted v0.1 cost, not a
   caching layer waiting to be added silently.
+* Milestone 29A (see "Single authoritative mutation path" above) closes
+  the legacy bulk-replace path's ability to set `effectiveness` directly
+  but does not retroactively touch data written through it before the
+  correction shipped — a pre-existing control's `effectiveness` with
+  `NULL` rationale/assessed_at/assessed_by_user_id is preserved exactly
+  as-is, on principle, not fabricated or backfilled.
 
 ## What a risk assessment does not mean
 

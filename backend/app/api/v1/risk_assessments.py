@@ -1157,6 +1157,14 @@ def update_finding(
             rated_residual = True
 
         if body.controls is not None:
+            # SIE Milestone 29A correction: `RiskControlCreate` no longer
+            # carries an `effectiveness` field at all (see its own
+            # docstring), so every control replaced through this legacy
+            # bulk-replace path is created `NOT_ASSESSED` -- the model's
+            # own column default -- exactly like a control created
+            # through the dedicated `POST .../controls` route. The one
+            # path that may ever set `effectiveness` is
+            # `POST .../controls/{control_id}/assess-effectiveness`.
             finding.controls = [
                 RiskAssessmentControl(
                     organization_id=organization_id,
@@ -1166,7 +1174,6 @@ def update_finding(
                     status=c.status,
                     owner_user_id=c.owner_user_id,
                     reference=c.reference,
-                    effectiveness=c.effectiveness,
                 )
                 for c in body.controls
             ]

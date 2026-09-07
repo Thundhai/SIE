@@ -3871,6 +3871,36 @@ deletion" satisfied by building neither in v0.1). See
 own "Control effectiveness assessment & evidence" section for the full
 detail.
 
+**Update (SIE Milestone 29A: Risk Assessment Control Effectiveness
+Mutation Integrity Correction v0.1):** a narrow corrective milestone.
+Milestone 29 built a dedicated, governed `assess-effectiveness` action,
+but never closed the legacy Milestone 25
+`PATCH .../findings/{finding_id}` bulk-replace-`controls` path, which
+could still set a control's `effectiveness` directly — a second,
+ungoverned mutation path for the same field. `RiskControlCreate` (the
+schema backing that legacy `controls` array) no longer declares an
+`effectiveness` field at all; with `extra="forbid"` already in force
+everywhere in this file, a client that still sends one gets a `422`
+naming the field — never silently dropped, never silently applied. The
+request never reaches `update_finding()`'s own body, so no partial
+state, history row, or audit row is ever written for it either.
+`RiskAssessmentControl.effectiveness` now has exactly one authoritative
+mutation path: `POST .../controls/{control_id}/assess-effectiveness`.
+Every other legacy behavior — bulk-replacing `description`/
+`control_type`/`status`/`owner_user_id`/`reference` — is untouched; a
+control created/replaced through the legacy path is simply always
+`NOT_ASSESSED` now, identical to one created through the dedicated
+`POST .../controls`. No historical data was touched: a pre-existing
+control whose `effectiveness` was set through the old path, with `NULL`
+rationale/`assessed_at`/`assessed_by_user_id`, is preserved exactly as
+it was — that is honest historical state, never retroactively
+fabricated or rewritten. `require_editable()`'s existing
+APPROVED/SUPERSEDED/ARCHIVED immutability gate is unchanged and covers
+both paths identically. No migration was required — this correction is
+schema/API/service/test-level only; Alembic head remains `0020`. See
+[`docs/RISK_ASSESSMENT_FOUNDATION_V0_1.md`](docs/RISK_ASSESSMENT_FOUNDATION_V0_1.md)'s
+own "Single authoritative mutation path" section for the full detail.
+
 ## Enterprise Data Ingestion & Validation Foundation Architecture
 
     external system -> POST /api/v1/data/ingestion  (machine-client, safety_data:write)
