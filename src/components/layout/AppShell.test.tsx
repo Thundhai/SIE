@@ -32,21 +32,27 @@ function renderShell(initialPath = '/') {
 }
 
 describe('AppShell', () => {
-  it('renders Home, Events, and Actions as real navigable links', () => {
+  it('renders Home, Events, Actions, Risk Assessments, and Intelligence as real navigable links', () => {
     renderShell();
     expect(screen.getByRole('link', { name: 'Home' })).toHaveAttribute('href', '/');
     expect(screen.getByRole('link', { name: 'Events' })).toHaveAttribute('href', '/events');
     expect(screen.getByRole('link', { name: 'Actions' })).toHaveAttribute('href', '/actions');
+    expect(screen.getByRole('link', { name: 'Risk Assessments' })).toHaveAttribute('href', '/risk-assessments');
+    expect(screen.getByRole('link', { name: 'Intelligence' })).toHaveAttribute('href', '/intelligence');
   });
 
-  it('renders Intelligence/Knowledge/Reports/Administration as disabled, non-navigating items (§9/§22)', () => {
+  it('renders Knowledge/Reports/Administration as disabled, non-navigating items (§9/§22) — SIE Milestone UI-01 promotes Intelligence and Risk Assessments to real routes', () => {
     renderShell();
-    for (const label of ['Intelligence', 'Knowledge', 'Reports', 'Administration']) {
+    for (const label of ['Knowledge', 'Reports', 'Administration']) {
       // Not a link/button — no navigation target exists for it this milestone.
       expect(screen.queryByRole('link', { name: label })).not.toBeInTheDocument();
-      expect(screen.getByText(label)).toBeInTheDocument();
+      // Some group headings share their single item's label verbatim (e.g.
+      // "Knowledge"/"Administration" — the approved nav structure), so the
+      // item row itself (a <span>, not the group's <p> heading) is what's
+      // asserted here.
+      expect(screen.getByText(label, { selector: 'span' })).toBeInTheDocument();
     }
-    expect(screen.getAllByText('Coming later')).toHaveLength(4);
+    expect(screen.getAllByText('Coming later')).toHaveLength(3);
   });
 
   it('navigating from Home to Events swaps the routed content without a full page reload', async () => {

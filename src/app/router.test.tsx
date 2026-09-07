@@ -46,8 +46,8 @@ describe('AppRoutes', () => {
     expect(screen.getByRole('heading', { name: 'Home' })).toBeInTheDocument();
   });
 
-  it('does not route Intelligence/Knowledge/Reports/Administration to a fake page (§22) — falls back to Home', () => {
-    renderAt('/intelligence');
+  it('does not route Knowledge/Reports/Administration to a fake page (§22) — falls back to Home', () => {
+    renderAt('/knowledge');
     expect(screen.getByRole('heading', { name: 'Home' })).toBeInTheDocument();
   });
 
@@ -59,5 +59,20 @@ describe('AppRoutes', () => {
   it('renders Action Detail for a known fixture id at /actions/:actionId', async () => {
     renderAt('/actions/ACT-2001');
     await waitFor(() => expect(screen.getByRole('heading', { name: /Review reversing procedure/ })).toBeInTheDocument());
+  });
+
+  it('renders Intelligence at /intelligence (SIE Milestone UI-01)', () => {
+    renderAt('/intelligence');
+    expect(screen.getByRole('heading', { name: 'Intelligence' })).toBeInTheDocument();
+  });
+
+  it('renders Risk Assessments at /risk-assessments (SIE Milestone UI-01)', () => {
+    renderAt('/risk-assessments');
+    expect(screen.getByRole('heading', { name: 'Risk Assessments' })).toBeInTheDocument();
+  });
+
+  it('renders Risk Assessment Detail at /risk-assessments/:assessmentId (SIE Milestone UI-01)', () => {
+    renderAt('/risk-assessments/RA-1001');
+    expect(screen.getByRole('navigation', { name: 'Breadcrumb' })).toBeInTheDocument();
   });
 });

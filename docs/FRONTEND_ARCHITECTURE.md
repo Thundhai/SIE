@@ -13,8 +13,12 @@ verification. §2, §4, §5, and §7 were updated again, and §9 added, for
 which brought the Actions domain (SIE Milestone 17's backend, frozen and
 unchanged by this frontend milestone) into the app the same way Events
 was integrated — see `docs/ACTIONS_DOMAIN.md` for the backend's own
-Actions documentation. This document does not cover the backend itself
-(see `backend/README.md`).
+Actions documentation. §2 and §5 were touched again, and §10 added, for
+**SIE Milestone UI-01: Intelligence Workspace Integration v0.1**, which
+connected the already-completed Enterprise Intelligence (M22/M22A/M23)
+and Risk Assessment (M26-M29A) backends to the app and restructured the
+Sidebar into grouped navigation — zero backend changes. This document
+does not cover the backend itself (see `backend/README.md`).
 
 ## 1. Legacy vs. new — read this first
 
@@ -386,3 +390,97 @@ existed; every other Actions screen reuses `Table`/`FilterBar`/
 `Pagination`/`Select`/`Button`/`StatusBadge`/`PriorityBadge`/`Modal`/
 `Drawer`/`EmptyState`/`ErrorState`/`LoadingState`/`Section`/
 `PageContainer`/`Breadcrumb` unchanged.
+
+## 10. Intelligence Workspace Integration (SIE Milestone UI-01)
+
+Connects the app to two already-completed, already-frozen backend
+capabilities that had no frontend surface at all before this milestone:
+Enterprise Intelligence (`docs/ENTERPRISE_INTELLIGENCE_RISK_ANALYTICS.md`
+— Milestones 22/22A/23) and Risk Assessments
+(`backend/docs/RISK_ASSESSMENT_FOUNDATION_V0_1.md` — Milestones
+25-29A). **Zero backend changes.** Events, Event Detail, and Actions
+(§4, §9) needed no changes — they already connected to their real APIs.
+
+**New routes.** `/intelligence` (`src/features/intelligence/
+IntelligencePage.tsx`) and `/risk-assessments` + `/risk-assessments/
+:assessmentId` (`src/features/riskAssessments/RiskAssessmentsPage.tsx`/
+`RiskAssessmentDetailPage.tsx`) — `src/app/router.tsx`.
+
+**New API service files**, following the existing `apiRequest<T>()`
+pattern (§4) exactly, no new fetch mechanism:
+`src/services/api/intelligence.ts` (`getEnterpriseIntelligence`,
+`getSiteIntelligence`, against `GET /api/v1/intelligence/enterprise`
+and `.../sites/{site_id}`) and `src/services/api/riskAssessments.ts`
+(`listRiskAssessments`, `getRiskAssessment`, against
+`GET /api/v1/risk-assessments` and `.../{id}`). Both files' TypeScript
+interfaces mirror their backend Pydantic schemas field-for-field — no
+frontend recalculation of anything the backend already computed
+(risk scores, trend/anomaly/pattern/association classifications all
+pass through unchanged).
+
+**No fixture path for these two domains — unlike Events/Actions.**
+`IntelligencePage` and `RiskAssessmentsPage`/`RiskAssessmentDetailPage`
+call their real API directly (no repository, no `FixtureXRepository`).
+Home follows this same precedent (§6 fixture policy): a missing
+organization context renders an honest "No organization context
+available" empty state, never fabricated enterprise activity. This is a
+deliberate departure from Events/Actions' fixture-fallback pattern (§5)
+— intelligence and risk-assessment data is exactly the kind of
+enterprise-activity content the fixture policy warns most strongly
+against presenting as if real.
+
+**Governed-enum label modules**, following `eventStatus.ts`'s
+`formatCanonicalLabel()` precedent (map known values, fall back to
+title-casing for anything unmapped, never hide or coerce a value):
+`src/features/intelligence/intelligenceLabels.ts` (data sufficiency,
+risk classification, trend, anomaly status/direction, recurrence,
+association) and `src/features/riskAssessments/riskAssessmentLabels.ts`
+(assessment status/type/scope, finding status, residual risk
+classification).
+
+**Home (`src/features/home/HomePage.tsx`) gained four new sections**,
+added above its existing, unchanged, already-real-API-backed "At a
+glance"/"Signals requiring attention"/"Key indicators" sections — an
+extension, not a rewrite: "Enterprise risk" (score/classification/data
+sufficiency from `enterprise-risk-v1`, no new calculation), "What is
+changing" (indicators vs. their own recent baseline, explicitly phrased
+as deviation-not-conclusion), "Needs attention" (open/high-priority
+action counts from `actions_context`, anomalous-indicator and
+recurring-pattern counts — only what the backend already computes), and
+"Recent events" (`listEvents` directly, 5 most recent, each row
+navigable to `/events/:eventId`). Each section has its own independent
+`AsyncState` + `useEffect`/`AbortController`, so one section's failure
+(e.g. intelligence unreachable) never blocks the others from rendering.
+
+**Intelligence workspace tabs** (Indicators/Anomalies/Patterns/
+Associations, via the existing `Tabs` primitive) render the backend's
+NORMAL/ANOMALOUS/INSUFFICIENT_DATA and RECURRING/association
+classifications verbatim through the label modules above — plain HSE
+language throughout ("Above baseline", "Recurring pattern", "Moderate
+positive association"), never "AI detected"/"AI prediction", never a
+causation claim for an association. An insufficient-data banner is
+shown honestly rather than hidden when `data_sufficiency.status` says
+so.
+
+**Risk Assessments is intentionally minimal** — list + detail only, per
+the milestone's explicit scope limit. No findings-editing, controls,
+effectiveness, evidence, or reporting UI (all backend-complete through
+M29A but deliberately left for a future UI milestone). Detail page
+handles a 404 as a calm "Risk assessment not found" state (`error
+instanceof ApiError && error.status === 404`), not a scary error.
+
+**Sidebar restructured into grouped navigation**
+(`src/components/layout/Sidebar.tsx`): Home; Work (Events, Actions, Risk
+Assessments); Intelligence (Intelligence); Knowledge/Reporting/
+Administration (all still "Coming later" — no backend yet). Real routes
+are never permission-gated at the Sidebar level (existing Home/Events/
+Actions precedent, §3/§9) — enforcement is the backend's 403, surfaced
+as a calm access-denied `EmptyState` (detected via a `"missing" +
+"permission"` substring match on the error message) rather than a
+scary generic `ErrorState`.
+
+**No raw UUIDs as primary labels**, consistent with Actions' M18
+precedent: `RiskAssessmentsPage`'s table and `RiskAssessmentDetailPage`'s
+breadcrumb/heading always show the assessment's `title` (never `id`);
+`IntelligencePage` never surfaces `organization_id`/`entity_id` in
+prose.
