@@ -28,7 +28,8 @@ organization it belongs to, identical reasoning to
 **One table for both assessment- and finding-level events.** `finding_id`
 is nullable: `NULL` for an assessment-level event (created/submitted/
 approved/archived), set for a finding-level event (created/updated/risk
-rated/residual rated/action linked or unlinked) -- always queryable by
+rated/residual rated/action created/linked/unlinked/closed -- SIE
+Milestone 27 adds the last two kinds) -- always queryable by
 `assessment_id` alone (a client rendering "history for this assessment"
 needs both kinds together, in one chronological list), and by
 `(assessment_id, finding_id)` for one finding's own history."""
@@ -61,6 +62,17 @@ class RiskAssessmentHistoryChangeType:
     FINDING_RESIDUAL_RATED = "FINDING_RESIDUAL_RATED"
     FINDING_ACTION_LINKED = "FINDING_ACTION_LINKED"
     FINDING_ACTION_UNLINKED = "FINDING_ACTION_UNLINKED"
+    # SIE Milestone 27: Risk Assessment & Action Management Integration v0.1.
+    # FINDING_ACTION_CREATED is distinct from FINDING_ACTION_LINKED -- the
+    # latter is reused, unchanged, for linking an *existing* SafetyAction
+    # (whether via the legacy linked_action_id field or the new dedicated
+    # relationship endpoint); this one specifically records that a *new*
+    # SafetyAction was created, from this finding, in the same operation.
+    FINDING_ACTION_CREATED = "FINDING_ACTION_CREATED"
+    # The one, governed path to FindingStatus.CLOSED -- see FindingStatus's
+    # own docstring (app/models/risk_assessment_enums.py) and
+    # require_finding_closable() (app/services/risk_assessment_service.py).
+    FINDING_CLOSED = "FINDING_CLOSED"
 
 
 class RiskAssessmentHistory(UUIDPrimaryKeyMixin, OrganizationScopedMixin, Base):

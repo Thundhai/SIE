@@ -12,6 +12,19 @@
 > callout below for the specific change; `enterprise-risk-v1` is, again,
 > completely untouched.
 
+> **Extended by SIE Milestone 27: Risk Assessment & Action Management
+> Integration v0.1.** Closes the loop between identified risk → assessed
+> risk → corrective action → action status → finding closure, while
+> keeping `SafetyAction` (SIE Milestone 17) the single source of truth
+> for actions — never a second action system. A finding may now require
+> *multiple* actions, via a new `RiskAssessmentFindingAction` relationship
+> table that supplements (never replaces) Milestone 26's own
+> `linked_action_id`; a new, explicit `POST .../findings/{finding_id}/close`
+> route is the one governed path to closing a finding, deliberately never
+> triggered by a linked action's own status. See "Linking a finding to
+> its response action(s)" and "Closure governance" below for the full
+> detail.
+
 **SIE Milestone 25.** Moves SIE from risk *intelligence* (Milestones
 22-24: indicators, trend, patterns, anomalies, associations, and the
 deterministic `enterprise-risk-v1` score) into a structured risk
@@ -320,26 +333,130 @@ No code path in this codebase computes a likelihood or consequence value
 from an anomaly's z-score, a pattern's occurrence count, or an
 association's correlation coefficient. That computation does not exist.
 
-### Linking a finding to its response action
+### Linking a finding to its response action(s)
 
-*(SIE Milestone 26.)* `RiskAssessmentFinding.linked_action_id` (nullable
-FK to `SafetyAction`, `ondelete='SET NULL'`) answers "what is the
-organization's actual response to this finding" — architecturally
-distinct from an `ACTION`-type `RiskAssessmentFindingEvidence` row, which
-answers a different question, "why does this finding exist" (an
-already-existing corrective action that evidences the hazard). The two
-are never conflated: a finding may cite an existing action as evidence
-*and separately* link to the action raised in response to it, and either,
-neither, or both may exist at once. Set/cleared via `PATCH
-.../findings/{finding_id}` (`{"linked_action_id": "<uuid>"}` to link,
-`{"linked_action_id": null}` to explicitly unlink) — validated with the
-identical tenant-isolation rule every other evidence reference already
-uses (`validate_action_reference()`; a foreign organization's action is
-`404`). Linking/unlinking each write their own dedicated
-`RiskAssessmentHistory` entry and `AuditLog` action (see "Audit trail"
-below) — distinct from a general "finding updated" event, so "was this
-finding ever linked to a response action, and when" is always a direct,
-unambiguous query rather than a diff over free-text change comments.
+*(SIE Milestone 26; extended to a real relationship by Milestone 27.)*
+"What is the organization's actual response to this finding" —
+architecturally distinct from an `ACTION`-type
+`RiskAssessmentFindingEvidence` row, which answers a different question,
+"why does this finding exist" (an already-existing corrective action
+that evidences the hazard). The two are never conflated: a finding may
+cite an existing action as evidence *and separately* link to the
+action(s) raised in response to it, and either, neither, or both may
+exist at once.
+
+**SIE Milestone 27: Risk Assessment & Action Management Integration
+v0.1** replaces the single-action limitation with a real relationship —
+a serious finding may need several controls/actions, not just one:
+
+```
+RiskAssessmentFinding
+        |
+        +-- SafetyAction A
+        +-- SafetyAction B
+        +-- SafetyAction C
+```
+
+**The smallest backward-compatible change, not a redesign.**
+`RiskAssessmentFinding.linked_action_id` (SIE Milestone 26's own
+nullable FK, `ondelete='SET NULL'`) is **kept exactly as it was** — same
+column, same migration, same `PATCH .../findings/{finding_id}` behavior,
+every Milestone 26 test still passing unmodified. A new table,
+`RiskAssessmentFindingAction` (`app/models/risk_assessment_finding_action.py`
+— tenant-scoped, `ON DELETE CASCADE` on both `finding_id` and
+`action_id`, unique on `(finding_id, action_id)`), *supplements* it as
+the canonical multi-action relationship: `update_finding()`'s existing
+`linked_action_id` branch now also writes/removes the matching
+relationship row, so a finding linked only through the legacy field and
+one linked through the new endpoints are both visible through the one
+same query (`GET .../findings/{finding_id}/actions`) — there is exactly
+one underlying source of truth for "which actions does this finding
+currently have." Migration 0019 backfills one relationship row per
+pre-existing non-`NULL` `linked_action_id`, so this is true immediately
+upon upgrade too, not just for rows created afterward — no Milestone 26
+data is lost or reinterpreted.
+
+**API** (all under `/api/v1/risk-assessments`, all tenant-scoped and
+gated on `require_editable()` exactly like every other finding
+mutation — see "Immutability after approval" below):
+
+```
+POST   /{assessment_id}/findings/{finding_id}/actions        create a new SafetyAction, linked in one operation
+POST   /{assessment_id}/findings/{finding_id}/actions/link    link an existing SafetyAction
+DELETE /{assessment_id}/findings/{finding_id}/actions/{action_id}   unlink
+GET    /{assessment_id}/findings/{finding_id}/actions         every action currently linked to this finding
+GET    /actions/{action_id}/findings                          every finding currently linked to this action
+```
+
+Creating a new action (`POST .../actions`) requires `RISK_ASSESSMENT_WRITE`
+*and* `INTERVENTION_MANAGE` (`+INTERVENTION_ASSIGN` if `owner_user_id` is
+supplied) — creating a `SafetyAction` is an Actions-domain capability
+`risk_assessment:write` alone never grants, mirroring the "risk_assessment:
+write != governance:manage" precedent (SIE Milestone 25A) one boundary
+over. Linking/unlinking an *existing* action requires only
+`RISK_ASSESSMENT_WRITE` (it never mutates the action itself). Both
+link and unlink are idempotent by construction — linking an
+already-linked action, or unlinking one that isn't linked, returns the
+current state rather than erroring or duplicating (item 10's own
+"safely retryable" requirement); creating a genuinely new action instead
+supports `Idempotency-Key`, the identical mechanism `POST
+/risk-assessments` already uses.
+
+**The action's own origin, without a new `SafetyAction` column.** A
+`SafetyAction` created via `POST .../actions` records which
+assessment/finding it came from inside its own, already-existing
+`attributes` JSON column (`{"risk_assessment_origin": {"assessment_id":
+..., "finding_id": ...}}`) — the exact "bounded, domain-specific
+structured data... don't force a migration for every new field"
+extension point `app/models/safety_action.py`'s own docstring already
+documents, never a new FK column on `SafetyAction` itself, which this
+milestone leaves completely unmodified. An action merely *linked* (not
+created from a finding) carries no such origin — the distinction between
+"created from" and "linked to" is real and preserved.
+
+**The action's own domain trail is written too, not duplicated.**
+`POST .../actions` also calls `app/services/safety_action_service.py`'s
+own `record_history()`/`audit_action_event()` (`SafetyActionHistory`
+`CREATED`, `AuditLog` `SAFETY_ACTION_CREATED`) — the identical calls
+`app/api/v1/actions.py::create_action()` itself makes — so that action's
+own history looks the same regardless of which endpoint created it.
+
+## Closure governance (SIE Milestone 27)
+
+```
+OPEN <-> ADDRESSED -> CLOSED (terminal)
+```
+
+**A completed action never automatically closes a finding.** The
+milestone's own explicit unsafe example —
+`if action.status == COMPLETED: finding.status = CLOSED` — is never
+implemented anywhere in this codebase. Nothing in the Risk Assessment
+domain reads a linked action's `status` at all; a `SafetyAction`
+transitioning to `COMPLETED` has zero side effect on any finding it
+happens to be linked to (see
+`tests/test_risk_assessment_m27.py::test_completed_action_does_not_automatically_close_finding`).
+Finding status and action status are, and remain, two independent facts
+— an assessor may reasonably judge that residual risk remains
+unacceptable even after the linked action is done.
+
+**`CLOSED` has exactly one path: `POST .../findings/{finding_id}/close`.**
+The generic `PATCH .../findings/{finding_id}` `status` field still moves
+a finding between `OPEN`/`ADDRESSED` freely (unchanged from before this
+milestone), but explicitly rejects a target of `CLOSED` with a `422`
+pointing at the dedicated route — there is no back door. `close_finding()`
+is gated on `RISK_ASSESSMENT_APPROVE` (the same, more-privileged
+permission `submit`/`approve`/`archive` already require — closure is a
+consequential enough decision to hold to it) and requires, in its
+request body, an explicit, non-blank `closure_reason` (item 6's own
+"human-controlled and explicitly recorded"; there is no inferred or
+default reason). `require_finding_closable()`
+(`app/services/risk_assessment_service.py`) additionally refuses to
+close a finding that was never actually rated (`likelihood is None`) —
+closing an un-rated candidate or an untouched finding is never a
+legitimate "we decided this is resolved," only nothing having happened
+yet. `CLOSED` is terminal (mirrors `RiskAssessmentStatus.ARCHIVED`'s own
+reasoning) — reassessing a closed finding means a new finding (or a new
+assessment version), never reopening this one.
 
 ## Risk matrix methodology
 
@@ -535,7 +652,12 @@ audit-log system. `AuditAction` members:
 `_SUPERSEDED`/`_ARCHIVED` *(Milestone 26)*/`_FINDING_CREATED`/
 `_FINDING_UPDATED`/`_FINDING_RISK_RATED` *(Milestone 26; covers both an
 inherent and a residual rating change)*/`_FINDING_ACTION_LINKED`/
-`_FINDING_ACTION_UNLINKED` *(Milestone 26)*.
+`_FINDING_ACTION_UNLINKED` *(Milestone 26; reused unchanged by Milestone
+27's own new relationship endpoints — see "Linking a finding to its
+response action(s)" above)*/`_FINDING_ACTION_CREATED`/`_FINDING_CLOSED`
+*(Milestone 27)*. Creating a new action from a finding also writes the
+Actions domain's own, pre-existing `SAFETY_ACTION_CREATED` — reused, not
+duplicated (see above).
 
 ### `RiskAssessmentHistory` — a domain-scoped record, not a second `AuditLog`
 
@@ -545,7 +667,8 @@ mirrors `SafetyActionHistory`'s own established Milestone 17 precedent
 exactly: one row per assessment- or finding-level change
 (`ASSESSMENT_CREATED`/`_UPDATED`/`_SUBMITTED`/`_APPROVED`/`_SUPERSEDED`/
 `_ARCHIVED`, `FINDING_CREATED`/`_UPDATED`/`_RISK_RATED`/
-`_RESIDUAL_RATED`/`_ACTION_LINKED`/`_ACTION_UNLINKED`), carrying
+`_RESIDUAL_RATED`/`_ACTION_LINKED`/`_ACTION_UNLINKED`/`_ACTION_CREATED`/
+`_CLOSED` *(the last two, Milestone 27)*), carrying
 `assessment_id`, an optional `finding_id`, `from_status`/`to_status`,
 `changed_by_user_id`/`changed_by_api_client_id`, `request_id`, and an
 optional free-text `comment`. `change_type` is a plain string (via the
@@ -577,6 +700,12 @@ POST   /api/v1/risk-assessments/{id}/archive      (SIE Milestone 26)
 GET    /api/v1/risk-assessments/{id}/findings
 POST   /api/v1/risk-assessments/{id}/findings
 PATCH  /api/v1/risk-assessments/{id}/findings/{finding_id}
+POST   /api/v1/risk-assessments/{id}/findings/{finding_id}/actions        (SIE Milestone 27)
+POST   /api/v1/risk-assessments/{id}/findings/{finding_id}/actions/link   (SIE Milestone 27)
+DELETE /api/v1/risk-assessments/{id}/findings/{finding_id}/actions/{action_id}  (SIE Milestone 27)
+GET    /api/v1/risk-assessments/{id}/findings/{finding_id}/actions        (SIE Milestone 27)
+POST   /api/v1/risk-assessments/{id}/findings/{finding_id}/close          (SIE Milestone 27)
+GET    /api/v1/risk-assessments/actions/{action_id}/findings              (SIE Milestone 27)
 ```
 
 The first eight (minus `archive`) are the Milestone 25 spec's own named
@@ -586,8 +715,12 @@ have no path to ever be reviewed, rated, or given controls — which would
 make the "candidate ≠ approved risk" architecture unreachable through
 this API. `POST .../{id}/archive` is Milestone 26's own one new route —
 the sole, manual, human-invoked path to `ARCHIVED` (see "Assessment
-lifecycle" above); every other transition already had a route. No
-"create new version"/"supersede" endpoint exists (folded into `POST
+lifecycle" above); every other transition already had a route. The six
+Milestone 27 routes are its own named minimum functionality list (create/
+link/unlink/view actions for a finding, view findings for an action,
+close a finding) — see "Linking a finding to its response action(s)" and
+"Closure governance" above for each one's own rationale. No "create new
+version"/"supersede" endpoint exists (folded into `POST
 /risk-assessments` via `supersedes_assessment_id`); no dedicated controls
 sub-resource exists (folded into the finding `PATCH`).
 

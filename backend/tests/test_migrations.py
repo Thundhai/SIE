@@ -65,7 +65,7 @@ def test_fresh_postgres_database_migrates_through_head_with_no_manual_interventi
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0018"
+            assert version == "0019"
 
             enum_types = {
                 row[0]
@@ -267,7 +267,7 @@ def test_downgrade_then_reupgrade_round_trips_cleanly(monkeypatch):
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0018"
+            assert version == "0019"
     finally:
         engine.dispose()
 
@@ -309,7 +309,7 @@ def test_intelligence_migration_downgrade_then_reupgrade_round_trips_cleanly(mon
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0018"
+            assert version == "0019"
 
             tables = {
                 row[0]
@@ -365,7 +365,7 @@ def test_predictive_modeling_migration_downgrade_then_reupgrade_round_trips_clea
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0018"
+            assert version == "0019"
 
             tables = {
                 row[0]
@@ -436,7 +436,7 @@ def test_governance_migration_downgrade_then_reupgrade_round_trips_cleanly(monke
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0018"
+            assert version == "0019"
 
             tables = {
                 row[0]
@@ -525,7 +525,7 @@ def test_enterprise_api_migration_downgrade_then_reupgrade_round_trips_cleanly(m
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0018"
+            assert version == "0019"
 
             tables = {
                 row[0]
@@ -633,7 +633,7 @@ def test_data_ingestion_migration_downgrade_then_reupgrade_round_trips_cleanly(m
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0018"
+            assert version == "0019"
 
             tables = {
                 row[0]
@@ -776,7 +776,7 @@ def test_real_enterprise_terminology_ontology_calibration_migration_downgrade_th
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0018"
+            assert version == "0019"
 
             tables = {
                 row[0]
@@ -851,7 +851,7 @@ def test_sie_enterprise_ontology_migration_downgrade_then_reupgrade_round_trips_
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0018"
+            assert version == "0019"
 
             tables = {
                 row[0]
@@ -947,7 +947,7 @@ def test_actions_and_intervention_migration_downgrade_then_reupgrade_round_trips
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0018"
+            assert version == "0019"
 
             tables = {
                 row[0]
@@ -1046,7 +1046,7 @@ def test_risk_assessment_migration_downgrade_then_reupgrade_round_trips_cleanly(
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0018"
+            assert version == "0019"
 
             tables = {
                 row[0]
@@ -1214,7 +1214,7 @@ def test_risk_assessment_ontology_taxonomy_migration_downgrade_then_reupgrade_ro
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0018"
+            assert version == "0019"
 
             concept_columns = {
                 row[0]
@@ -1411,7 +1411,7 @@ def test_formal_risk_assessment_engine_migration_downgrade_then_reupgrade_round_
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0018"
+            assert version == "0019"
 
             tables = {
                 row[0]
@@ -1538,6 +1538,226 @@ def test_formal_risk_assessment_engine_migration_downgrade_refuses_while_an_arch
             # The failed downgrade must not have left the schema
             # half-migrated -- still at head.
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version == "0019"
+    finally:
+        engine.dispose()
+
+
+@requires_postgres
+def test_finding_action_relationship_migration_downgrade_then_reupgrade_round_trips_cleanly(monkeypatch):
+    """SIE Milestone 27: Risk Assessment & Action Management Integration
+    v0.1 (migration 0019). Downgrading to 0018 must drop
+    `risk_assessment_finding_actions` entirely while leaving
+    `risk_assessment_findings.linked_action_id` (and every other 0018-era
+    column) untouched -- the relationship table is purely additive.
+    Re-upgrading to head must recreate the table and re-backfill it from
+    the (never-modified) `linked_action_id` data, exactly reproducing the
+    relationship that existed before the downgrade."""
+    engine = _fresh_schema_engine()
+    try:
+        monkeypatch.setattr("app.core.config.settings.DATABASE_URL", PG_TEST_DATABASE_URL)
+        config = _alembic_config()
+
+        command.upgrade(config, "head")
+
+        with engine.connect() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO organizations (id, name, status, created_at, updated_at) "
+                    "VALUES (gen_random_uuid(), 'M27 Migration Test Org', 'active', now(), now())"
+                )
+            )
+            org_id = conn.execute(
+                text("SELECT id FROM organizations WHERE name = 'M27 Migration Test Org'")
+            ).scalar_one()
+            concept_id = conn.execute(
+                text("SELECT id FROM ontology_concepts WHERE organization_id IS NULL AND concept_key = 'VEHICLE_INCIDENT'")
+            ).scalar_one()
+            assessment_id = conn.execute(
+                text(
+                    "INSERT INTO risk_assessments (id, organization_id, scope, title, assessment_type, status, "
+                    "lineage_id, version, assessment_date, as_of, window_days, methodology_version, "
+                    "created_at, updated_at) "
+                    "VALUES (gen_random_uuid(), :org_id, 'ORGANIZATION', 'M27 Migration Test Assessment', "
+                    "'BASELINE', 'DRAFT', gen_random_uuid(), 1, now(), now(), 30, 'risk-assessment-v1', now(), now()) "
+                    "RETURNING id"
+                ),
+                {"org_id": org_id},
+            ).scalar_one()
+            action_id = conn.execute(
+                text(
+                    "INSERT INTO safety_actions (id, organization_id, title, action_type, priority, status, "
+                    "attributes, created_at, updated_at) "
+                    "VALUES (gen_random_uuid(), :org_id, 'M27 Migration Test Action', 'CORRECTIVE', 'MEDIUM', "
+                    "'OPEN', '{}'::jsonb, now(), now()) RETURNING id"
+                ),
+                {"org_id": org_id},
+            ).scalar_one()
+            finding_id = conn.execute(
+                text(
+                    "INSERT INTO risk_assessment_findings (id, organization_id, assessment_id, risk_area_concept_id, "
+                    "risk_area_ontology_version, title, source, status, linked_action_id, created_at, updated_at) "
+                    "VALUES (gen_random_uuid(), :org_id, :assessment_id, :concept_id, 1, "
+                    "'M27 Migration test finding', 'MANUAL', 'OPEN', :action_id, now(), now()) RETURNING id"
+                ),
+                {"org_id": org_id, "assessment_id": assessment_id, "concept_id": concept_id, "action_id": action_id},
+            ).scalar_one()
+            conn.commit()
+
+        with engine.connect() as conn:
+            relationship_count = conn.execute(
+                text(
+                    "SELECT count(*) FROM risk_assessment_finding_actions "
+                    "WHERE finding_id = :finding_id AND action_id = :action_id"
+                ),
+                {"finding_id": finding_id, "action_id": action_id},
+            ).scalar_one()
+            assert relationship_count == 0  # not backfilled -- this finding was inserted after 0019 already ran
+
+        command.downgrade(config, "0018")
+
+        with engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
             assert version == "0018"
+
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+                ).all()
+            }
+            assert "risk_assessment_finding_actions" not in tables
+            # Untouched by 0019's downgrade.
+            assert "risk_assessment_findings" in tables
+            assert "safety_actions" in tables
+
+            finding_columns = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = 'risk_assessment_findings'"
+                    )
+                ).all()
+            }
+            assert "linked_action_id" in finding_columns
+
+            # linked_action_id itself is completely untouched by 0019's
+            # downgrade -- the legacy single-action pointer survives.
+            still_linked = conn.execute(
+                text("SELECT linked_action_id FROM risk_assessment_findings WHERE id = :id"), {"id": finding_id}
+            ).scalar_one()
+            assert still_linked == action_id
+
+        command.upgrade(config, "head")
+
+        with engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version == "0019"
+
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+                ).all()
+            }
+            assert "risk_assessment_finding_actions" in tables
+
+            # Re-upgrading re-backfills from linked_action_id -- the
+            # relationship that existed before the downgrade is restored.
+            relationship_count = conn.execute(
+                text(
+                    "SELECT count(*) FROM risk_assessment_finding_actions "
+                    "WHERE finding_id = :finding_id AND action_id = :action_id"
+                ),
+                {"finding_id": finding_id, "action_id": action_id},
+            ).scalar_one()
+            assert relationship_count == 1
+    finally:
+        engine.dispose()
+
+
+@requires_postgres
+def test_finding_action_relationship_migration_preserves_existing_m26_data_on_fresh_upgrade(monkeypatch):
+    """SIE Milestone 27's own explicit "existing M26 data preserved"
+    requirement: a `linked_action_id` set entirely under the pre-0019
+    schema (i.e. real Milestone 26 data, never touched by this
+    milestone's own application code) is correctly backfilled into
+    `risk_assessment_finding_actions` the first time `alembic upgrade
+    head` ever runs migration 0019 against it."""
+    engine = _fresh_schema_engine()
+    try:
+        monkeypatch.setattr("app.core.config.settings.DATABASE_URL", PG_TEST_DATABASE_URL)
+        config = _alembic_config()
+
+        command.upgrade(config, "0018")
+
+        with engine.connect() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO organizations (id, name, status, created_at, updated_at) "
+                    "VALUES (gen_random_uuid(), 'M26 Data Preservation Org', 'active', now(), now())"
+                )
+            )
+            org_id = conn.execute(
+                text("SELECT id FROM organizations WHERE name = 'M26 Data Preservation Org'")
+            ).scalar_one()
+            concept_id = conn.execute(
+                text("SELECT id FROM ontology_concepts WHERE organization_id IS NULL AND concept_key = 'VEHICLE_INCIDENT'")
+            ).scalar_one()
+            assessment_id = conn.execute(
+                text(
+                    "INSERT INTO risk_assessments (id, organization_id, scope, title, assessment_type, status, "
+                    "lineage_id, version, assessment_date, as_of, window_days, methodology_version, "
+                    "created_at, updated_at) "
+                    "VALUES (gen_random_uuid(), :org_id, 'ORGANIZATION', 'Pre-0019 Assessment', "
+                    "'BASELINE', 'DRAFT', gen_random_uuid(), 1, now(), now(), 30, 'risk-assessment-v1', now(), now()) "
+                    "RETURNING id"
+                ),
+                {"org_id": org_id},
+            ).scalar_one()
+            action_id = conn.execute(
+                text(
+                    "INSERT INTO safety_actions (id, organization_id, title, action_type, priority, status, "
+                    "attributes, created_at, updated_at) "
+                    "VALUES (gen_random_uuid(), :org_id, 'Pre-0019 Action', 'CORRECTIVE', 'MEDIUM', "
+                    "'OPEN', '{}'::jsonb, now(), now()) RETURNING id"
+                ),
+                {"org_id": org_id},
+            ).scalar_one()
+            finding_id = conn.execute(
+                text(
+                    "INSERT INTO risk_assessment_findings (id, organization_id, assessment_id, risk_area_concept_id, "
+                    "risk_area_ontology_version, title, source, status, linked_action_id, created_at, updated_at) "
+                    "VALUES (gen_random_uuid(), :org_id, :assessment_id, :concept_id, 1, "
+                    "'Pre-0019 finding', 'MANUAL', 'OPEN', :action_id, now(), now()) RETURNING id"
+                ),
+                {"org_id": org_id, "assessment_id": assessment_id, "concept_id": concept_id, "action_id": action_id},
+            ).scalar_one()
+            conn.commit()
+
+        command.upgrade(config, "head")
+
+        with engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version == "0019"
+
+            relationship = conn.execute(
+                text(
+                    "SELECT organization_id, finding_id, action_id FROM risk_assessment_finding_actions "
+                    "WHERE finding_id = :finding_id"
+                ),
+                {"finding_id": finding_id},
+            ).one()
+            assert relationship.organization_id == org_id
+            assert relationship.finding_id == finding_id
+            assert relationship.action_id == action_id
+
+            # linked_action_id itself is untouched -- still set, exactly
+            # as the pre-0019 data had it.
+            still_linked = conn.execute(
+                text("SELECT linked_action_id FROM risk_assessment_findings WHERE id = :id"), {"id": finding_id}
+            ).scalar_one()
+            assert still_linked == action_id
     finally:
         engine.dispose()

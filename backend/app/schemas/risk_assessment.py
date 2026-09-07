@@ -28,6 +28,7 @@ from app.models.risk_assessment_enums import (
     RiskCandidateStatus,
     RiskEvidenceType,
 )
+from app.models.safety_action_enums import ActionPriority, ActionType
 from app.schemas.enterprise_intelligence import (
     ConcentrationContributorRead,
     EnterpriseAnomalyRead,
@@ -256,6 +257,107 @@ class RiskAssessmentFindingRead(BaseModel):
     evidence: list[RiskEvidenceRead]
     created_at: datetime
     updated_at: datetime
+
+
+# --- Finding <-> Action relationship (SIE Milestone 27) -------------------------------------
+
+
+class RiskAssessmentActionLinkCreate(BaseModel):
+    """`POST .../findings/{finding_id}/actions/link` body -- links an
+    *already-existing* `SafetyAction` as this finding's response.
+    Distinct from `RiskAssessmentFindingActionCreate` below, which
+    creates a brand-new one instead."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    action_id: uuid.UUID
+
+
+class RiskAssessmentFindingActionCreate(BaseModel):
+    """`POST .../findings/{finding_id}/actions` body -- creates a new
+    `SafetyAction` *from* this finding (item 1's own "Create an action
+    from a finding") and links it in the same operation. Mirrors
+    `app/schemas/actions.py::SafetyActionCreate`'s own field set, minus
+    `site_id`/`source_event_id`/`attributes` (this finding, not a
+    site/event/free-form payload, is this action's own origin -- see
+    `app/api/v1/risk_assessments.py::create_finding_action()`'s own
+    docstring for exactly how that origin is recorded)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(..., min_length=1, max_length=_TITLE_MAX_LENGTH)
+    description: str | None = Field(default=None, max_length=_DESCRIPTION_MAX_LENGTH)
+    action_type: ActionType
+    priority: ActionPriority = ActionPriority.MEDIUM
+    owner_user_id: uuid.UUID | None = None
+    due_date: datetime | None = None
+    external_reference: str | None = Field(default=None, max_length=255)
+
+
+class RiskAssessmentLinkedActionRead(BaseModel):
+    """One row of `GET .../findings/{finding_id}/actions` -- the
+    relationship itself, plus a denormalized `action_title`/
+    `action_status` read straight from the linked `SafetyAction` (so a
+    client can render "3 actions, 1 still OPEN" without a second round
+    trip to `GET /actions`) -- never a second, competing copy of the
+    action's own data (nothing here is writable)."""
+
+    id: uuid.UUID
+    finding_id: uuid.UUID
+    action_id: uuid.UUID
+    action_title: str
+    action_status: str
+    created_at: datetime
+    created_by_user_id: uuid.UUID | None
+    created_by_api_client_id: uuid.UUID | None
+
+
+class RiskAssessmentLinkedActionListRead(BaseModel):
+    items: list[RiskAssessmentLinkedActionRead]
+    total: int
+
+
+class RiskAssessmentFindingClose(BaseModel):
+    """`POST .../findings/{finding_id}/close` body -- item 6's own
+    "human-controlled and explicitly recorded" finding-closure
+    requirement. `closure_reason` is mandatory and may not be blank
+    (checked here *and* defensively in
+    `app/services/risk_assessment_service.py::require_finding_closable()`,
+    the same belt-and-suspenders pattern `RiskAssessmentUpdate.title`
+    already uses) -- there is no such thing as an inferred or default
+    closure reason."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    closure_reason: str = Field(..., min_length=1, max_length=_NOTES_MAX_LENGTH)
+
+    @field_validator("closure_reason")
+    @classmethod
+    def _reason_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("closure_reason must not be blank.")
+        return value
+
+
+class RiskAssessmentActionOriginFindingRead(BaseModel):
+    """One entry of `GET /risk-assessments/actions/{action_id}/findings`
+    -- item 1's own "View the originating finding from an action" /
+    "action -> finding navigation" requirement. A lean summary, not the
+    full `RiskAssessmentFindingRead` shape -- a client already looking
+    at one action rarely needs that finding's own controls/evidence/
+    intelligence context, only enough to navigate to it."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    assessment_id: uuid.UUID
+    title: str
+    status: FindingStatus
+
+
+class RiskAssessmentActionFindingsRead(BaseModel):
+    action_id: uuid.UUID
+    findings: list[RiskAssessmentActionOriginFindingRead]
 
 
 # --- Assessment ----------------------------------------------------------------------------

@@ -73,12 +73,12 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.deps import get_db
-from app.api.deps_context import RequestContext, require_context_permission
+from app.api.deps_context import RequestContext, authorize_context, require_context_permission
 from app.api.deps_rate_limit import RateLimitClass, require_rate_limit
 from app.core.config import settings
 from app.core.idempotency import check_and_replay, compute_request_hash, store_response
@@ -91,11 +91,15 @@ from app.models.risk_assessment import (
 )
 from app.models.risk_assessment_enums import (
     FindingSource,
+    FindingStatus,
     RiskAssessmentScope,
     RiskAssessmentStatus,
     RiskCandidateStatus,
     RiskEvidenceType,
 )
+from app.models.risk_assessment_finding_action import RiskAssessmentFindingAction
+from app.models.safety_action import SafetyAction
+from app.models.safety_action_enums import ActionStatus
 from app.risk_assessment.candidate_generation import generate_candidate_findings
 from app.risk_assessment.risk_area_resolution import resolve_risk_area_concept
 from app.schemas.enterprise_intelligence import (
@@ -110,8 +114,13 @@ from app.schemas.enterprise_intelligence import (
 from app.schemas.risk_assessment import (
     IntelligenceContextRead,
     RiskAreaConceptRead,
+    RiskAssessmentActionFindingsRead,
+    RiskAssessmentActionLinkCreate,
+    RiskAssessmentActionOriginFindingRead,
     RiskAssessmentCreate,
     RiskAssessmentDetailRead,
+    RiskAssessmentFindingActionCreate,
+    RiskAssessmentFindingClose,
     RiskAssessmentFindingCreate,
     RiskAssessmentFindingListRead,
     RiskAssessmentFindingRead,
@@ -121,6 +130,8 @@ from app.schemas.risk_assessment import (
     RiskAssessmentUpdate,
     RiskControlRead,
     RiskEvidenceRead,
+    RiskAssessmentLinkedActionListRead,
+    RiskAssessmentLinkedActionRead,
 )
 from app.services.audit_service import AuditAction
 from app.services.permissions import Permission
@@ -131,11 +142,18 @@ from app.services.risk_assessment_service import (
     calculate_and_set_inherent_risk,
     calculate_and_set_residual_risk,
     compute_intelligence_context,
+    create_finding_action_relationship,
+    delete_finding_action_relationship,
+    list_finding_action_relationships,
+    list_findings_linked_to_action,
     normalize_as_utc,
     open_new_version,
     record_history,
     require_editable,
+    require_finding_closable,
+    require_finding_transition,
     require_transition,
+    resolve_action_reference,
     supersede_previous_version_if_any,
     utcnow,
     validate_action_reference,
@@ -144,10 +162,33 @@ from app.services.risk_assessment_service import (
     validate_owner_reference,
     validate_site_reference,
 )
+from app.services.safety_action_service import ActionHistoryChangeType
+from app.services.safety_action_service import audit_action_event as _audit_safety_action_event
+from app.services.safety_action_service import record_history as _record_safety_action_history
 
 _ENDPOINT_CREATE_ASSESSMENT = "risk_assessments:create"
+_ENDPOINT_CREATE_FINDING_ACTION = "risk_assessments:findings:create_action"
 
 router = APIRouter(prefix="/risk-assessments", tags=["risk-assessments"])
+
+
+def _require_permission(db: Session, context: RequestContext, *, organization_id, permission: Permission) -> None:
+    """Mirrors `app/api/v1/actions.py::_require_permission()` exactly —
+    used here for the SIE Milestone 27 "create action from finding"
+    route, which needs a *second* permission
+    (`INTERVENTION_MANAGE`/`INTERVENTION_ASSIGN`) beyond the primary
+    `RISK_ASSESSMENT_WRITE` `require_context_permission()` already
+    checked; `app/api/deps_context.py`'s own docstring explicitly
+    sanctions calling `authorize_context()` directly for exactly this
+    "non-standard permission selection" case."""
+    if not authorize_context(db, context, permission=permission, organization_id=organization_id):
+        detail = (
+            f"API client is not authorized for organization {organization_id} or is missing "
+            f"scope {permission.value}."
+            if context.is_machine
+            else f"Missing {permission.value} permission in the requested organization."
+        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
 
 _EVIDENCE_VALIDATORS = {
     RiskEvidenceType.EVENT: lambda db, organization_id, reference_id: validate_event_reference(
@@ -322,6 +363,25 @@ def _assessment_fields(assessment: RiskAssessment) -> dict:
 
 def _to_read(assessment: RiskAssessment) -> RiskAssessmentRead:
     return RiskAssessmentRead(**_assessment_fields(assessment))
+
+
+def _to_linked_action_read(
+    relationship_row: RiskAssessmentFindingAction, action: SafetyAction
+) -> RiskAssessmentLinkedActionRead:
+    """SIE Milestone 27. Assembled from the relationship row plus the
+    linked `SafetyAction`'s own current `title`/`status` -- never a
+    second, persisted copy of that data (see
+    `RiskAssessmentLinkedActionRead`'s own docstring)."""
+    return RiskAssessmentLinkedActionRead(
+        id=relationship_row.id,
+        finding_id=relationship_row.finding_id,
+        action_id=relationship_row.action_id,
+        action_title=action.title,
+        action_status=action.status.value,
+        created_at=relationship_row.created_at,
+        created_by_user_id=relationship_row.created_by_user_id,
+        created_by_api_client_id=relationship_row.created_by_api_client_id,
+    )
 
 
 @router.post(
@@ -857,6 +917,18 @@ def update_finding(
     if "linked_action_id" in supplied and body.linked_action_id is not None:
         validate_action_reference(db, organization_id=organization_id, action_id=body.linked_action_id)
 
+    # SIE Milestone 27, "closure governance": CLOSED is reachable only
+    # through the dedicated POST .../findings/{finding_id}/close route
+    # (require_finding_closable()'s own gate) -- this generic field never
+    # accepts it, so there is exactly one, governed path to closure. See
+    # FindingStatus's own docstring.
+    if "status" in supplied and body.status == FindingStatus.CLOSED and finding.status != FindingStatus.CLOSED:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="A finding cannot be closed via this generic update -- use "
+            "POST .../findings/{finding_id}/close, which requires an explicit closure_reason.",
+        )
+
     # Item 15/27: a rating may only ever be set on a non-candidate or an
     # ACCEPTED candidate -- never on IDENTIFIED/UNDER_REVIEW/REJECTED.
     # The effective candidate_status after this update is either the one
@@ -934,6 +1006,19 @@ def update_finding(
             finding.linked_action_id = body.linked_action_id
             action_linked = body.linked_action_id is not None
             action_unlinked = body.linked_action_id is None
+            # SIE Milestone 27: keep the new relationship table in sync so
+            # a finding linked only through this legacy field is still
+            # visible via GET .../findings/{finding_id}/actions -- see
+            # app/models/risk_assessment_finding_action.py's own docstring.
+            if action_linked:
+                create_finding_action_relationship(
+                    db, finding=finding, action_id=body.linked_action_id,
+                    changed_by_user_id=context.user_id, changed_by_api_client_id=context.api_client_id,
+                )
+            if action_unlinked and previous_linked_action_id is not None:
+                delete_finding_action_relationship(
+                    db, finding_id=finding.id, action_id=previous_linked_action_id
+                )
 
         db.flush()
 
@@ -1039,6 +1124,378 @@ def update_finding(
         db.refresh(finding)
         result = _to_finding_read(finding)
     return result
+
+
+# --- Finding <-> Action relationship (SIE Milestone 27) -------------------------------------
+
+
+@router.post(
+    "/{assessment_id}/findings/{finding_id}/actions",
+    response_model=RiskAssessmentLinkedActionRead,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_rate_limit(RateLimitClass.WRITE))],
+)
+def create_finding_action(
+    assessment_id: uuid.UUID,
+    finding_id: uuid.UUID,
+    body: RiskAssessmentFindingActionCreate,
+    organization_id: uuid.UUID = Query(...),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    context: RequestContext = Depends(require_context_permission(Permission.RISK_ASSESSMENT_WRITE)),
+    request_id: str | None = Depends(get_request_id),
+    db: Session = Depends(get_db),
+) -> RiskAssessmentLinkedActionRead:
+    """SIE Milestone 27, item 1: "Create an action from a finding." Creates
+    a brand-new `SafetyAction` -- this route's own, risk-assessment-
+    domain-scoped creation path (`app/api/v1/actions.py::POST /actions`
+    is untouched and remains the general-purpose one) -- and links it to
+    this finding in the same transaction. Requires `RISK_ASSESSMENT_WRITE`
+    (to mutate the finding) *and* `INTERVENTION_MANAGE` (to create the
+    action itself, `+INTERVENTION_ASSIGN` if `owner_user_id` is supplied)
+    -- creating an action is an Actions-domain capability that
+    risk-assessment write access alone never grants, mirroring item 29's
+    own "risk_assessment:write != governance:manage" precedent one
+    boundary over. The new action's origin is recorded in its own
+    `attributes` (`app/models/safety_action.py`'s own documented
+    "bounded, domain-specific structured data... don't force a migration
+    for every new field" extension point) -- never a new column on
+    `SafetyAction` itself, which stays completely unmodified by this
+    milestone."""
+    assessment = _get_owned_assessment_or_404(db, organization_id=organization_id, assessment_id=assessment_id)
+    require_editable(assessment)
+    finding = _get_owned_finding_or_404(
+        db, organization_id=organization_id, assessment_id=assessment_id, finding_id=finding_id
+    )
+    _require_permission(db, context, organization_id=organization_id, permission=Permission.INTERVENTION_MANAGE)
+    if body.owner_user_id is not None:
+        _require_permission(db, context, organization_id=organization_id, permission=Permission.INTERVENTION_ASSIGN)
+        validate_owner_reference(db, organization_id=organization_id, owner_user_id=body.owner_user_id)
+
+    request_hash = compute_request_hash(body.model_dump_json().encode("utf-8"))
+    lookup = check_and_replay(
+        db,
+        endpoint=_ENDPOINT_CREATE_FINDING_ACTION,
+        idempotency_key=idempotency_key,
+        request_hash=request_hash,
+        organization_id=organization_id,
+        api_client_id=context.api_client_id,
+        user_id=context.user_id,
+    )
+    if lookup.is_replay:
+        return RiskAssessmentLinkedActionRead.model_validate(lookup.response_body)
+
+    with assessment_mutation_transaction(db):
+        action = SafetyAction(
+            organization_id=organization_id,
+            title=body.title,
+            description=body.description,
+            action_type=body.action_type,
+            priority=body.priority,
+            status=ActionStatus.OPEN,
+            owner_user_id=body.owner_user_id,
+            due_date=body.due_date,
+            created_by_user_id=context.user_id,
+            created_by_api_client_id=context.api_client_id,
+            external_reference=body.external_reference,
+            attributes={
+                "risk_assessment_origin": {"assessment_id": str(assessment.id), "finding_id": str(finding.id)}
+            },
+        )
+        db.add(action)
+        db.flush()
+
+        # The action's own domain trail (app/services/safety_action_service.py)
+        # -- reused, not duplicated, so this action's own history/audit
+        # is identical regardless of which endpoint created it.
+        _record_safety_action_history(
+            db,
+            action=action,
+            change_type=ActionHistoryChangeType.CREATED,
+            changed_by_user_id=context.user_id,
+            changed_by_api_client_id=context.api_client_id,
+            request_id=request_id,
+            commit=False,
+        )
+        _audit_safety_action_event(
+            db,
+            action_name=AuditAction.SAFETY_ACTION_CREATED,
+            action=action,
+            user_id=context.user_id,
+            caller_kind=context.kind,
+            metadata={
+                "source": "risk_assessment_finding", "finding_id": str(finding.id), "assessment_id": str(assessment.id),
+            },
+            commit=False,
+        )
+
+        relationship_row, _created = create_finding_action_relationship(
+            db, finding=finding, action_id=action.id,
+            changed_by_user_id=context.user_id, changed_by_api_client_id=context.api_client_id,
+        )
+        record_history(
+            db,
+            assessment=assessment,
+            finding_id=finding.id,
+            change_type=RiskAssessmentHistoryChangeType.FINDING_ACTION_CREATED,
+            to_status=str(action.id),
+            changed_by_user_id=context.user_id,
+            changed_by_api_client_id=context.api_client_id,
+            request_id=request_id,
+            comment=f"Created action {action.id!s} ({action.title!r}) as the response to this finding.",
+        )
+        audit_assessment_event(
+            db,
+            action_name=AuditAction.RISK_ASSESSMENT_FINDING_ACTION_CREATED,
+            assessment=assessment,
+            user_id=context.user_id,
+            caller_kind=context.kind,
+            metadata={"finding_id": str(finding.id), "action_id": str(action.id)},
+        )
+        db.refresh(action)
+        result = _to_linked_action_read(relationship_row, action)
+        store_response(
+            db,
+            endpoint=_ENDPOINT_CREATE_FINDING_ACTION,
+            idempotency_key=idempotency_key,
+            request_hash=request_hash,
+            response_status_code=status.HTTP_201_CREATED,
+            response_body=result.model_dump(mode="json"),
+            organization_id=organization_id,
+            api_client_id=context.api_client_id,
+            user_id=context.user_id,
+            commit=False,
+        )
+    return result
+
+
+@router.post(
+    "/{assessment_id}/findings/{finding_id}/actions/link",
+    response_model=RiskAssessmentLinkedActionRead,
+    dependencies=[Depends(require_rate_limit(RateLimitClass.WRITE))],
+)
+def link_finding_action(
+    assessment_id: uuid.UUID,
+    finding_id: uuid.UUID,
+    body: RiskAssessmentActionLinkCreate,
+    organization_id: uuid.UUID = Query(...),
+    context: RequestContext = Depends(require_context_permission(Permission.RISK_ASSESSMENT_WRITE)),
+    request_id: str | None = Depends(get_request_id),
+    db: Session = Depends(get_db),
+) -> RiskAssessmentLinkedActionRead:
+    """SIE Milestone 27, item 1: "Link an existing action to a finding."
+    Idempotent by construction (`create_finding_action_relationship()`'s
+    own contract) -- linking an already-linked action returns the
+    existing relationship, `200`, rather than erroring or duplicating
+    it; no `Idempotency-Key` machinery is needed for an operation that is
+    already safely retryable by nature (contrast `create_finding_action()`
+    above, a genuine "create a new resource" `POST`)."""
+    assessment = _get_owned_assessment_or_404(db, organization_id=organization_id, assessment_id=assessment_id)
+    require_editable(assessment)
+    finding = _get_owned_finding_or_404(
+        db, organization_id=organization_id, assessment_id=assessment_id, finding_id=finding_id
+    )
+    action = resolve_action_reference(db, organization_id=organization_id, action_id=body.action_id)
+
+    with assessment_mutation_transaction(db):
+        relationship_row, created = create_finding_action_relationship(
+            db, finding=finding, action_id=action.id,
+            changed_by_user_id=context.user_id, changed_by_api_client_id=context.api_client_id,
+        )
+        if created:
+            record_history(
+                db,
+                assessment=assessment,
+                finding_id=finding.id,
+                change_type=RiskAssessmentHistoryChangeType.FINDING_ACTION_LINKED,
+                to_status=str(action.id),
+                changed_by_user_id=context.user_id,
+                changed_by_api_client_id=context.api_client_id,
+                request_id=request_id,
+            )
+            audit_assessment_event(
+                db,
+                action_name=AuditAction.RISK_ASSESSMENT_FINDING_ACTION_LINKED,
+                assessment=assessment,
+                user_id=context.user_id,
+                caller_kind=context.kind,
+                metadata={"finding_id": str(finding.id), "action_id": str(action.id)},
+            )
+        result = _to_linked_action_read(relationship_row, action)
+    return result
+
+
+@router.delete(
+    "/{assessment_id}/findings/{finding_id}/actions/{action_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_rate_limit(RateLimitClass.WRITE))],
+)
+def unlink_finding_action(
+    assessment_id: uuid.UUID,
+    finding_id: uuid.UUID,
+    action_id: uuid.UUID,
+    organization_id: uuid.UUID = Query(...),
+    context: RequestContext = Depends(require_context_permission(Permission.RISK_ASSESSMENT_WRITE)),
+    request_id: str | None = Depends(get_request_id),
+    db: Session = Depends(get_db),
+) -> Response:
+    """SIE Milestone 27, item 1: "Unlink an action." Idempotent: unlinking
+    an action that isn't currently linked is a `204` no-op, not a `404`
+    -- a retried unlink call must never fail merely because an earlier
+    attempt already succeeded (item 10's own "safely retryable")."""
+    assessment = _get_owned_assessment_or_404(db, organization_id=organization_id, assessment_id=assessment_id)
+    require_editable(assessment)
+    finding = _get_owned_finding_or_404(
+        db, organization_id=organization_id, assessment_id=assessment_id, finding_id=finding_id
+    )
+
+    with assessment_mutation_transaction(db):
+        deleted = delete_finding_action_relationship(db, finding_id=finding.id, action_id=action_id)
+        if deleted:
+            # SIE Milestone 27: keep the legacy linked_action_id column in
+            # sync too, the same direction update_finding()'s own
+            # linked_action_id branch already keeps it -- unlinking an
+            # action through this new endpoint must not leave the legacy
+            # field silently pointing at an action that is no longer
+            # actually linked.
+            if finding.linked_action_id == action_id:
+                finding.linked_action_id = None
+                db.flush()
+            record_history(
+                db,
+                assessment=assessment,
+                finding_id=finding.id,
+                change_type=RiskAssessmentHistoryChangeType.FINDING_ACTION_UNLINKED,
+                from_status=str(action_id),
+                changed_by_user_id=context.user_id,
+                changed_by_api_client_id=context.api_client_id,
+                request_id=request_id,
+            )
+            audit_assessment_event(
+                db,
+                action_name=AuditAction.RISK_ASSESSMENT_FINDING_ACTION_UNLINKED,
+                assessment=assessment,
+                user_id=context.user_id,
+                caller_kind=context.kind,
+                metadata={"finding_id": str(finding.id), "action_id": str(action_id)},
+            )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get(
+    "/{assessment_id}/findings/{finding_id}/actions",
+    response_model=RiskAssessmentLinkedActionListRead,
+    dependencies=[Depends(require_rate_limit(RateLimitClass.READ))],
+)
+def list_finding_actions(
+    assessment_id: uuid.UUID,
+    finding_id: uuid.UUID,
+    organization_id: uuid.UUID = Query(...),
+    context: RequestContext = Depends(require_context_permission(Permission.RISK_ASSESSMENT_READ)),
+    db: Session = Depends(get_db),
+) -> RiskAssessmentLinkedActionListRead:
+    """SIE Milestone 27, item 1: "View all actions associated with a
+    finding" -- every `SafetyAction` currently linked to this finding
+    (there may be more than one; a serious risk may require several
+    controls/actions, this milestone's own explicit rationale for a real
+    relationship table over the single `linked_action_id` pointer)."""
+    _get_owned_assessment_or_404(db, organization_id=organization_id, assessment_id=assessment_id)
+    finding = _get_owned_finding_or_404(
+        db, organization_id=organization_id, assessment_id=assessment_id, finding_id=finding_id
+    )
+    rows = list_finding_action_relationships(db, finding_id=finding.id)
+    action_ids = [r.action_id for r in rows]
+    actions_by_id = {}
+    if action_ids:
+        actions_by_id = {
+            a.id: a for a in db.execute(select(SafetyAction).where(SafetyAction.id.in_(action_ids))).scalars().all()
+        }
+    items = [_to_linked_action_read(r, actions_by_id[r.action_id]) for r in rows if r.action_id in actions_by_id]
+    return RiskAssessmentLinkedActionListRead(items=items, total=len(items))
+
+
+@router.post(
+    "/{assessment_id}/findings/{finding_id}/close",
+    response_model=RiskAssessmentFindingRead,
+    dependencies=[Depends(require_rate_limit(RateLimitClass.WRITE))],
+)
+def close_finding(
+    assessment_id: uuid.UUID,
+    finding_id: uuid.UUID,
+    body: RiskAssessmentFindingClose,
+    organization_id: uuid.UUID = Query(...),
+    context: RequestContext = Depends(require_context_permission(Permission.RISK_ASSESSMENT_APPROVE)),
+    request_id: str | None = Depends(get_request_id),
+    db: Session = Depends(get_db),
+) -> RiskAssessmentFindingRead:
+    """SIE Milestone 27, item 6/"closure governance": the one, governed
+    path to `FindingStatus.CLOSED` (see that enum's own docstring and
+    `require_finding_closable()`'s own). Gated on `RISK_ASSESSMENT_APPROVE`,
+    not merely `:WRITE` -- closing a finding is consequential enough to
+    hold to the same, more privileged permission `archive`/`approve`
+    already require. Deliberately never triggered by a linked action's
+    own status (see `require_finding_closable()`'s own docstring for the
+    milestone's explicit "that would be unsafe" example this avoids)."""
+    assessment = _get_owned_assessment_or_404(db, organization_id=organization_id, assessment_id=assessment_id)
+    require_editable(assessment)
+    finding = _get_owned_finding_or_404(
+        db, organization_id=organization_id, assessment_id=assessment_id, finding_id=finding_id
+    )
+    require_finding_transition(finding, FindingStatus.CLOSED)
+    require_finding_closable(finding, closure_reason=body.closure_reason)
+
+    with assessment_mutation_transaction(db):
+        from_status = finding.status.value
+        finding.status = FindingStatus.CLOSED
+        db.flush()
+        record_history(
+            db,
+            assessment=assessment,
+            finding_id=finding.id,
+            change_type=RiskAssessmentHistoryChangeType.FINDING_CLOSED,
+            from_status=from_status,
+            to_status=finding.status.value,
+            changed_by_user_id=context.user_id,
+            changed_by_api_client_id=context.api_client_id,
+            request_id=request_id,
+            comment=body.closure_reason,
+        )
+        audit_assessment_event(
+            db,
+            action_name=AuditAction.RISK_ASSESSMENT_FINDING_CLOSED,
+            assessment=assessment,
+            user_id=context.user_id,
+            caller_kind=context.kind,
+            metadata={"finding_id": str(finding.id), "closure_reason": body.closure_reason},
+        )
+        db.refresh(finding)
+        result = _to_finding_read(finding)
+    return result
+
+
+@router.get(
+    "/actions/{action_id}/findings",
+    response_model=RiskAssessmentActionFindingsRead,
+    dependencies=[Depends(require_rate_limit(RateLimitClass.READ))],
+)
+def list_action_findings(
+    action_id: uuid.UUID,
+    organization_id: uuid.UUID = Query(...),
+    context: RequestContext = Depends(require_context_permission(Permission.RISK_ASSESSMENT_READ)),
+    db: Session = Depends(get_db),
+) -> RiskAssessmentActionFindingsRead:
+    """SIE Milestone 27, item 1: "View the originating finding from an
+    action" / action -> finding navigation -- every finding *currently*
+    linked to this action, tenant-scoped to the caller's own
+    organization. An action id from a foreign organization (or one that
+    does not exist at all) simply has no findings linked to it *in this
+    organization* -- an empty list, not a `404`, consistent with every
+    other read in this module never disclosing a foreign record's
+    existence one way or the other."""
+    findings = list_findings_linked_to_action(db, action_id=action_id, organization_id=organization_id)
+    return RiskAssessmentActionFindingsRead(
+        action_id=action_id,
+        findings=[RiskAssessmentActionOriginFindingRead.model_validate(f) for f in findings],
+    )
 
 
 __all__ = ["router"]

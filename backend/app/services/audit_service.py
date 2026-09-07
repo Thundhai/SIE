@@ -133,6 +133,15 @@ class AuditAction:
     RISK_ASSESSMENT_FINDING_RISK_RATED = "RISK_ASSESSMENT_FINDING_RISK_RATED"
     RISK_ASSESSMENT_FINDING_ACTION_LINKED = "RISK_ASSESSMENT_FINDING_ACTION_LINKED"
     RISK_ASSESSMENT_FINDING_ACTION_UNLINKED = "RISK_ASSESSMENT_FINDING_ACTION_UNLINKED"
+    # SIE Milestone 27: Risk Assessment & Action Management Integration
+    # v0.1. RISK_ASSESSMENT_FINDING_ACTION_LINKED/_UNLINKED above are
+    # reused, unchanged, for the new dedicated link/unlink-an-existing-
+    # action endpoints (app/api/v1/risk_assessments.py) -- these two are
+    # for the two events those two could never already mean: creating a
+    # brand-new SafetyAction from a finding, and the one governed path to
+    # closing a finding (see FindingStatus's own docstring).
+    RISK_ASSESSMENT_FINDING_ACTION_CREATED = "RISK_ASSESSMENT_FINDING_ACTION_CREATED"
+    RISK_ASSESSMENT_FINDING_CLOSED = "RISK_ASSESSMENT_FINDING_CLOSED"
 
 
 class AuditService:

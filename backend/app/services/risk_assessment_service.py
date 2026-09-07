@@ -63,12 +63,15 @@ from app.models.knowledge_document import KnowledgeDocument
 from app.models.risk_assessment import RiskAssessment, RiskAssessmentFinding
 from app.models.risk_assessment_enums import (
     ASSESSMENT_EDITABLE_STATUSES,
+    FindingStatus,
     RiskAssessmentScope,
     RiskAssessmentStatus,
     RiskCandidateStatus,
     RiskEvidenceType,
     is_allowed_assessment_transition,
+    is_allowed_finding_transition,
 )
+from app.models.risk_assessment_finding_action import RiskAssessmentFindingAction
 from app.models.risk_assessment_history import RiskAssessmentHistory, RiskAssessmentHistoryChangeType
 from app.models.safety_action import SafetyAction
 from app.risk_assessment.risk_matrix import calculate_risk
@@ -88,12 +91,20 @@ __all__ = [
     "calculate_and_set_inherent_risk",
     "calculate_and_set_residual_risk",
     "compute_intelligence_context",
+    "create_finding_action_relationship",
+    "delete_finding_action_relationship",
+    "get_finding_action_relationship",
     "is_rated_finding",
+    "list_finding_action_relationships",
+    "list_findings_linked_to_action",
     "normalize_as_utc",
     "open_new_version",
     "record_history",
     "require_editable",
+    "require_finding_closable",
+    "require_finding_transition",
     "require_transition",
+    "resolve_action_reference",
     "supersede_previous_version_if_any",
     "utcnow",
     "validate_action_reference",
@@ -144,12 +155,22 @@ def validate_event_reference(db: Session, *, organization_id: uuid.UUID, event_i
     validate_source_event_reference(db, organization_id=organization_id, source_event_id=event_id)
 
 
-def validate_action_reference(db: Session, *, organization_id: uuid.UUID, action_id: uuid.UUID) -> None:
+def resolve_action_reference(db: Session, *, organization_id: uuid.UUID, action_id: uuid.UUID) -> SafetyAction:
+    """Like `validate_action_reference()` below, but returns the row —
+    for the SIE Milestone 27 call sites that need the action itself
+    (to read its current `title`/`status` for a response, or to attach
+    origin metadata to it), not merely a yes/no existence check. The
+    identical 404-whether-missing-or-foreign-organization rule applies."""
     action = db.execute(
         select(SafetyAction).where(SafetyAction.id == action_id, SafetyAction.organization_id == organization_id)
     ).scalar_one_or_none()
     if action is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="action reference not found in this organization.")
+    return action
+
+
+def validate_action_reference(db: Session, *, organization_id: uuid.UUID, action_id: uuid.UUID) -> None:
+    resolve_action_reference(db, organization_id=organization_id, action_id=action_id)
 
 
 def validate_knowledge_document_reference(db: Session, *, organization_id: uuid.UUID, document_id: uuid.UUID) -> None:
@@ -240,6 +261,53 @@ def require_transition(assessment: RiskAssessment, target: RiskAssessmentStatus)
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Cannot transition assessment from {assessment.status.value} to {target.value}.",
+        )
+
+
+def require_finding_transition(finding: RiskAssessmentFinding, target: FindingStatus) -> None:
+    """SIE Milestone 27. Mirrors `require_transition()` above, applied to
+    `FindingStatus` instead of `RiskAssessmentStatus` — the one place
+    `FindingStatus.CLOSED`'s own terminal-ness (and `OPEN`/`ADDRESSED`'s
+    mutual reachability) is enforced, whether the target is reached via
+    the generic `PATCH .../findings/{finding_id}` `status` field or the
+    dedicated `close_finding()` route."""
+    if not is_allowed_finding_transition(finding.status.value, target.value):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Cannot transition finding from {finding.status.value} to {target.value}.",
+        )
+
+
+def require_finding_closable(finding: RiskAssessmentFinding, *, closure_reason: str) -> None:
+    """SIE Milestone 27's own "closure governance" gate — the one place
+    `FindingStatus.CLOSED` may ever be reached. Deliberately never keyed
+    off a *linked action's* status (the milestone's own explicit "that
+    would be unsafe" example: `if action.status == COMPLETED:
+    finding.status = CLOSED`) — a completed action is not evidence that
+    closing this finding is warranted, only that a response was carried
+    out. Two real, checkable conditions instead:
+
+    1. `closure_reason` (required by the schema layer to be non-blank,
+       re-checked here defensively) — item 6's own "human-controlled and
+       explicitly recorded" requirement; there is no such thing as an
+       inferred or default closure reason.
+    2. The finding must have actually been rated (`likelihood` is not
+       `None`) — closing a finding whose risk was never even assessed
+       (an un-rated candidate, or a freshly-created finding nobody has
+       looked at yet) is never a legitimate "we decided this is
+       resolved," it is simply nothing having happened yet.
+
+    `require_finding_transition()` (above) separately guarantees `CLOSED`
+    is actually reachable from the finding's current status at all."""
+    if not closure_reason or not closure_reason.strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="closure_reason is required to close a finding -- closure must be explicit and recorded.",
+        )
+    if finding.likelihood is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="A finding must be rated (likelihood/consequence supplied) before it can be closed.",
         )
 
 
@@ -377,6 +445,104 @@ def is_rated_finding(finding: RiskAssessmentFinding) -> bool:
     approved risk" boundary) -- `candidate_status is None` (a manually
     authored finding) or `ACCEPTED` (a reviewed-and-accepted candidate)."""
     return finding.candidate_status is None or finding.candidate_status == RiskCandidateStatus.ACCEPTED
+
+
+# --- Finding <-> Action relationship (SIE Milestone 27) -------------------------------------
+#
+# See app/models/risk_assessment_finding_action.py's own docstring for
+# the full "why a new table, why it supplements rather than replaces
+# linked_action_id" rationale. Every function below is a plain query/
+# mutation helper -- the caller (app/api/v1/risk_assessments.py) is
+# still the one place that resolves tenant ownership of the finding/
+# action first and writes the accompanying RiskAssessmentHistory/
+# AuditLog entries, inside its own assessment_mutation_transaction().
+
+
+def get_finding_action_relationship(
+    db: Session, *, finding_id: uuid.UUID, action_id: uuid.UUID
+) -> RiskAssessmentFindingAction | None:
+    return db.execute(
+        select(RiskAssessmentFindingAction).where(
+            RiskAssessmentFindingAction.finding_id == finding_id, RiskAssessmentFindingAction.action_id == action_id
+        )
+    ).scalar_one_or_none()
+
+
+def create_finding_action_relationship(
+    db: Session,
+    *,
+    finding: RiskAssessmentFinding,
+    action_id: uuid.UUID,
+    changed_by_user_id: uuid.UUID | None,
+    changed_by_api_client_id: uuid.UUID | None,
+) -> tuple[RiskAssessmentFindingAction, bool]:
+    """Idempotent by construction (item 10's own "safely retryable"
+    requirement, and `RiskAssessmentFindingAction`'s own unique
+    constraint): linking the same action to the same finding twice
+    returns the existing row, `created=False`, rather than raising or
+    creating a duplicate. Only `db.add()`s/`flush()`es -- the caller's
+    own `assessment_mutation_transaction()` commits."""
+    existing = get_finding_action_relationship(db, finding_id=finding.id, action_id=action_id)
+    if existing is not None:
+        return existing, False
+    relationship_row = RiskAssessmentFindingAction(
+        organization_id=finding.organization_id,
+        finding_id=finding.id,
+        action_id=action_id,
+        created_by_user_id=changed_by_user_id,
+        created_by_api_client_id=changed_by_api_client_id,
+    )
+    db.add(relationship_row)
+    db.flush()
+    return relationship_row, True
+
+
+def delete_finding_action_relationship(db: Session, *, finding_id: uuid.UUID, action_id: uuid.UUID) -> bool:
+    """Idempotent: unlinking an action that isn't currently linked is a
+    no-op, returning `False` rather than raising -- a retried unlink call
+    must never fail merely because an earlier attempt already succeeded."""
+    existing = get_finding_action_relationship(db, finding_id=finding_id, action_id=action_id)
+    if existing is None:
+        return False
+    db.delete(existing)
+    db.flush()
+    return True
+
+
+def list_finding_action_relationships(db: Session, *, finding_id: uuid.UUID) -> list[RiskAssessmentFindingAction]:
+    return list(
+        db.execute(
+            select(RiskAssessmentFindingAction)
+            .where(RiskAssessmentFindingAction.finding_id == finding_id)
+            .order_by(RiskAssessmentFindingAction.created_at)
+        )
+        .scalars()
+        .all()
+    )
+
+
+def list_findings_linked_to_action(
+    db: Session, *, action_id: uuid.UUID, organization_id: uuid.UUID
+) -> list[RiskAssessmentFinding]:
+    """SIE Milestone 27's own "view the originating finding from an
+    action" / "action -> finding navigation" requirement -- every
+    finding *currently* linked to this action (there may be more than
+    one, e.g. the same corrective action addresses two related
+    findings), tenant-scoped to the caller's own organization exactly
+    like every other query in this module."""
+    return list(
+        db.execute(
+            select(RiskAssessmentFinding)
+            .join(RiskAssessmentFindingAction, RiskAssessmentFindingAction.finding_id == RiskAssessmentFinding.id)
+            .where(
+                RiskAssessmentFindingAction.action_id == action_id,
+                RiskAssessmentFinding.organization_id == organization_id,
+            )
+            .order_by(RiskAssessmentFindingAction.created_at)
+        )
+        .scalars()
+        .all()
+    )
 
 
 def record_history(

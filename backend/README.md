@@ -3745,6 +3745,41 @@ rolls back everything, never a partial write). See
 [`docs/RISK_ASSESSMENT_FOUNDATION_V0_1.md`](docs/RISK_ASSESSMENT_FOUNDATION_V0_1.md)'s
 own Milestone 26 callouts throughout for the full detail.
 
+**Update (SIE Milestone 27: Risk Assessment & Action Management
+Integration v0.1):** closes the loop identified risk → assessed risk →
+corrective action → action progress → finding closure, while keeping
+`SafetyAction` the single source of truth for actions — never a second
+action system. A finding may now require *multiple* actions: a new,
+purely additive `RiskAssessmentFindingAction` relationship table
+(tenant-scoped, unique on `(finding_id, action_id)`) *supplements*
+Milestone 26's own `linked_action_id` rather than replacing it — that
+field, its migration, and its `PATCH` behavior are all untouched, and
+`update_finding()`'s own legacy branch now keeps both in sync, so a
+finding linked either way is visible through one query
+(`GET .../findings/{id}/actions`); migration 0019 backfills the new
+table from every pre-existing `linked_action_id` so no Milestone 26 data
+is lost. New endpoints let a client create a new `SafetyAction` from a
+finding (gated on `risk_assessment:write` *and* `intervention:manage`,
+mirroring the existing "write access to one domain never grants
+governance of another" precedent), link/unlink an existing one (gated on
+`risk_assessment:write` alone), and navigate in both directions
+(finding → its actions, action → its originating findings). A created
+action's origin is recorded in its own, already-existing `attributes`
+JSON — no new `SafetyAction` column, no `SafetyAction` schema change at
+all. **Closure governance:** a completed action never automatically
+closes a finding (the milestone's own explicit unsafe example,
+`if action.status == COMPLETED: finding.status = CLOSED`, is not
+implemented anywhere); `FindingStatus.CLOSED` is reachable only through
+the one new, `risk_assessment:approve`-gated `POST
+.../findings/{finding_id}/close` route, which requires an explicit,
+non-blank `closure_reason` and a finding that has actually been rated —
+the generic `PATCH .../findings/{finding_id}` `status` field explicitly
+rejects `CLOSED`. See
+[`docs/RISK_ASSESSMENT_FOUNDATION_V0_1.md`](docs/RISK_ASSESSMENT_FOUNDATION_V0_1.md)'s
+own Milestone 27 sections ("Linking a finding to its response action(s)",
+"Closure governance") for the full detail, including why `linked_action_id`
+was kept rather than redesigned.
+
 ### What this milestone deliberately does not add
 
 No AI-generated final risk ratings, no automatic approval, no autonomous
@@ -3754,7 +3789,12 @@ assessment or Monte Carlo simulation, no financial or environmental
 impact modelling, no automatic regulatory compliance determination, no
 LLM-generated assessment conclusions, no frontend Risk Assessment
 screen, no notifications, no workflow automation, no external
-regulatory databases, no new RAG engine, no new ontology engine.
+regulatory databases, no new RAG engine, no new ontology engine. No
+autonomous action assignment, no AI-generated corrective actions, no
+automatic finding closure, no automatic risk acceptance, no new
+action-management system, no email/WhatsApp notifications, no
+management dashboard, no automatic escalation (SIE Milestone 27's own
+explicit out-of-scope list).
 
 ## Enterprise Data Ingestion & Validation Foundation Architecture
 

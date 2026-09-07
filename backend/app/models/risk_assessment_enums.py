@@ -117,7 +117,23 @@ class FindingStatus(str, Enum):
     for months while still `ACCEPTED` as a candidate) and from
     `app.models.safety_action_enums.ActionStatus` (a finding is not an
     action; it may *link to* one or more, via
-    `RiskAssessmentFindingEvidence`, item 17)."""
+    `RiskAssessmentFindingAction`, SIE Milestone 27).
+
+    **`CLOSED` is governed (SIE Milestone 27, "closure governance").**
+    Reaching `CLOSED` is never an automatic side effect of a linked
+    action's own status (a `COMPLETED` action does not, by itself,
+    justify `if action.status == COMPLETED: finding.status = CLOSED` —
+    the milestone's own explicit "that would be unsafe" example) —
+    `CLOSED` is reachable only through the dedicated
+    `POST .../findings/{finding_id}/close` route
+    (`app/api/v1/risk_assessments.py::close_finding()`), which requires
+    an explicit, non-empty `closure_reason` and a finding that has
+    actually been rated (never an un-rated candidate). The generic
+    `PATCH .../findings/{finding_id}` `status` field can still move a
+    finding between `OPEN`/`ADDRESSED` freely, but rejects `CLOSED`
+    outright, precisely so there is exactly one, governed path to
+    closure — see `is_allowed_finding_transition()` below and
+    `require_finding_closable()` (`app/services/risk_assessment_service.py`)."""
 
     OPEN = "OPEN"
     ADDRESSED = "ADDRESSED"
@@ -265,6 +281,30 @@ def is_allowed_assessment_transition(current: str, target: str) -> bool:
         return False
 
 
+# --- Finding lifecycle transition matrix (SIE Milestone 27, "closure governance") -----------
+#
+# OPEN <-> ADDRESSED move freely (the ordinary, ungoverned PATCH .../findings/{id} path,
+# app/api/v1/risk_assessments.py::update_finding() -- unchanged from before this milestone).
+# CLOSED is reachable from either state, but ONLY through require_finding_closable()'s own
+# gate (app/services/risk_assessment_service.py) -- never through update_finding()'s generic
+# `status` field, which explicitly rejects a target of CLOSED (see that function's own
+# docstring). CLOSED is terminal, mirroring RiskAssessmentStatus.ARCHIVED's own reasoning: a
+# closed finding is history; reassessing it means opening a new finding, not reopening this one.
+_ALLOWED_FINDING_TRANSITIONS: dict[FindingStatus, frozenset[FindingStatus]] = {
+    FindingStatus.OPEN: frozenset({FindingStatus.ADDRESSED, FindingStatus.CLOSED}),
+    FindingStatus.ADDRESSED: frozenset({FindingStatus.OPEN, FindingStatus.CLOSED}),
+    FindingStatus.CLOSED: frozenset(),
+}
+
+
+def is_allowed_finding_transition(current: str, target: str) -> bool:
+    """Mirrors `is_allowed_assessment_transition()` above exactly."""
+    try:
+        return FindingStatus(target) in _ALLOWED_FINDING_TRANSITIONS[FindingStatus(current)]
+    except ValueError:
+        return False
+
+
 __all__ = [
     "ASSESSMENT_EDITABLE_STATUSES",
     "AssessmentType",
@@ -279,4 +319,5 @@ __all__ = [
     "RiskCandidateStatus",
     "RiskEvidenceType",
     "is_allowed_assessment_transition",
+    "is_allowed_finding_transition",
 ]
