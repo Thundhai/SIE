@@ -25,6 +25,15 @@
 > its response action(s)" and "Closure governance" below for the full
 > detail.
 
+> **Extended by SIE Milestone 28: Enterprise Risk Assessment Reporting &
+> Decision Intelligence v0.1.** A read-only reporting/decision-readiness
+> layer on top of everything above — `GET .../{id}/report` and
+> `GET .../{id}/readiness`. It computes no new risk rating, invents no new
+> risk-area taxonomy, and mutates nothing; it only aggregates and explains
+> what the existing assessment/finding/action/evidence/ontology domains
+> already contain. See "Reporting & decision readiness" below for the
+> full detail.
+
 **SIE Milestone 25.** Moves SIE from risk *intelligence* (Milestones
 22-24: indicators, trend, patterns, anomalies, associations, and the
 deterministic `enterprise-risk-v1` score) into a structured risk
@@ -706,6 +715,8 @@ DELETE /api/v1/risk-assessments/{id}/findings/{finding_id}/actions/{action_id}  
 GET    /api/v1/risk-assessments/{id}/findings/{finding_id}/actions        (SIE Milestone 27)
 POST   /api/v1/risk-assessments/{id}/findings/{finding_id}/close          (SIE Milestone 27)
 GET    /api/v1/risk-assessments/actions/{action_id}/findings              (SIE Milestone 27)
+GET    /api/v1/risk-assessments/{id}/report                               (SIE Milestone 28)
+GET    /api/v1/risk-assessments/{id}/readiness                            (SIE Milestone 28)
 ```
 
 The first eight (minus `archive`) are the Milestone 25 spec's own named
@@ -751,8 +762,109 @@ no audit row, and no idempotency record survive a partial failure. See
 regression coverage (mirrors `tests/test_actions_transaction_integrity.py`'s
 own established pattern).
 
+## Reporting & decision readiness (SIE Milestone 28)
+
+Turns `Intelligence → Risk Assessment → Findings → Actions` into a
+governed reporting/decision-readiness layer, without introducing any new
+risk calculation, risk-area taxonomy, ontology engine, AI-generated
+conclusion, or automatic approval/closure. Everything below is computed
+by `app/risk_assessment/reporting.py::compute_risk_assessment_report()`
+from data the domain already owns — it is read-only end to end (no
+migration was needed for this milestone).
+
+**Two routes, both `RISK_ASSESSMENT_READ`, both reuse
+`_get_owned_assessment_or_404()`** (the same tenant-isolation/machine-
+pinning/404 helper every other assessment route already uses — no new
+authorization logic was written):
+
+```
+GET /api/v1/risk-assessments/{id}/report      -- full report
+GET /api/v1/risk-assessments/{id}/readiness   -- just the readiness section
+```
+
+**Report sections** (`RiskAssessmentReportRead`):
+
+* `assessment_summary` — identity fields (already on the assessment row)
+  plus finding/action counts: `finding_count`, `findings_by_status`,
+  `findings_by_candidate_status`, `unrated_finding_count`,
+  `linked_action_count`, `action_status_counts`.
+* `risk_distribution` — `RiskBandCounts` (critical/high/moderate/low/
+  unrated) for `inherent` and `residual` risk, kept as two clearly
+  separate objects rather than one merged count.
+* `risk_areas` — one `RiskAreaSummary` per governed risk-area concept
+  actually referenced by a finding in this assessment (the existing
+  ontology's `risk_area_concept`, per Milestone 25A — no new risk-area
+  enum): finding count, highest inherent/residual risk score and
+  classification, open/closed finding counts, associated action count.
+* `action_response_summary` — findings with zero/one/multiple response
+  actions (both `linked_action_id` and the Milestone 27 relationship
+  table, deduplicated), and completed/cancelled/outstanding/overdue
+  response-action counts. **Deliberately computed against current wall-
+  clock time, not the assessment's own `as_of`** — a linked
+  `SafetyAction`'s status and due date keep changing after the assessment
+  is approved (that is Milestone 27's whole point), so this section
+  carries its own `computed_at` timestamp, distinct from
+  `assessment.as_of`, and is documented as *current*, not historical,
+  state. A completed action is never interpreted as an automatically
+  closed finding — closure stays exclusively the Milestone 27
+  `POST .../findings/{finding_id}/close` route.
+* `evidence_coverage` — per-finding counts of event / knowledge-document /
+  action / intelligence (`ANOMALY`+`PATTERN`+`ASSOCIATION` grouped, per
+  the spec's own wording) evidence, plus findings with multiple evidence
+  types and findings with none. No subjective "confidence score" — only
+  the existing `RiskEvidenceType` categories, counted.
+* `readiness` — a deterministic `READY`/`NOT_READY` **indicator**, never
+  an approval recommendation: `status` plus a list of plain factual
+  `reasons` (e.g. `"3 findings remain unrated."`). Reasons are checked
+  in tests to never contain "recommend" or "approv" — see
+  `test_readiness_never_recommends_approval`. `NOT_READY` triggers
+  include unrated findings, pending candidate review, findings without
+  evidence, unresolved critical/high risk findings (using residual risk
+  once rated, falling back to inherent risk otherwise, and excluding
+  `CLOSED` findings), and high-risk findings with no response action —
+  the assessment having zero findings is also `NOT_READY`, not
+  vacuously "ready."
+
+**Historical integrity.** Once an assessment is `APPROVED`/`SUPERSEDED`/
+`ARCHIVED`, `require_editable()` already blocks every route that would
+mutate a finding (the existing Milestone 25 invariant) — so simply
+reading `assessment.findings` fresh from the database *is* the correct
+historical snapshot; Milestone 28 needed no new snapshot table or
+copy-on-approve mechanism to satisfy this. A new assessment version
+(`supersedes_assessment_id`) never touches the findings of the version it
+supersedes, so re-fetching an older version's report after a newer
+version is created and mutated is unaffected. A deprecated ontology
+concept still renders correctly in `risk_areas` (deprecation does not
+delete or rewrite the concept row). `methodology_version` is copied onto
+the assessment at creation time (Milestone 26) and is never re-read from
+current config, so a later config change cannot retroactively alter a
+past report's methodology label. Only `action_response_summary` is an
+intentional exception to "historical" — see above.
+
+**Performance.** `_get_owned_assessment_or_404()` already eager-loads
+`findings` → `controls`/`evidence`/`risk_area_concept` in one query
+(pre-existing); the reporting module issues exactly one further query
+(`_load_finding_actions()`, for the Milestone 27 relationship table) —
+so a report is always **exactly 2 queries**, regardless of finding
+count. `test_report_query_count_does_not_grow_with_finding_count` proves
+this at 3 vs. 20 findings. No caching was added (the report is cheap and
+correctness/historical-integrity matters more than shaving one query).
+
+**Export architecture.** Every field in `RiskAssessmentReportRead` is a
+plain, named, typed value — no free text a future exporter would need to
+parse — so a PDF/Excel presentation layer can be built later directly
+against this response shape without touching
+`app/risk_assessment/reporting.py`. No export was built in this
+milestone.
+
 ## Limitations
 
+* Milestone 28's report intentionally computes no new risk methodology,
+  risk-area taxonomy, AI-generated conclusion, automatic approval,
+  automatic risk acceptance, automatic finding closure, or predictive
+  signal — it explains the assessment; it does not decide anything about
+  it. No PDF/Excel export, no notification, and no frontend dashboard
+  exist yet (deliberately out of scope — see the module's own docstring).
 * Candidate generation (v0.1) sources only `ANOMALOUS` anomalies and
   `RECURRING`/`HIGH_RECURRENCE` patterns, and only where the metric/
   subtype maps unambiguously to one GLOBAL, governed risk-area concept.

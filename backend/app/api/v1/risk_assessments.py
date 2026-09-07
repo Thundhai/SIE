@@ -133,6 +133,18 @@ from app.schemas.risk_assessment import (
     RiskAssessmentLinkedActionListRead,
     RiskAssessmentLinkedActionRead,
 )
+from app.schemas.risk_assessment_report import (
+    ActionResponseSummaryRead,
+    AssessmentReadinessRead,
+    AssessmentReadinessResponse,
+    AssessmentSummaryCountsRead,
+    EvidenceCoverageRead,
+    RiskAreaSummaryRead,
+    RiskAssessmentReportRead,
+    RiskBandCountsRead,
+    RiskDistributionRead,
+)
+from app.risk_assessment.reporting import compute_risk_assessment_report
 from app.services.audit_service import AuditAction
 from app.services.permissions import Permission
 from app.services.risk_assessment_service import (
@@ -599,6 +611,84 @@ def get_assessment(
 ) -> RiskAssessmentDetailRead:
     assessment = _get_owned_assessment_or_404(db, organization_id=organization_id, assessment_id=assessment_id)
     return _to_detail_read(db, assessment)
+
+
+def _to_report_read(assessment: RiskAssessment, report) -> RiskAssessmentReportRead:
+    return RiskAssessmentReportRead(
+        id=assessment.id,
+        organization_id=assessment.organization_id,
+        site_id=assessment.site_id,
+        reference=assessment.reference,
+        title=assessment.title,
+        assessment_type=assessment.assessment_type,
+        assessment_date=assessment.assessment_date,
+        as_of=assessment.as_of,
+        methodology_version=assessment.methodology_version,
+        status=assessment.status,
+        version=assessment.version,
+        lineage_id=assessment.lineage_id,
+        supersedes_id=assessment.supersedes_id,
+        assessment_summary=AssessmentSummaryCountsRead.model_validate(report.assessment_summary),
+        risk_distribution=RiskDistributionRead(
+            inherent=RiskBandCountsRead.model_validate(report.risk_distribution.inherent),
+            residual=RiskBandCountsRead.model_validate(report.risk_distribution.residual),
+        ),
+        risk_areas=[RiskAreaSummaryRead.model_validate(a) for a in report.risk_areas],
+        action_response_summary=ActionResponseSummaryRead.model_validate(report.action_response_summary),
+        evidence_coverage=EvidenceCoverageRead.model_validate(report.evidence_coverage),
+        readiness=AssessmentReadinessRead.model_validate(report.readiness),
+        generated_at=report.generated_at,
+    )
+
+
+@router.get(
+    "/{assessment_id}/report",
+    response_model=RiskAssessmentReportRead,
+    dependencies=[Depends(require_rate_limit(RateLimitClass.READ))],
+)
+def get_assessment_report(
+    assessment_id: uuid.UUID,
+    organization_id: uuid.UUID = Query(...),
+    context: RequestContext = Depends(require_context_permission(Permission.RISK_ASSESSMENT_READ)),
+    db: Session = Depends(get_db),
+) -> RiskAssessmentReportRead:
+    """SIE Milestone 28: the governed management decision/reporting
+    layer's own one full-report route -- entirely read-only (see
+    `app/risk_assessment/reporting.py`'s own module docstring for the
+    "exactly two queries" and "historical integrity is free, not
+    engineered" design). Tenant isolation, `RISK_ASSESSMENT_READ`,
+    machine-organization pinning, and the identical 404-whether-missing-
+    or-foreign-organization rule are all inherited unchanged from
+    `_get_owned_assessment_or_404()` -- no new authorization logic exists
+    in this route."""
+    assessment = _get_owned_assessment_or_404(db, organization_id=organization_id, assessment_id=assessment_id)
+    report = compute_risk_assessment_report(db, assessment)
+    return _to_report_read(assessment, report)
+
+
+@router.get(
+    "/{assessment_id}/readiness",
+    response_model=AssessmentReadinessResponse,
+    dependencies=[Depends(require_rate_limit(RateLimitClass.READ))],
+)
+def get_assessment_readiness(
+    assessment_id: uuid.UUID,
+    organization_id: uuid.UUID = Query(...),
+    context: RequestContext = Depends(require_context_permission(Permission.RISK_ASSESSMENT_READ)),
+    db: Session = Depends(get_db),
+) -> AssessmentReadinessResponse:
+    """SIE Milestone 28's own optional, lightweight route -- the exact
+    same computation `GET .../report` performs (there is no cheaper way
+    to compute readiness alone; see `app/risk_assessment/reporting.py`),
+    returning only the `readiness` section for a caller that wants just
+    that one signal."""
+    assessment = _get_owned_assessment_or_404(db, organization_id=organization_id, assessment_id=assessment_id)
+    report = compute_risk_assessment_report(db, assessment)
+    return AssessmentReadinessResponse(
+        assessment_id=assessment.id,
+        readiness=AssessmentReadinessRead.model_validate(report.readiness),
+        generated_at=report.generated_at,
+    )
 
 
 @router.patch(

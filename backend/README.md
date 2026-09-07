@@ -3796,6 +3796,42 @@ action-management system, no email/WhatsApp notifications, no
 management dashboard, no automatic escalation (SIE Milestone 27's own
 explicit out-of-scope list).
 
+**Update (SIE Milestone 28: Enterprise Risk Assessment Reporting &
+Decision Intelligence v0.1):** turns `Intelligence → Risk Assessment →
+Findings → Actions` into a governed, read-only reporting/decision-
+readiness layer — `GET /risk-assessments/{id}/report` and
+`GET /risk-assessments/{id}/readiness`, both gated on the existing
+`risk_assessment:read` permission and the existing
+`_get_owned_assessment_or_404()` tenant-isolation/machine-pinning/404
+helper (no new authorization logic). The report aggregates, never
+recomputes: assessment summary, inherent-vs-residual risk distribution,
+per-governed-risk-area analysis (existing ontology, no new risk-area
+enum), an action response summary built on Milestone 27's relationship
+model, and evidence coverage by type — all deterministic counts, with no
+subjective confidence score. `readiness` is a `READY`/`NOT_READY`
+**indicator** with plain factual reasons (e.g. `"3 findings remain
+unrated."`) — explicitly never an approval recommendation, and tested to
+never say so. Historical integrity comes for free from the existing
+Milestone 25 `require_editable()` invariant (an approved/superseded/
+archived assessment's findings can no longer be mutated by any route), so
+no new snapshot table was needed; the one deliberate exception is
+`action_response_summary`, computed against current wall-clock time (not
+the assessment's own `as_of`) and carrying its own `computed_at`, since a
+linked action's status keeps changing after approval — a completed
+action still never automatically closes a finding. The whole report is
+exactly 2 database queries regardless of finding count (the existing
+eager-loaded assessment fetch plus one new query for Milestone 27's
+relationship table), verified in
+`test_report_query_count_does_not_grow_with_finding_count`. No migration
+was needed — this milestone is genuinely read-only end to end. No PDF/
+Excel export, no AI-generated conclusions, no automatic approval/
+acceptance/closure, no predictive risk change, no notifications, and no
+frontend dashboard were built (deliberately out of scope); every response
+field is a plain typed value so a future export layer can be built
+against this same shape later. See
+[`docs/RISK_ASSESSMENT_FOUNDATION_V0_1.md`](docs/RISK_ASSESSMENT_FOUNDATION_V0_1.md)'s
+own "Reporting & decision readiness" section for the full detail.
+
 ## Enterprise Data Ingestion & Validation Foundation Architecture
 
     external system -> POST /api/v1/data/ingestion  (machine-client, safety_data:write)
