@@ -17,8 +17,13 @@ Actions documentation. §2 and §5 were touched again, and §10 added, for
 **SIE Milestone UI-01: Intelligence Workspace Integration v0.1**, which
 connected the already-completed Enterprise Intelligence (M22/M22A/M23)
 and Risk Assessment (M26-M29A) backends to the app and restructured the
-Sidebar into grouped navigation — zero backend changes. This document
-does not cover the backend itself (see `backend/README.md`).
+Sidebar into grouped navigation — zero backend changes. §3 gained a
+short pointer for **SIE Milestone UI-DEV-01: Local Development Identity
+& Seeded Intelligence Environment v0.1**, which made that same
+unchanged `DevAuthProvider` mechanism practical for local development
+(a deterministic backend seed script, fixed development identifiers,
+setup docs) — see `docs/DEVELOPMENT_SETUP.md`. This document does not
+cover the backend itself (see `backend/README.md`).
 
 ## 1. Legacy vs. new — read this first
 
@@ -138,7 +143,14 @@ documented there as non-production.
   shown are real backend data — but the underlying mechanism (the dev
   header) is not a real session. When unconfigured, or when the backend
   can't resolve the configured ids, `isAuthenticated` is simply `false`
-  — the UI never fabricates a user or organization.
+  — the UI never fabricates a user or organization. **SIE Milestone
+  UI-DEV-01** made this mechanism practical for local development
+  without changing it at all: `.env.development.example` (repo root)
+  carries fixed `VITE_DEV_USER_ID`/`VITE_DEV_ORGANIZATION_ID` values
+  matching the ids `backend/scripts/seed_dev_environment.py` always
+  creates, so a developer never has to discover a UUID by hand — see
+  `docs/DEVELOPMENT_SETUP.md` for the full sequence (start Postgres,
+  migrate, seed, run both servers).
 - `permissions`/`hasPermission()` are backed by the real
   `GET /api/v1/auth/me` endpoint (SIE Enterprise Read API & Browser
   Integration Foundation v0.1 — `backend/app/api/v1/auth.py`), which
