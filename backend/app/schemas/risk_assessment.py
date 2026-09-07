@@ -101,17 +101,134 @@ class RiskControlCreate(BaseModel):
 
 
 class RiskControlRead(BaseModel):
+    """The one control-read shape, used everywhere a control appears --
+    embedded in a finding (`RiskAssessmentFindingRead.controls`) and by
+    every SIE Milestone 29 dedicated control endpoint alike (never a
+    second, competing read schema). `effectiveness_rationale`/
+    `assessed_at`/`assessed_by_user_id` (Milestone 29) are `None` until
+    `POST .../controls/{control_id}/assess-effectiveness` -- the one
+    dedicated, audited path -- has been called at least once; `evidence`
+    (Milestone 29) lists the `RiskAssessmentFindingEvidence` rows this
+    control's effectiveness assessment currently cites, always built
+    explicitly by `app/api/v1/risk_assessments.py::_to_control_read()`
+    rather than `model_validate()` alone, since the underlying ORM
+    relationship (`control_evidence`, link rows) doesn't share this
+    field's name or shape."""
+
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
+    finding_id: uuid.UUID
     description: str
     control_type: ControlType
     status: ControlStatus
     owner_user_id: uuid.UUID | None
     reference: str | None
     effectiveness: ControlEffectiveness
+    effectiveness_rationale: str | None = None
+    assessed_at: datetime | None = None
+    assessed_by_user_id: uuid.UUID | None = None
+    evidence: list[RiskEvidenceRead] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
+
+
+# --- SIE Milestone 29: Enterprise Risk Assessment Evidence & Control
+# Effectiveness Foundation v0.1 -- dedicated control management API
+# schemas. `RiskControlCreate` above stays exactly as it was (still used
+# by the pre-existing Milestone 25 embedded-at-finding-creation and
+# bulk-replace-via-finding-PATCH paths, both untouched by this
+# milestone); the three below are new, additive, and used only by the
+# new dedicated `.../controls` routes.
+
+
+class RiskAssessmentControlCreate(BaseModel):
+    """`POST .../findings/{finding_id}/controls` body. Deliberately has
+    no `effectiveness` field at all -- unlike `RiskControlCreate` above
+    -- so a control created through this dedicated route can never
+    acquire an effectiveness rating without an explicit, attributable
+    `POST .../assess-effectiveness` call; it is created `NOT_ASSESSED`
+    (the model's own default), full stop."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    description: str = Field(..., min_length=1, max_length=_DESCRIPTION_MAX_LENGTH)
+    control_type: ControlType
+    status: ControlStatus = ControlStatus.PROPOSED
+    owner_user_id: uuid.UUID | None = None
+    reference: str | None = Field(default=None, max_length=_REFERENCE_MAX_LENGTH)
+
+
+class RiskAssessmentControlUpdate(BaseModel):
+    """`PATCH .../controls/{control_id}` body -- non-effectiveness
+    metadata only. There is no `effectiveness`/`effectiveness_rationale`/
+    `assessed_at`/`assessed_by_user_id` field on this schema at all (not
+    merely ignored if sent -- `extra="forbid"` rejects it outright with a
+    `422`): the spec's own "do not allow an effectiveness rating to be
+    changed silently through generic PATCH" is enforced by this schema
+    simply being unable to carry one. Use
+    `POST .../controls/{control_id}/assess-effectiveness` instead."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    description: str | None = Field(default=None, min_length=1, max_length=_DESCRIPTION_MAX_LENGTH)
+    control_type: ControlType | None = None
+    status: ControlStatus | None = None
+    owner_user_id: uuid.UUID | None = None
+    reference: str | None = Field(default=None, max_length=_REFERENCE_MAX_LENGTH)
+
+
+class RiskAssessmentControlEffectivenessAssess(BaseModel):
+    """`POST .../controls/{control_id}/assess-effectiveness` body -- the
+    one path that may ever set `effectiveness`/`effectiveness_rationale`/
+    `assessed_at`/`assessed_by_user_id` together. `effectiveness_rating`
+    may not be `NOT_ASSESSED`: that value means "no assessment was
+    performed," so an actual assessment call can never conclude it --
+    "NOT_ASSESSED must not masquerade as an assessed conclusion" (an
+    unassessed control simply never calls this route). `rationale` must
+    be non-blank after stripping whitespace, mirroring
+    `RiskAssessmentFindingClose.closure_reason`'s own established
+    validator. `assessed_at` is optional -- if omitted, the server's own
+    current time is used (see that route's own docstring for why a
+    server-set default, not a blind trust of a client-supplied
+    timestamp, is the safer choice)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    effectiveness_rating: ControlEffectiveness
+    effectiveness_rationale: str = Field(..., min_length=1, max_length=_DESCRIPTION_MAX_LENGTH)
+    assessed_at: datetime | None = None
+
+    @field_validator("effectiveness_rationale")
+    @classmethod
+    def _rationale_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("effectiveness_rationale must not be blank.")
+        return value
+
+    @field_validator("effectiveness_rating")
+    @classmethod
+    def _rating_not_not_assessed(cls, value: ControlEffectiveness) -> ControlEffectiveness:
+        if value == ControlEffectiveness.NOT_ASSESSED:
+            raise ValueError(
+                "effectiveness_rating may not be NOT_ASSESSED -- that is the absence of an assessment, "
+                "never itself an assessed conclusion."
+            )
+        return value
+
+
+class RiskAssessmentControlEvidenceLinkRead(BaseModel):
+    """`POST`/response shape for
+    `.../controls/{control_id}/evidence/{evidence_id}` -- the link row
+    itself plus the linked evidence's own current data (never a second,
+    competing copy of it), mirroring `RiskAssessmentLinkedActionRead`'s
+    own "relationship + denormalized read-only context" shape."""
+
+    id: uuid.UUID
+    control_id: uuid.UUID
+    finding_evidence_id: uuid.UUID
+    evidence: RiskEvidenceRead
+    created_at: datetime
 
 
 # --- Findings ------------------------------------------------------------------------------

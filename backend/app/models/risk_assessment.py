@@ -375,7 +375,37 @@ class RiskAssessmentControl(UUIDPrimaryKeyMixin, OrganizationScopedMixin, Timest
         default=ControlEffectiveness.NOT_ASSESSED,
     )
 
+    # --- SIE Milestone 29: Enterprise Risk Assessment Evidence & Control
+    # Effectiveness Foundation v0.1. `effectiveness` above stays the one
+    # column driving what the rating *is*; these three, all nullable and
+    # all set together (only by
+    # `app/api/v1/risk_assessments.py::assess_control_effectiveness()`,
+    # the one dedicated, audited path -- never the generic control
+    # PATCH, which does not even accept these fields), record *why*, *by
+    # whom*, and *when* an effectiveness rating was actually assessed.
+    # NULL on every control until that route is called at least once --
+    # including a control whose `effectiveness` was set some other way
+    # (e.g. the pre-existing Milestone 25 finding-level bulk-`controls`
+    # replace path), which is the honest state: an effectiveness value
+    # with no rationale/attribution behind it is not an "assessment," and
+    # this codebase never pretends otherwise. See this module's own
+    # "Control effectiveness assessment" note above and
+    # `docs/RISK_ASSESSMENT_FOUNDATION_V0_1.md`'s Milestone 29 section
+    # for the full rationale.
+    effectiveness_rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
+    assessed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    assessed_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
     finding: Mapped["RiskAssessmentFinding"] = relationship(back_populates="controls")
+    # Link rows into RiskAssessmentFindingEvidence -- see
+    # RiskAssessmentControlEvidence's own docstring for why this is a
+    # link table over existing finding evidence rather than a second,
+    # duplicated evidence-payload table.
+    control_evidence: Mapped[list["RiskAssessmentControlEvidence"]] = relationship(
+        back_populates="control", cascade="all, delete-orphan", order_by="RiskAssessmentControlEvidence.created_at"
+    )
 
     def __repr__(self) -> str:  # pragma: no cover
         return (

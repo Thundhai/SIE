@@ -3832,6 +3832,45 @@ against this same shape later. See
 [`docs/RISK_ASSESSMENT_FOUNDATION_V0_1.md`](docs/RISK_ASSESSMENT_FOUNDATION_V0_1.md)'s
 own "Reporting & decision readiness" section for the full detail.
 
+**Update (SIE Milestone 29: Enterprise Risk Assessment Evidence &
+Control Effectiveness Foundation v0.1):** a dedicated control-management
+sub-resource layered onto the finding-level controls Milestone 25 already
+built — `GET`/`POST .../findings/{finding_id}/controls`,
+`GET`/`PATCH .../controls/{control_id}`, plus two dedicated actions:
+`POST .../controls/{control_id}/assess-effectiveness` (the one path that
+ever sets `effectiveness` together with a required, non-blank
+`effectiveness_rationale` and server-attributed `assessed_at`/
+`assessed_by_user_id` — the generic `PATCH` has no `effectiveness` field
+at all) and `POST`/`DELETE .../controls/{control_id}/evidence/{evidence_id}`
+(links a control to an *existing* `RiskAssessmentFindingEvidence` row on
+the same finding — a new `RiskAssessmentControlEvidence` link table,
+never a duplicated evidence payload). `ControlType` gains `OTHER`;
+`ControlStatus` gains `PARTIALLY_IMPLEMENTED`/`NOT_VERIFIED` — both via
+additive `ALTER TYPE ... ADD VALUE`, mirroring Milestone 26's own
+`ARCHIVED` precedent. Every control-mutating route reuses the identical
+`require_editable()` gate every finding-mutating route already calls, so
+an approved/superseded/archived assessment's controls are exactly as
+immutable as its findings — no new snapshot mechanism was needed.
+Control existence is never treated as proof of effectiveness: a new
+control is always `NOT_ASSESSED` until explicitly assessed, and a
+`COMPLETED` `SafetyAction` never marks a control `EFFECTIVE` (the
+identical Milestone 27 "no unsafe inference from status" principle, one
+level down). Nothing here ever recalculates `residual_risk_score` from a
+control's effectiveness — residual risk stays the independently supplied
+rating it already was. `RiskAssessmentHistory` gains a `control_id`
+column and five new `change_type` values
+(`CONTROL_CREATED`/`_UPDATED`/`_EVIDENCE_LINKED`/`_EVIDENCE_UNLINKED`/
+`_EFFECTIVENESS_ASSESSED`); the Milestone 28 report gains an additive
+`control_effectiveness` section (total controls, implementation-status
+and effectiveness-rating distributions, findings with no/unassessed/
+ineffective controls, evidence coverage for assessed controls — all
+deterministic, no invented score). No control deletion/retirement route
+was built (the spec's own "prefer soft retirement over destructive
+deletion" satisfied by building neither in v0.1). See
+[`docs/RISK_ASSESSMENT_FOUNDATION_V0_1.md`](docs/RISK_ASSESSMENT_FOUNDATION_V0_1.md)'s
+own "Control effectiveness assessment & evidence" section for the full
+detail.
+
 ## Enterprise Data Ingestion & Validation Foundation Architecture
 
     external system -> POST /api/v1/data/ingestion  (machine-client, safety_data:write)

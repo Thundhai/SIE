@@ -73,6 +73,22 @@ class RiskAssessmentHistoryChangeType:
     # own docstring (app/models/risk_assessment_enums.py) and
     # require_finding_closable() (app/services/risk_assessment_service.py).
     FINDING_CLOSED = "FINDING_CLOSED"
+    # SIE Milestone 29: Enterprise Risk Assessment Evidence & Control
+    # Effectiveness Foundation v0.1. All five carry `control_id` (below);
+    # CONTROL_EFFECTIVENESS_ASSESSED is written only by the one dedicated,
+    # audited `POST .../controls/{control_id}/assess-effectiveness` route
+    # -- never by the generic control PATCH, which cannot set
+    # effectiveness at all. No CONTROL_DELETED/CONTROL_RETIRED exists:
+    # this milestone implements no control-deletion or -retirement route
+    # (the spec's own "prefer soft retirement over destructive deletion"
+    # is satisfied here by simply not building either yet, the most
+    # conservative option -- a future milestone that adds one also adds
+    # its own change_type then).
+    CONTROL_CREATED = "CONTROL_CREATED"
+    CONTROL_UPDATED = "CONTROL_UPDATED"
+    CONTROL_EVIDENCE_LINKED = "CONTROL_EVIDENCE_LINKED"
+    CONTROL_EVIDENCE_UNLINKED = "CONTROL_EVIDENCE_UNLINKED"
+    CONTROL_EFFECTIVENESS_ASSESSED = "CONTROL_EFFECTIVENESS_ASSESSED"
 
 
 class RiskAssessmentHistory(UUIDPrimaryKeyMixin, OrganizationScopedMixin, Base):
@@ -80,6 +96,7 @@ class RiskAssessmentHistory(UUIDPrimaryKeyMixin, OrganizationScopedMixin, Base):
     __table_args__ = (
         Index("ix_risk_assessment_history_assessment", "assessment_id"),
         Index("ix_risk_assessment_history_finding", "finding_id"),
+        Index("ix_risk_assessment_history_control", "control_id"),
     )
 
     assessment_id: Mapped[uuid.UUID] = mapped_column(
@@ -89,6 +106,18 @@ class RiskAssessmentHistory(UUIDPrimaryKeyMixin, OrganizationScopedMixin, Base):
     # see module docstring.
     finding_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("risk_assessment_findings.id", ondelete="CASCADE"), nullable=True
+    )
+    # SIE Milestone 29. Set only for the five CONTROL_* change types above
+    # -- always alongside a set finding_id (a control event is also its
+    # parent finding's own event, queryable either way). ON DELETE SET
+    # NULL, not CASCADE: this milestone builds no control-deletion route,
+    # but a history row must never disappear merely because the control
+    # it concerns someday does -- the row's own change_type/comment/
+    # from_status/to_status already say what happened independent of
+    # whether the control row still exists, exactly RiskAssessmentFindingAction's
+    # own "the history table answers 'what happened, and when'" split.
+    control_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("risk_assessment_controls.id", ondelete="SET NULL"), nullable=True
     )
 
     # A plain string, not a native enum -- see RiskAssessmentHistoryChangeType's own docstring.

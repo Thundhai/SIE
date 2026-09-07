@@ -184,13 +184,19 @@ class ControlType(str, Enum):
     mirroring `app/models/safety_action_enums.py::ActionType`'s own
     "intentionally compact, not a complete framework" precedent. Not a
     Bow-Tie/HAZOP/LOPA hierarchy-of-controls engine (item 11's own "do
-    not build" instruction) — just a closed label."""
+    not build" instruction) — just a closed label.
+
+    `OTHER` added by SIE Milestone 29 (Enterprise Risk Assessment
+    Evidence & Control Effectiveness Foundation v0.1) — a real control
+    that genuinely doesn't fit the hierarchy-of-controls categories above
+    must still be recordable rather than forced into a misleading one."""
 
     ELIMINATION = "ELIMINATION"
     SUBSTITUTION = "SUBSTITUTION"
     ENGINEERING = "ENGINEERING"
     ADMINISTRATIVE = "ADMINISTRATIVE"
     PPE = "PPE"
+    OTHER = "OTHER"
 
 
 class ControlStatus(str, Enum):
@@ -198,11 +204,22 @@ class ControlStatus(str, Enum):
     `ControlEffectiveness` below (item 12's own "distinguish 'no control
     information was provided' from 'the control is ineffective'" — those
     are two different fields answering two different questions, not one
-    field trying to answer both)."""
+    field trying to answer both).
+
+    `PARTIALLY_IMPLEMENTED`/`NOT_VERIFIED` added by SIE Milestone 29 —
+    two real, distinct implementation states an HSE audit needs and the
+    original three values couldn't express: a control that is only
+    partly rolled out is not the same as one that is merely `PROPOSED`,
+    and "installed but nobody has confirmed it actually works" is not
+    the same as "not implemented." `PROPOSED`/`IN_PLACE`/
+    `NOT_IMPLEMENTED` are unchanged, including their string values — no
+    existing row's meaning is altered by this addition."""
 
     PROPOSED = "PROPOSED"
     IN_PLACE = "IN_PLACE"
     NOT_IMPLEMENTED = "NOT_IMPLEMENTED"
+    PARTIALLY_IMPLEMENTED = "PARTIALLY_IMPLEMENTED"
+    NOT_VERIFIED = "NOT_VERIFIED"
 
 
 class ControlEffectiveness(str, Enum):

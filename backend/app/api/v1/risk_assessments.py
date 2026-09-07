@@ -89,6 +89,7 @@ from app.models.risk_assessment import (
     RiskAssessmentFinding,
     RiskAssessmentFindingEvidence,
 )
+from app.models.risk_assessment_control_evidence import RiskAssessmentControlEvidence
 from app.models.risk_assessment_enums import (
     FindingSource,
     FindingStatus,
@@ -117,6 +118,10 @@ from app.schemas.risk_assessment import (
     RiskAssessmentActionFindingsRead,
     RiskAssessmentActionLinkCreate,
     RiskAssessmentActionOriginFindingRead,
+    RiskAssessmentControlCreate,
+    RiskAssessmentControlEffectivenessAssess,
+    RiskAssessmentControlEvidenceLinkRead,
+    RiskAssessmentControlUpdate,
     RiskAssessmentCreate,
     RiskAssessmentDetailRead,
     RiskAssessmentFindingActionCreate,
@@ -138,6 +143,7 @@ from app.schemas.risk_assessment_report import (
     AssessmentReadinessRead,
     AssessmentReadinessResponse,
     AssessmentSummaryCountsRead,
+    ControlEffectivenessSummaryRead,
     EvidenceCoverageRead,
     RiskAreaSummaryRead,
     RiskAssessmentReportRead,
@@ -154,8 +160,12 @@ from app.services.risk_assessment_service import (
     calculate_and_set_inherent_risk,
     calculate_and_set_residual_risk,
     compute_intelligence_context,
+    create_control_evidence_link,
     create_finding_action_relationship,
+    delete_control_evidence_link,
     delete_finding_action_relationship,
+    get_control_evidence_link,
+    list_control_evidence_links,
     list_finding_action_relationships,
     list_findings_linked_to_action,
     normalize_as_utc,
@@ -180,6 +190,8 @@ from app.services.safety_action_service import record_history as _record_safety_
 
 _ENDPOINT_CREATE_ASSESSMENT = "risk_assessments:create"
 _ENDPOINT_CREATE_FINDING_ACTION = "risk_assessments:findings:create_action"
+_ENDPOINT_CREATE_CONTROL = "risk_assessments:findings:controls:create"
+_ENDPOINT_ASSESS_CONTROL_EFFECTIVENESS = "risk_assessments:findings:controls:assess_effectiveness"
 
 router = APIRouter(prefix="/risk-assessments", tags=["risk-assessments"])
 
@@ -226,7 +238,12 @@ def _get_owned_assessment_or_404(db: Session, *, organization_id: uuid.UUID, ass
     assessment = db.execute(
         select(RiskAssessment)
         .where(RiskAssessment.id == assessment_id, RiskAssessment.organization_id == organization_id)
-        .options(joinedload(RiskAssessment.findings).joinedload(RiskAssessmentFinding.controls))
+        .options(
+            joinedload(RiskAssessment.findings)
+            .joinedload(RiskAssessmentFinding.controls)
+            .joinedload(RiskAssessmentControl.control_evidence)
+            .joinedload(RiskAssessmentControlEvidence.finding_evidence)
+        )
         .options(joinedload(RiskAssessment.findings).joinedload(RiskAssessmentFinding.evidence))
         .options(joinedload(RiskAssessment.findings).joinedload(RiskAssessmentFinding.risk_area_concept))
     ).unique().scalar_one_or_none()
@@ -246,7 +263,9 @@ def _get_owned_finding_or_404(
             RiskAssessmentFinding.organization_id == organization_id,
         )
         .options(
-            joinedload(RiskAssessmentFinding.controls),
+            joinedload(RiskAssessmentFinding.controls)
+            .joinedload(RiskAssessmentControl.control_evidence)
+            .joinedload(RiskAssessmentControlEvidence.finding_evidence),
             joinedload(RiskAssessmentFinding.evidence),
             joinedload(RiskAssessmentFinding.risk_area_concept),
         )
@@ -254,6 +273,54 @@ def _get_owned_finding_or_404(
     if finding is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Finding not found.")
     return finding
+
+
+def _get_owned_control_or_404(
+    db: Session, *, organization_id: uuid.UUID, assessment_id: uuid.UUID, finding_id: uuid.UUID, control_id: uuid.UUID
+) -> RiskAssessmentControl:
+    """SIE Milestone 29. Mirrors `_get_owned_finding_or_404()` exactly --
+    validates the full hierarchy (control belongs to this finding
+    belongs to this assessment belongs to this organization) in one
+    query, `404` on any mismatch without distinguishing *which* part of
+    the chain was wrong (a cross-tenant id, a control belonging to a
+    different finding, or a genuinely nonexistent id are all
+    indistinguishable to the caller -- no existence disclosure)."""
+    control = db.execute(
+        select(RiskAssessmentControl)
+        .join(RiskAssessmentFinding, RiskAssessmentFinding.id == RiskAssessmentControl.finding_id)
+        .where(
+            RiskAssessmentControl.id == control_id,
+            RiskAssessmentControl.finding_id == finding_id,
+            RiskAssessmentControl.organization_id == organization_id,
+            RiskAssessmentFinding.assessment_id == assessment_id,
+        )
+        .options(
+            joinedload(RiskAssessmentControl.control_evidence).joinedload(RiskAssessmentControlEvidence.finding_evidence)
+        )
+    ).unique().scalar_one_or_none()
+    if control is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Control not found.")
+    return control
+
+
+def _get_owned_finding_evidence_or_404(
+    db: Session, *, organization_id: uuid.UUID, finding_id: uuid.UUID, evidence_id: uuid.UUID
+) -> RiskAssessmentFindingEvidence:
+    """SIE Milestone 29. Validates that `evidence_id` names a real
+    `RiskAssessmentFindingEvidence` row belonging to this same finding
+    (and organization) -- a control may only cite evidence already
+    attached to its own parent finding, never an arbitrary id from
+    another finding or another tenant."""
+    evidence = db.execute(
+        select(RiskAssessmentFindingEvidence).where(
+            RiskAssessmentFindingEvidence.id == evidence_id,
+            RiskAssessmentFindingEvidence.finding_id == finding_id,
+            RiskAssessmentFindingEvidence.organization_id == organization_id,
+        )
+    ).scalar_one_or_none()
+    if evidence is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Evidence not found on this finding.")
+    return evidence
 
 
 def _to_intelligence_context_read(result) -> IntelligenceContextRead:
@@ -294,6 +361,31 @@ def _to_risk_area_concept_read(finding: RiskAssessmentFinding) -> RiskAreaConcep
     )
 
 
+def _to_control_read(control: RiskAssessmentControl) -> RiskControlRead:
+    """SIE Milestone 29. The one control-read assembly function, used
+    both here (embedded in a finding) and by every dedicated control
+    route below -- `evidence` is built explicitly from
+    `control.control_evidence` (the link rows), never `model_validate()`
+    alone, since `RiskControlRead.evidence`'s shape doesn't match that
+    relationship's own (see that field's own docstring)."""
+    return RiskControlRead(
+        id=control.id,
+        finding_id=control.finding_id,
+        description=control.description,
+        control_type=control.control_type,
+        status=control.status,
+        owner_user_id=control.owner_user_id,
+        reference=control.reference,
+        effectiveness=control.effectiveness,
+        effectiveness_rationale=control.effectiveness_rationale,
+        assessed_at=control.assessed_at,
+        assessed_by_user_id=control.assessed_by_user_id,
+        evidence=[RiskEvidenceRead.model_validate(link.finding_evidence) for link in control.control_evidence],
+        created_at=control.created_at,
+        updated_at=control.updated_at,
+    )
+
+
 def _to_finding_read(finding: RiskAssessmentFinding) -> RiskAssessmentFindingRead:
     return RiskAssessmentFindingRead(
         id=finding.id,
@@ -321,7 +413,7 @@ def _to_finding_read(finding: RiskAssessmentFinding) -> RiskAssessmentFindingRea
         inherent_risk_methodology_version=finding.inherent_risk_methodology_version,
         residual_risk_methodology_version=finding.residual_risk_methodology_version,
         linked_action_id=finding.linked_action_id,
-        controls=[RiskControlRead.model_validate(c) for c in finding.controls],
+        controls=[_to_control_read(c) for c in finding.controls],
         evidence=[RiskEvidenceRead.model_validate(e) for e in finding.evidence],
         created_at=finding.created_at,
         updated_at=finding.updated_at,
@@ -636,6 +728,7 @@ def _to_report_read(assessment: RiskAssessment, report) -> RiskAssessmentReportR
         risk_areas=[RiskAreaSummaryRead.model_validate(a) for a in report.risk_areas],
         action_response_summary=ActionResponseSummaryRead.model_validate(report.action_response_summary),
         evidence_coverage=EvidenceCoverageRead.model_validate(report.evidence_coverage),
+        control_effectiveness=ControlEffectivenessSummaryRead.model_validate(report.control_effectiveness),
         readiness=AssessmentReadinessRead.model_validate(report.readiness),
         generated_at=report.generated_at,
     )
@@ -1560,6 +1653,429 @@ def close_finding(
         db.refresh(finding)
         result = _to_finding_read(finding)
     return result
+
+
+# --- Controls & control evidence (SIE Milestone 29) -----------------------------------------
+#
+# Finding -> Existing Controls -> Control Evidence -> Effectiveness
+# Assessment -> Residual Risk -> Corrective Actions (see
+# docs/RISK_ASSESSMENT_FOUNDATION_V0_1.md's own Milestone 29 section for
+# the full diagram). Every route below reuses `_get_owned_assessment_or_404()`/
+# `_get_owned_finding_or_404()`/`require_editable()` exactly as every
+# other finding-mutation route already does -- no new authorization or
+# tenant-isolation logic exists in this section. Controls remain subject
+# to the identical Milestone 25 immutability invariant findings already
+# have: once the assessment is APPROVED/SUPERSEDED/ARCHIVED,
+# `require_editable()` rejects every mutating route here with a `422`,
+# which is also this milestone's entire "historical approved assessments
+# must not become misleading" guarantee -- no new snapshotting
+# mechanism was needed, exactly M28's own "historical integrity is free,
+# not engineered" precedent.
+
+
+@router.get(
+    "/{assessment_id}/findings/{finding_id}/controls",
+    response_model=list[RiskControlRead],
+    dependencies=[Depends(require_rate_limit(RateLimitClass.READ))],
+)
+def list_controls(
+    assessment_id: uuid.UUID,
+    finding_id: uuid.UUID,
+    organization_id: uuid.UUID = Query(...),
+    context: RequestContext = Depends(require_context_permission(Permission.RISK_ASSESSMENT_READ)),
+    db: Session = Depends(get_db),
+) -> list[RiskControlRead]:
+    _get_owned_assessment_or_404(db, organization_id=organization_id, assessment_id=assessment_id)
+    finding = _get_owned_finding_or_404(
+        db, organization_id=organization_id, assessment_id=assessment_id, finding_id=finding_id
+    )
+    return [_to_control_read(c) for c in finding.controls]
+
+
+@router.post(
+    "/{assessment_id}/findings/{finding_id}/controls",
+    response_model=RiskControlRead,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_rate_limit(RateLimitClass.WRITE))],
+)
+def create_control(
+    assessment_id: uuid.UUID,
+    finding_id: uuid.UUID,
+    body: RiskAssessmentControlCreate,
+    organization_id: uuid.UUID = Query(...),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    context: RequestContext = Depends(require_context_permission(Permission.RISK_ASSESSMENT_WRITE)),
+    request_id: str | None = Depends(get_request_id),
+    db: Session = Depends(get_db),
+) -> RiskControlRead:
+    """SIE Milestone 29. Adds one control to an existing finding without
+    resending the finding's entire `controls` array (contrast the
+    pre-existing Milestone 25 finding-PATCH bulk-replace path, which this
+    route supplements, never replaces). The new control is always
+    created `NOT_ASSESSED` -- see `RiskAssessmentControlCreate`'s own
+    docstring for why this schema has no `effectiveness` field at all."""
+    assessment = _get_owned_assessment_or_404(db, organization_id=organization_id, assessment_id=assessment_id)
+    require_editable(assessment)
+    finding = _get_owned_finding_or_404(
+        db, organization_id=organization_id, assessment_id=assessment_id, finding_id=finding_id
+    )
+    if body.owner_user_id is not None:
+        validate_owner_reference(db, organization_id=organization_id, owner_user_id=body.owner_user_id)
+
+    request_hash = compute_request_hash(body.model_dump_json().encode("utf-8"))
+    lookup = check_and_replay(
+        db,
+        endpoint=_ENDPOINT_CREATE_CONTROL,
+        idempotency_key=idempotency_key,
+        request_hash=request_hash,
+        organization_id=organization_id,
+        api_client_id=context.api_client_id,
+        user_id=context.user_id,
+    )
+    if lookup.is_replay:
+        return RiskControlRead.model_validate(lookup.response_body)
+
+    with assessment_mutation_transaction(db):
+        control = RiskAssessmentControl(
+            organization_id=organization_id,
+            finding_id=finding.id,
+            description=body.description,
+            control_type=body.control_type,
+            status=body.status,
+            owner_user_id=body.owner_user_id,
+            reference=body.reference,
+        )
+        db.add(control)
+        db.flush()
+        record_history(
+            db,
+            assessment=assessment,
+            finding_id=finding.id,
+            control_id=control.id,
+            change_type=RiskAssessmentHistoryChangeType.CONTROL_CREATED,
+            to_status=control.status.value,
+            changed_by_user_id=context.user_id,
+            changed_by_api_client_id=context.api_client_id,
+            request_id=request_id,
+            comment=f"Created control {control.id!s} ({control.description!r}).",
+        )
+        audit_assessment_event(
+            db,
+            action_name=AuditAction.RISK_ASSESSMENT_CONTROL_CREATED,
+            assessment=assessment,
+            user_id=context.user_id,
+            caller_kind=context.kind,
+            metadata={"finding_id": str(finding.id), "control_id": str(control.id)},
+        )
+        db.refresh(control)
+        result = _to_control_read(control)
+        store_response(
+            db,
+            endpoint=_ENDPOINT_CREATE_CONTROL,
+            idempotency_key=idempotency_key,
+            request_hash=request_hash,
+            response_status_code=status.HTTP_201_CREATED,
+            response_body=result.model_dump(mode="json"),
+            organization_id=organization_id,
+            api_client_id=context.api_client_id,
+            user_id=context.user_id,
+            commit=False,
+        )
+    return result
+
+
+@router.get(
+    "/{assessment_id}/findings/{finding_id}/controls/{control_id}",
+    response_model=RiskControlRead,
+    dependencies=[Depends(require_rate_limit(RateLimitClass.READ))],
+)
+def get_control(
+    assessment_id: uuid.UUID,
+    finding_id: uuid.UUID,
+    control_id: uuid.UUID,
+    organization_id: uuid.UUID = Query(...),
+    context: RequestContext = Depends(require_context_permission(Permission.RISK_ASSESSMENT_READ)),
+    db: Session = Depends(get_db),
+) -> RiskControlRead:
+    control = _get_owned_control_or_404(
+        db, organization_id=organization_id, assessment_id=assessment_id, finding_id=finding_id, control_id=control_id
+    )
+    return _to_control_read(control)
+
+
+@router.patch(
+    "/{assessment_id}/findings/{finding_id}/controls/{control_id}",
+    response_model=RiskControlRead,
+    dependencies=[Depends(require_rate_limit(RateLimitClass.WRITE))],
+)
+def update_control(
+    assessment_id: uuid.UUID,
+    finding_id: uuid.UUID,
+    control_id: uuid.UUID,
+    body: RiskAssessmentControlUpdate,
+    organization_id: uuid.UUID = Query(...),
+    context: RequestContext = Depends(require_context_permission(Permission.RISK_ASSESSMENT_WRITE)),
+    request_id: str | None = Depends(get_request_id),
+    db: Session = Depends(get_db),
+) -> RiskControlRead:
+    """SIE Milestone 29. Non-effectiveness metadata only -- see
+    `RiskAssessmentControlUpdate`'s own docstring for why `effectiveness`
+    cannot be set through this route at all."""
+    assessment = _get_owned_assessment_or_404(db, organization_id=organization_id, assessment_id=assessment_id)
+    require_editable(assessment)
+    control = _get_owned_control_or_404(
+        db, organization_id=organization_id, assessment_id=assessment_id, finding_id=finding_id, control_id=control_id
+    )
+    supplied = body.model_fields_set
+    if not supplied:
+        return _to_control_read(control)
+    if "owner_user_id" in supplied and body.owner_user_id is not None:
+        validate_owner_reference(db, organization_id=organization_id, owner_user_id=body.owner_user_id)
+
+    with assessment_mutation_transaction(db):
+        changed = set()
+        for field in ("description", "control_type", "status", "owner_user_id", "reference"):
+            if field in supplied:
+                new_value = getattr(body, field)
+                if getattr(control, field) != new_value:
+                    setattr(control, field, new_value)
+                    changed.add(field)
+        if changed:
+            db.flush()
+            record_history(
+                db,
+                assessment=assessment,
+                finding_id=control.finding_id,
+                control_id=control.id,
+                change_type=RiskAssessmentHistoryChangeType.CONTROL_UPDATED,
+                changed_by_user_id=context.user_id,
+                changed_by_api_client_id=context.api_client_id,
+                request_id=request_id,
+                comment=f"Updated fields: {', '.join(sorted(changed))}.",
+            )
+            audit_assessment_event(
+                db,
+                action_name=AuditAction.RISK_ASSESSMENT_CONTROL_UPDATED,
+                assessment=assessment,
+                user_id=context.user_id,
+                caller_kind=context.kind,
+                metadata={"finding_id": str(control.finding_id), "control_id": str(control.id), "fields": sorted(changed)},
+            )
+        db.refresh(control)
+        result = _to_control_read(control)
+    return result
+
+
+@router.post(
+    "/{assessment_id}/findings/{finding_id}/controls/{control_id}/assess-effectiveness",
+    response_model=RiskControlRead,
+    dependencies=[Depends(require_rate_limit(RateLimitClass.WRITE))],
+)
+def assess_control_effectiveness(
+    assessment_id: uuid.UUID,
+    finding_id: uuid.UUID,
+    control_id: uuid.UUID,
+    body: RiskAssessmentControlEffectivenessAssess,
+    organization_id: uuid.UUID = Query(...),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    context: RequestContext = Depends(require_context_permission(Permission.RISK_ASSESSMENT_WRITE)),
+    request_id: str | None = Depends(get_request_id),
+    db: Session = Depends(get_db),
+) -> RiskControlRead:
+    """SIE Milestone 29. The one, dedicated, audited path to setting a
+    control's `effectiveness` -- gated on `RISK_ASSESSMENT_WRITE`, the
+    same permission finding risk-rating (`PATCH .../findings/{finding_id}`'s
+    `likelihood`/`consequence`) already requires, for the same reason:
+    both are an assessor's own expert judgment recorded against a
+    finding/control that is not yet a final governance decision (that
+    remains `RISK_ASSESSMENT_APPROVE`-gated closure/archival elsewhere).
+    Setting an effectiveness rating here never touches
+    `inherent_risk_score`/`residual_risk_score`/`residual_risk_classification`
+    on the parent finding in any way -- this route calculates nothing
+    about risk, only records an assessment of a control (see this
+    module's own "Risk semantics" note in
+    `docs/RISK_ASSESSMENT_FOUNDATION_V0_1.md`)."""
+    assessment = _get_owned_assessment_or_404(db, organization_id=organization_id, assessment_id=assessment_id)
+    require_editable(assessment)
+    control = _get_owned_control_or_404(
+        db, organization_id=organization_id, assessment_id=assessment_id, finding_id=finding_id, control_id=control_id
+    )
+
+    request_hash = compute_request_hash(body.model_dump_json().encode("utf-8"))
+    lookup = check_and_replay(
+        db,
+        endpoint=_ENDPOINT_ASSESS_CONTROL_EFFECTIVENESS,
+        idempotency_key=idempotency_key,
+        request_hash=request_hash,
+        organization_id=organization_id,
+        api_client_id=context.api_client_id,
+        user_id=context.user_id,
+    )
+    if lookup.is_replay:
+        return RiskControlRead.model_validate(lookup.response_body)
+
+    with assessment_mutation_transaction(db):
+        from_effectiveness = control.effectiveness.value
+        control.effectiveness = body.effectiveness_rating
+        control.effectiveness_rationale = body.effectiveness_rationale
+        control.assessed_at = normalize_as_utc(body.assessed_at) if body.assessed_at is not None else utcnow()
+        control.assessed_by_user_id = context.user_id
+        db.flush()
+        record_history(
+            db,
+            assessment=assessment,
+            finding_id=control.finding_id,
+            control_id=control.id,
+            change_type=RiskAssessmentHistoryChangeType.CONTROL_EFFECTIVENESS_ASSESSED,
+            from_status=from_effectiveness,
+            to_status=control.effectiveness.value,
+            changed_by_user_id=context.user_id,
+            changed_by_api_client_id=context.api_client_id,
+            request_id=request_id,
+            comment=body.effectiveness_rationale,
+        )
+        audit_assessment_event(
+            db,
+            action_name=AuditAction.RISK_ASSESSMENT_CONTROL_EFFECTIVENESS_ASSESSED,
+            assessment=assessment,
+            user_id=context.user_id,
+            caller_kind=context.kind,
+            metadata={
+                "finding_id": str(control.finding_id), "control_id": str(control.id),
+                "effectiveness": control.effectiveness.value,
+            },
+        )
+        db.refresh(control)
+        result = _to_control_read(control)
+        store_response(
+            db,
+            endpoint=_ENDPOINT_ASSESS_CONTROL_EFFECTIVENESS,
+            idempotency_key=idempotency_key,
+            request_hash=request_hash,
+            response_status_code=status.HTTP_200_OK,
+            response_body=result.model_dump(mode="json"),
+            organization_id=organization_id,
+            api_client_id=context.api_client_id,
+            user_id=context.user_id,
+            commit=False,
+        )
+    return result
+
+
+@router.post(
+    "/{assessment_id}/findings/{finding_id}/controls/{control_id}/evidence/{evidence_id}",
+    response_model=RiskAssessmentControlEvidenceLinkRead,
+    dependencies=[Depends(require_rate_limit(RateLimitClass.WRITE))],
+)
+def link_control_evidence(
+    assessment_id: uuid.UUID,
+    finding_id: uuid.UUID,
+    control_id: uuid.UUID,
+    evidence_id: uuid.UUID,
+    organization_id: uuid.UUID = Query(...),
+    context: RequestContext = Depends(require_context_permission(Permission.RISK_ASSESSMENT_WRITE)),
+    request_id: str | None = Depends(get_request_id),
+    db: Session = Depends(get_db),
+) -> RiskAssessmentControlEvidenceLinkRead:
+    """SIE Milestone 29. `evidence_id` must name a
+    `RiskAssessmentFindingEvidence` row already attached to this same
+    finding (see `_get_owned_finding_evidence_or_404()`'s own docstring)
+    -- never a second, duplicated evidence payload. Idempotent by
+    construction exactly `link_finding_action()`'s own contract: linking
+    already-linked evidence returns the existing link, `200`, rather
+    than erroring or duplicating it -- no `Idempotency-Key` needed for an
+    operation already safely retryable by nature."""
+    assessment = _get_owned_assessment_or_404(db, organization_id=organization_id, assessment_id=assessment_id)
+    require_editable(assessment)
+    control = _get_owned_control_or_404(
+        db, organization_id=organization_id, assessment_id=assessment_id, finding_id=finding_id, control_id=control_id
+    )
+    evidence = _get_owned_finding_evidence_or_404(
+        db, organization_id=organization_id, finding_id=finding_id, evidence_id=evidence_id
+    )
+
+    with assessment_mutation_transaction(db):
+        link, created = create_control_evidence_link(
+            db, control=control, finding_evidence_id=evidence.id,
+            changed_by_user_id=context.user_id, changed_by_api_client_id=context.api_client_id,
+        )
+        if created:
+            record_history(
+                db,
+                assessment=assessment,
+                finding_id=control.finding_id,
+                control_id=control.id,
+                change_type=RiskAssessmentHistoryChangeType.CONTROL_EVIDENCE_LINKED,
+                to_status=str(evidence.id),
+                changed_by_user_id=context.user_id,
+                changed_by_api_client_id=context.api_client_id,
+                request_id=request_id,
+            )
+            audit_assessment_event(
+                db,
+                action_name=AuditAction.RISK_ASSESSMENT_CONTROL_EVIDENCE_LINKED,
+                assessment=assessment,
+                user_id=context.user_id,
+                caller_kind=context.kind,
+                metadata={"finding_id": str(control.finding_id), "control_id": str(control.id), "evidence_id": str(evidence.id)},
+            )
+        result = RiskAssessmentControlEvidenceLinkRead(
+            id=link.id,
+            control_id=link.control_id,
+            finding_evidence_id=link.finding_evidence_id,
+            evidence=RiskEvidenceRead.model_validate(evidence),
+            created_at=link.created_at,
+        )
+    return result
+
+
+@router.delete(
+    "/{assessment_id}/findings/{finding_id}/controls/{control_id}/evidence/{evidence_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_rate_limit(RateLimitClass.WRITE))],
+)
+def unlink_control_evidence(
+    assessment_id: uuid.UUID,
+    finding_id: uuid.UUID,
+    control_id: uuid.UUID,
+    evidence_id: uuid.UUID,
+    organization_id: uuid.UUID = Query(...),
+    context: RequestContext = Depends(require_context_permission(Permission.RISK_ASSESSMENT_WRITE)),
+    request_id: str | None = Depends(get_request_id),
+    db: Session = Depends(get_db),
+) -> Response:
+    """SIE Milestone 29. Idempotent: unlinking evidence that isn't
+    currently linked to this control still returns `204` -- mirrors
+    `unlink_finding_action()`'s own contract exactly."""
+    assessment = _get_owned_assessment_or_404(db, organization_id=organization_id, assessment_id=assessment_id)
+    require_editable(assessment)
+    control = _get_owned_control_or_404(
+        db, organization_id=organization_id, assessment_id=assessment_id, finding_id=finding_id, control_id=control_id
+    )
+
+    with assessment_mutation_transaction(db):
+        deleted = delete_control_evidence_link(db, control_id=control.id, finding_evidence_id=evidence_id)
+        if deleted:
+            record_history(
+                db,
+                assessment=assessment,
+                finding_id=control.finding_id,
+                control_id=control.id,
+                change_type=RiskAssessmentHistoryChangeType.CONTROL_EVIDENCE_UNLINKED,
+                from_status=str(evidence_id),
+                changed_by_user_id=context.user_id,
+                changed_by_api_client_id=context.api_client_id,
+                request_id=request_id,
+            )
+            audit_assessment_event(
+                db,
+                action_name=AuditAction.RISK_ASSESSMENT_CONTROL_EVIDENCE_UNLINKED,
+                assessment=assessment,
+                user_id=context.user_id,
+                caller_kind=context.kind,
+                metadata={"finding_id": str(control.finding_id), "control_id": str(control.id), "evidence_id": str(evidence_id)},
+            )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get(

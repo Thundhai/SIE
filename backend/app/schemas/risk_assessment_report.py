@@ -90,6 +90,26 @@ class EvidenceCoverageRead(BaseModel):
     findings_with_no_evidence: int
 
 
+class ControlEffectivenessSummaryRead(BaseModel):
+    """SIE Milestone 29: Enterprise Risk Assessment Evidence & Control
+    Effectiveness Foundation v0.1. Entirely historical (like every
+    section here besides `action_response_summary`) -- controls and
+    their evidence links are subject to the same `require_editable()`
+    immutability as findings, so this carries no `computed_at` of its
+    own."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    total_controls: int
+    implementation_status_counts: dict[str, int]
+    effectiveness_rating_counts: dict[str, int]
+    findings_with_no_controls: int
+    findings_with_controls_but_no_effectiveness_assessment: int
+    findings_with_ineffective_or_partially_effective_controls: int
+    assessed_controls_with_evidence: int
+    assessed_controls_without_evidence: int
+
+
 class AssessmentReadinessRead(BaseModel):
     """A readiness *indicator*, never an approval recommendation --
     `status` is exactly `"READY"`/`"NOT_READY"`; `reasons` are plain
@@ -147,6 +167,7 @@ class RiskAssessmentReportRead(BaseModel):
     risk_areas: list[RiskAreaSummaryRead]
     action_response_summary: ActionResponseSummaryRead
     evidence_coverage: EvidenceCoverageRead
+    control_effectiveness: ControlEffectivenessSummaryRead
     readiness: AssessmentReadinessRead
     generated_at: datetime
 
@@ -168,6 +189,7 @@ __all__ = [
     "AssessmentReadinessRead",
     "AssessmentReadinessResponse",
     "AssessmentSummaryCountsRead",
+    "ControlEffectivenessSummaryRead",
     "EvidenceCoverageRead",
     "RiskAreaSummaryRead",
     "RiskAssessmentReportRead",

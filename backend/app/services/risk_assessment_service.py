@@ -60,7 +60,8 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.intelligence.enterprise_intelligence_service import EnterpriseIntelligenceResult, compute_enterprise_intelligence
 from app.models.knowledge_document import KnowledgeDocument
-from app.models.risk_assessment import RiskAssessment, RiskAssessmentFinding
+from app.models.risk_assessment import RiskAssessment, RiskAssessmentControl, RiskAssessmentFinding
+from app.models.risk_assessment_control_evidence import RiskAssessmentControlEvidence
 from app.models.risk_assessment_enums import (
     ASSESSMENT_EDITABLE_STATUSES,
     FindingStatus,
@@ -545,12 +546,91 @@ def list_findings_linked_to_action(
     )
 
 
+# --- Control <-> Evidence relationship (SIE Milestone 29) -----------------------------------
+#
+# See app/models/risk_assessment_control_evidence.py's own docstring for
+# the full "link table over an existing finding-evidence row, never a
+# second evidence-payload table" rationale. Mirrors the Finding <->
+# Action relationship helpers above exactly: plain query/mutation
+# helpers only -- the caller (app/api/v1/risk_assessments.py) resolves
+# tenant ownership and hierarchy (control belongs to this finding
+# belongs to this assessment; evidence belongs to this same finding)
+# first, and writes the accompanying RiskAssessmentHistory/AuditLog
+# entries inside its own assessment_mutation_transaction().
+
+
+def get_control_evidence_link(
+    db: Session, *, control_id: uuid.UUID, finding_evidence_id: uuid.UUID
+) -> RiskAssessmentControlEvidence | None:
+    return db.execute(
+        select(RiskAssessmentControlEvidence).where(
+            RiskAssessmentControlEvidence.control_id == control_id,
+            RiskAssessmentControlEvidence.finding_evidence_id == finding_evidence_id,
+        )
+    ).scalar_one_or_none()
+
+
+def create_control_evidence_link(
+    db: Session,
+    *,
+    control: RiskAssessmentControl,
+    finding_evidence_id: uuid.UUID,
+    changed_by_user_id: uuid.UUID | None,
+    changed_by_api_client_id: uuid.UUID | None,
+) -> tuple[RiskAssessmentControlEvidence, bool]:
+    """Idempotent by construction, exactly `create_finding_action_relationship()`'s
+    own contract: linking the same evidence to the same control twice
+    returns the existing row, `created=False`, rather than raising or
+    duplicating it (enforced doubly -- here, and by the table's own
+    unique constraint as a defense in depth). Only `db.add()`s/`flush()`es
+    -- the caller's own `assessment_mutation_transaction()` commits."""
+    existing = get_control_evidence_link(db, control_id=control.id, finding_evidence_id=finding_evidence_id)
+    if existing is not None:
+        return existing, False
+    link = RiskAssessmentControlEvidence(
+        organization_id=control.organization_id,
+        control_id=control.id,
+        finding_evidence_id=finding_evidence_id,
+        created_by_user_id=changed_by_user_id,
+        created_by_api_client_id=changed_by_api_client_id,
+    )
+    db.add(link)
+    db.flush()
+    return link, True
+
+
+def delete_control_evidence_link(db: Session, *, control_id: uuid.UUID, finding_evidence_id: uuid.UUID) -> bool:
+    """Idempotent: unlinking evidence that isn't currently linked is a
+    no-op, returning `False` rather than raising -- a retried unlink
+    call must never fail merely because an earlier attempt already
+    succeeded."""
+    existing = get_control_evidence_link(db, control_id=control_id, finding_evidence_id=finding_evidence_id)
+    if existing is None:
+        return False
+    db.delete(existing)
+    db.flush()
+    return True
+
+
+def list_control_evidence_links(db: Session, *, control_id: uuid.UUID) -> list[RiskAssessmentControlEvidence]:
+    return list(
+        db.execute(
+            select(RiskAssessmentControlEvidence)
+            .where(RiskAssessmentControlEvidence.control_id == control_id)
+            .order_by(RiskAssessmentControlEvidence.created_at)
+        )
+        .scalars()
+        .all()
+    )
+
+
 def record_history(
     db: Session,
     *,
     assessment: RiskAssessment,
     change_type: str,
     finding_id: uuid.UUID | None = None,
+    control_id: uuid.UUID | None = None,
     from_status: str | None = None,
     to_status: str | None = None,
     changed_by_user_id: uuid.UUID | None,
@@ -559,7 +639,10 @@ def record_history(
     comment: str | None = None,
     commit: bool = False,
 ) -> RiskAssessmentHistory:
-    """SIE Milestone 26, items 8-9. Mirrors
+    """SIE Milestone 26, items 8-9; `control_id` added by SIE Milestone
+    29 (Enterprise Risk Assessment Evidence & Control Effectiveness
+    Foundation v0.1) for the five `CONTROL_*` change types -- always
+    paired with the owning finding's own `finding_id`. Mirrors
     `safety_action_service.record_history()`'s own `commit=False`
     contract exactly: every `app/api/v1/risk_assessments.py` call site
     passes `commit=False` (the default here, unlike that function's own
@@ -573,6 +656,7 @@ def record_history(
         organization_id=assessment.organization_id,
         assessment_id=assessment.id,
         finding_id=finding_id,
+        control_id=control_id,
         change_type=change_type,
         from_status=from_status,
         to_status=to_status,

@@ -34,6 +34,16 @@
 > already contain. See "Reporting & decision readiness" below for the
 > full detail.
 
+> **Extended by SIE Milestone 29: Enterprise Risk Assessment Evidence &
+> Control Effectiveness Foundation v0.1.** A dedicated control-management
+> sub-resource layered onto the finding-level controls this document
+> already described — per-control create/read/update, an attributed
+> effectiveness-assessment action distinct from generic metadata edits,
+> and evidence linking to existing finding evidence. It computes no new
+> risk rating (a control's effectiveness never automatically changes
+> residual risk) and adds no new deletion path. See "Control
+> effectiveness assessment & evidence" below for the full detail.
+
 **SIE Milestone 25.** Moves SIE from risk *intelligence* (Milestones
 22-24: indicators, trend, patterns, anomalies, associations, and the
 deterministic `enterprise-risk-v1` score) into a structured risk
@@ -538,7 +548,136 @@ the two.
 `PATCH .../findings/{finding_id}` with a `controls` list *replaces* the
 finding's entire control set atomically — the simplest v0.1 semantics
 that fully supports this section without a dedicated controls
-sub-resource.
+sub-resource. **SIE Milestone 29** (below) supplements this, never
+replaces it: a dedicated `.../controls` sub-resource now also exists,
+for the finer-grained per-control workflow (create one control without
+resending the whole array, assess its effectiveness with an attributed
+rationale, link it to specific evidence) the bulk-replace path was never
+designed for.
+
+## Control effectiveness assessment & evidence (SIE Milestone 29)
+
+> **SIE Milestone 29: Enterprise Risk Assessment Evidence & Control
+> Effectiveness Foundation v0.1.** Turns "a finding may carry controls"
+> (above) into a governed workflow an HSE professional can actually use
+> to answer *"what controls exist, how effective are they, what
+> evidence supports that, and how does that relate to residual risk and
+> corrective actions?"* — without collapsing any of those into one
+> record:
+
+```
+Finding (identified risk)
+   |
+   +-- Existing Controls (RiskAssessmentControl)
+   |      |
+   |      +-- Control Evidence (RiskAssessmentControlEvidence
+   |      |     -> an existing RiskAssessmentFindingEvidence row,
+   |      |     never a duplicated payload)
+   |      |
+   |      +-- Effectiveness Assessment (effectiveness +
+   |            effectiveness_rationale + assessed_at +
+   |            assessed_by_user_id -- set only together, only by
+   |            POST .../assess-effectiveness)
+   |
+   +-- Residual Risk (RiskAssessmentFinding.residual_*  -- completely
+   |     independent; see "Residual risk" below -- never derived from
+   |     control existence or effectiveness)
+   |
+   +-- Corrective Actions (SafetyAction, via RiskAssessmentFindingAction
+         -- SIE Milestone 27; related to controls only in that both
+         concern this finding, never the same record)
+```
+
+**A dedicated control sub-resource, additive to the bulk-replace path.**
+`GET`/`POST .../findings/{finding_id}/controls`,
+`GET`/`PATCH .../controls/{control_id}` — the generic `PATCH` carries
+only non-effectiveness metadata (`description`/`control_type`/`status`/
+`owner_user_id`/`reference`); it has no `effectiveness` field at all, so
+an effectiveness rating can never be set silently through it.
+
+**Effectiveness assessment is its own, attributed, dedicated action.**
+`POST .../controls/{control_id}/assess-effectiveness` is the *one* path
+that ever sets `effectiveness` together with `effectiveness_rationale`
+(required, non-blank), `assessed_at` (server time by default — a
+client-supplied `assessed_at` is accepted for backdating a
+paper-record assessment, but the *actor* is always the authenticated
+caller, never client-supplied), and `assessed_by_user_id` (the
+authenticated caller). `effectiveness_rating` may never be
+`NOT_ASSESSED` — that value means "no assessment happened," so an
+assessment call can never conclude it; `NOT_ASSESSED` must never
+masquerade as an assessed conclusion. Gated on `RISK_ASSESSMENT_WRITE`
+— the same permission finding risk-rating already requires, since both
+are an assessor's own expert judgment, not the more privileged
+`RISK_ASSESSMENT_APPROVE` closure/archival already requires elsewhere.
+
+**Control existence is not proof of effectiveness — and this milestone
+never blurs the two.** A brand-new control (via either the dedicated
+`POST .../controls` or the legacy bulk-replace path) is always
+`NOT_ASSESSED` until a human explicitly assesses it. Nothing in this
+codebase ever infers effectiveness from a linked `SafetyAction`'s status
+— a `COMPLETED` action that was raised to implement a control does not
+mark that control `EFFECTIVE` (mirrors SIE Milestone 27's own
+"a completed action never automatically closes a finding" principle one
+level down, at the control instead of the finding).
+
+**`RiskAssessmentControlEvidence`** links a control to an *existing*
+`RiskAssessmentFindingEvidence` row belonging to the same finding —
+never a duplicated evidence payload, and provenance stays exactly as
+traceable as the finding evidence's own (`POST`/`DELETE
+.../controls/{control_id}/evidence/{evidence_id}`, both idempotent by
+construction — linking already-linked evidence or unlinking
+never-linked evidence is a safe no-op, never an error).
+
+**Two additive `ControlType`/`ControlStatus` values.** `ControlType`
+gains `OTHER` (a real control that doesn't fit the hierarchy-of-controls
+categories still needs to be recordable). `ControlStatus` gains
+`PARTIALLY_IMPLEMENTED` and `NOT_VERIFIED` — two real, distinct states
+an HSE audit needs: a control only partly rolled out is not the same as
+`PROPOSED`, and "installed but nobody has confirmed it works" is not the
+same as `NOT_IMPLEMENTED`. `ControlEffectiveness` is unchanged — its
+existing four values already matched the spec exactly.
+
+**Historical integrity is free, not engineered — the identical SIE
+Milestone 28 insight, one level down.** Every control-mutating route
+(`create_control`/`update_control`/`assess_control_effectiveness`/
+`link_control_evidence`/`unlink_control_evidence`) calls the same
+`require_editable()` every finding-mutating route already calls: once
+an assessment is `APPROVED`/`SUPERSEDED`/`ARCHIVED`, controls (and their
+evidence links) can no longer be mutated at all. No new snapshot table
+or copy-on-approve mechanism was needed — reading `finding.controls`
+fresh from the database already *is* the historical snapshot.
+
+**No deletion or retirement route exists in this milestone.** The spec's
+own guidance — "prefer soft retirement / status transition over
+destructive deletion" — is satisfied here by building neither: a
+control's `status` can already represent "no longer relevant" via the
+existing values well enough for v0.1, and adding an irreversible
+deletion path was explicitly out of scope. `CONTROL_DELETED`/
+`CONTROL_RETIRED` history event types therefore do not exist yet either
+— a future milestone that adds either route adds its own change type
+alongside it.
+
+**History and audit.** `RiskAssessmentHistory` gains a `control_id`
+column (nullable, `ON DELETE SET NULL`, always paired with the owning
+finding's own `finding_id`) and five new `change_type` values:
+`CONTROL_CREATED`, `CONTROL_UPDATED`, `CONTROL_EVIDENCE_LINKED`,
+`CONTROL_EVIDENCE_UNLINKED`, `CONTROL_EFFECTIVENESS_ASSESSED` — written
+in the same `assessment_mutation_transaction()` as every other mutation
+in this domain, alongside a matching `AuditLog` entry
+(`RISK_ASSESSMENT_CONTROL_CREATED`/`_UPDATED`/
+`_EFFECTIVENESS_ASSESSED`/`_EVIDENCE_LINKED`/`_EVIDENCE_UNLINKED`).
+
+**Reporting integration (extends SIE Milestone 28, additively).** `GET
+.../{assessment_id}/report` gains a `control_effectiveness` section:
+total controls, implementation-status distribution, effectiveness-rating
+distribution, findings with no controls, findings with controls but no
+effectiveness assessment, findings with ineffective/partially-effective
+controls, and evidence coverage for *assessed* controls specifically.
+Entirely deterministic counts — no invented "control effectiveness
+score," no management recommendation. Because controls (like findings)
+are immutable once the assessment is no longer editable, this section
+carries no `computed_at` of its own — it is part of the same historical
+snapshot as everything else in the report except `action_response_summary`.
 
 ## Residual risk
 
@@ -677,8 +816,11 @@ exactly: one row per assessment- or finding-level change
 (`ASSESSMENT_CREATED`/`_UPDATED`/`_SUBMITTED`/`_APPROVED`/`_SUPERSEDED`/
 `_ARCHIVED`, `FINDING_CREATED`/`_UPDATED`/`_RISK_RATED`/
 `_RESIDUAL_RATED`/`_ACTION_LINKED`/`_ACTION_UNLINKED`/`_ACTION_CREATED`/
-`_CLOSED` *(the last two, Milestone 27)*), carrying
-`assessment_id`, an optional `finding_id`, `from_status`/`to_status`,
+`_CLOSED` *(the last two, Milestone 27)*, and `CONTROL_CREATED`/
+`_UPDATED`/`_EVIDENCE_LINKED`/`_EVIDENCE_UNLINKED`/
+`_EFFECTIVENESS_ASSESSED` *(Milestone 29 — each also carries the new,
+nullable `control_id` column alongside its owning `finding_id`)*),
+carrying `assessment_id`, an optional `finding_id`, `from_status`/`to_status`,
 `changed_by_user_id`/`changed_by_api_client_id`, `request_id`, and an
 optional free-text `comment`. `change_type` is a plain string (via the
 typo-guard `RiskAssessmentHistoryChangeType` convenience class), not a
@@ -717,6 +859,13 @@ POST   /api/v1/risk-assessments/{id}/findings/{finding_id}/close          (SIE M
 GET    /api/v1/risk-assessments/actions/{action_id}/findings              (SIE Milestone 27)
 GET    /api/v1/risk-assessments/{id}/report                               (SIE Milestone 28)
 GET    /api/v1/risk-assessments/{id}/readiness                            (SIE Milestone 28)
+GET    /api/v1/risk-assessments/{id}/findings/{finding_id}/controls                              (SIE Milestone 29)
+POST   /api/v1/risk-assessments/{id}/findings/{finding_id}/controls                              (SIE Milestone 29)
+GET    /api/v1/risk-assessments/{id}/findings/{finding_id}/controls/{control_id}                 (SIE Milestone 29)
+PATCH  /api/v1/risk-assessments/{id}/findings/{finding_id}/controls/{control_id}                 (SIE Milestone 29)
+POST   /api/v1/risk-assessments/{id}/findings/{finding_id}/controls/{control_id}/assess-effectiveness  (SIE Milestone 29)
+POST   /api/v1/risk-assessments/{id}/findings/{finding_id}/controls/{control_id}/evidence/{evidence_id}    (SIE Milestone 29)
+DELETE /api/v1/risk-assessments/{id}/findings/{finding_id}/controls/{control_id}/evidence/{evidence_id}    (SIE Milestone 29)
 ```
 
 The first eight (minus `archive`) are the Milestone 25 spec's own named
@@ -859,6 +1008,16 @@ milestone.
 
 ## Limitations
 
+* Milestone 29 adds no control deletion or retirement route — a
+  control's lifecycle is expressed entirely through its `status` field
+  for v0.1; `CONTROL_DELETED`/`CONTROL_RETIRED` history event types do
+  not exist yet (a future milestone that adds either route adds its own
+  change type alongside it).
+* Milestone 29 computes no "control effectiveness score" and never
+  automatically alters `residual_risk_score`/`residual_risk_classification`
+  from a control's effectiveness, type, or count — residual risk stays
+  an independently supplied rating (see "Residual risk" below), exactly
+  as it already was before this milestone.
 * Milestone 28's report intentionally computes no new risk methodology,
   risk-area taxonomy, AI-generated conclusion, automatic approval,
   automatic risk acceptance, automatic finding closure, or predictive

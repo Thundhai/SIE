@@ -56,7 +56,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.risk_assessment import RiskAssessment, RiskAssessmentFinding
-from app.models.risk_assessment_enums import FindingStatus, RiskCandidateStatus
+from app.models.risk_assessment_enums import ControlEffectiveness, ControlStatus, FindingStatus, RiskCandidateStatus
 from app.models.risk_assessment_finding_action import RiskAssessmentFindingAction
 from app.models.safety_action import SafetyAction
 from app.models.safety_action_enums import ActionStatus
@@ -176,6 +176,37 @@ class EvidenceCoverage:
 
 
 @dataclass
+class ControlEffectivenessSummary:
+    """SIE Milestone 29: Enterprise Risk Assessment Evidence & Control
+    Effectiveness Foundation v0.1. Deterministic counts only over
+    `RiskAssessmentControl` rows already eager-loaded on each finding
+    (via `finding.controls`) -- no new query, no invented "control
+    effectiveness score." Entirely historical, unlike
+    `ActionResponseSummary` above: a control (and its evidence links)
+    are subject to the identical `require_editable()` immutability every
+    finding already has, so this section carries no `computed_at` -- it
+    is part of the same historical snapshot as everything else in
+    `RiskAssessmentReport` besides `action_response_summary`.
+
+    `implementation_status_counts`/`effectiveness_rating_counts` are
+    keyed by the exact `ControlStatus`/`ControlEffectiveness` enum
+    values (never a fifth, invented bucket). `assessed_controls_with_evidence`/
+    `assessed_controls_without_evidence` count only controls whose
+    `effectiveness != NOT_ASSESSED` -- an unassessed control's evidence
+    coverage is not yet a meaningful question (its effectiveness
+    conclusion doesn't exist yet to be "supported")."""
+
+    total_controls: int = 0
+    implementation_status_counts: dict[str, int] = field(default_factory=dict)
+    effectiveness_rating_counts: dict[str, int] = field(default_factory=dict)
+    findings_with_no_controls: int = 0
+    findings_with_controls_but_no_effectiveness_assessment: int = 0
+    findings_with_ineffective_or_partially_effective_controls: int = 0
+    assessed_controls_with_evidence: int = 0
+    assessed_controls_without_evidence: int = 0
+
+
+@dataclass
 class AssessmentReadiness:
     """Item 6. A *readiness indicator*, never an approval recommendation
     -- `status` is exactly `"READY"`/`"NOT_READY"`, `reasons` is a list of
@@ -218,6 +249,7 @@ class RiskAssessmentReport:
     risk_areas: list[RiskAreaSummary]
     action_response_summary: ActionResponseSummary
     evidence_coverage: EvidenceCoverage
+    control_effectiveness: ControlEffectivenessSummary
     readiness: AssessmentReadiness
     generated_at: datetime = field(default_factory=utcnow)
 
@@ -333,6 +365,16 @@ def compute_risk_assessment_report(db: Session, assessment: RiskAssessment) -> R
     all_linked_action_ids: set[uuid.UUID] = set()
     action_state_counts: dict[str, int] = {"COMPLETED": 0, "CANCELLED": 0, "OUTSTANDING": 0, "OVERDUE": 0}
 
+    # --- Control effectiveness (SIE Milestone 29) ---------------------------------------------
+    total_controls = 0
+    implementation_status_counts: dict[str, int] = {s.value: 0 for s in ControlStatus}
+    effectiveness_rating_counts: dict[str, int] = {e.value: 0 for e in ControlEffectiveness}
+    findings_with_no_controls = 0
+    findings_with_controls_but_no_effectiveness_assessment = 0
+    findings_with_ineffective_or_partially_effective_controls = 0
+    assessed_controls_with_evidence = 0
+    assessed_controls_without_evidence = 0
+
     for finding in findings:
         findings_by_status[finding.status.value] = findings_by_status.get(finding.status.value, 0) + 1
         candidate_key = finding.candidate_status.value if finding.candidate_status is not None else "MANUAL"
@@ -407,6 +449,36 @@ def compute_risk_assessment_report(db: Session, assessment: RiskAssessment) -> R
             if len(categories) > 1:
                 evidence.findings_with_multiple_evidence_types += 1
 
+        # --- Control effectiveness (SIE Milestone 29) ----------------------------------------
+        controls = finding.controls
+        if not controls:
+            findings_with_no_controls += 1
+        else:
+            has_assessed_control = False
+            has_weak_control = False
+            for control in controls:
+                total_controls += 1
+                implementation_status_counts[control.status.value] = (
+                    implementation_status_counts.get(control.status.value, 0) + 1
+                )
+                effectiveness_rating_counts[control.effectiveness.value] = (
+                    effectiveness_rating_counts.get(control.effectiveness.value, 0) + 1
+                )
+                if control.effectiveness != ControlEffectiveness.NOT_ASSESSED:
+                    has_assessed_control = True
+                    if control.control_evidence:
+                        assessed_controls_with_evidence += 1
+                    else:
+                        assessed_controls_without_evidence += 1
+                if control.effectiveness in (
+                    ControlEffectiveness.INEFFECTIVE, ControlEffectiveness.PARTIALLY_EFFECTIVE,
+                ):
+                    has_weak_control = True
+            if not has_assessed_control:
+                findings_with_controls_but_no_effectiveness_assessment += 1
+            if has_weak_control:
+                findings_with_ineffective_or_partially_effective_controls += 1
+
         # --- Action response summary (item 4) -----------------------------------------------
         linked_actions = actions_by_finding.get(finding.id, [])
         action_count = len(linked_actions)
@@ -465,6 +537,17 @@ def compute_risk_assessment_report(db: Session, assessment: RiskAssessment) -> R
         has_no_findings=has_no_findings,
     )
 
+    control_effectiveness = ControlEffectivenessSummary(
+        total_controls=total_controls,
+        implementation_status_counts=implementation_status_counts,
+        effectiveness_rating_counts=effectiveness_rating_counts,
+        findings_with_no_controls=findings_with_no_controls,
+        findings_with_controls_but_no_effectiveness_assessment=findings_with_controls_but_no_effectiveness_assessment,
+        findings_with_ineffective_or_partially_effective_controls=findings_with_ineffective_or_partially_effective_controls,
+        assessed_controls_with_evidence=assessed_controls_with_evidence,
+        assessed_controls_without_evidence=assessed_controls_without_evidence,
+    )
+
     summary = AssessmentSummary(
         finding_count=len(findings),
         findings_by_status=findings_by_status,
@@ -480,6 +563,7 @@ def compute_risk_assessment_report(db: Session, assessment: RiskAssessment) -> R
         risk_areas=sorted(risk_area_groups.values(), key=lambda g: g.concept_key),
         action_response_summary=action_summary,
         evidence_coverage=evidence,
+        control_effectiveness=control_effectiveness,
         readiness=readiness,
         generated_at=now,
     )
@@ -489,6 +573,7 @@ __all__ = [
     "ActionResponseSummary",
     "AssessmentReadiness",
     "AssessmentSummary",
+    "ControlEffectivenessSummary",
     "EvidenceCoverage",
     "RiskAreaSummary",
     "RiskAssessmentReport",
