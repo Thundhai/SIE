@@ -20,6 +20,12 @@ interface NavItem {
    * Actions, Risk Assessments, and Intelligence are real routes;
    * Knowledge/Reports/Administration are not built yet. */
   enabled: boolean;
+  /** Which brand color the active state uses (SIE Milestone UI-DESIGN-01).
+   * Teal is the SIE *intelligence* accent specifically — reserved for the
+   * Intelligence nav item (and its own tabs) — never a generic "this is
+   * selected" color. Every other real item uses the navy structural-active
+   * treatment instead. Defaults to `'navy'`. */
+  accent?: 'navy' | 'teal';
 }
 
 interface NavGroup {
@@ -41,7 +47,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: 'Risk Assessments', href: '/risk-assessments', icon: ShieldAlert, enabled: true },
     ],
   },
-  { heading: 'Intelligence', items: [{ label: 'Intelligence', href: '/intelligence', icon: LineChart, enabled: true }] },
+  { heading: 'Intelligence', items: [{ label: 'Intelligence', href: '/intelligence', icon: LineChart, enabled: true, accent: 'teal' }] },
   { heading: 'Knowledge', items: [{ label: 'Knowledge', href: '/knowledge', icon: ShieldCheck, enabled: false }] },
   { heading: 'Reporting', items: [{ label: 'Reports', href: '/reports', icon: FileBarChart2, enabled: false }] },
   { heading: 'Administration', items: [{ label: 'Administration', href: '/administration', icon: Settings2, enabled: false }] },
@@ -57,16 +63,27 @@ const NAV_GROUPS: NavGroup[] = [
  * are real links; Knowledge/Reports/Administration render as disabled
  * rows with a "Coming later" label so the eventual information
  * architecture is visible without pretending those screens exist yet.
+ *
+ * SIE Milestone UI-DESIGN-01: a stronger `border-border-strong` right
+ * edge gives the rail a clearer separation from the canvas than v0.1's
+ * hairline `border-border`, and the wordmark now takes the navy brand
+ * color rather than generic body text — both "sidebar" requirements
+ * (subtle separation from canvas; navy brand treatment) — while the
+ * sidebar's own fill stays white/light, per that section's explicit "do
+ * NOT turn dark" instruction. Active-item color is now split by accent
+ * (see `NavItem.accent`): navy for ordinary structural navigation, teal
+ * reserved for Intelligence alone, so teal keeps one consistent meaning
+ * across the app.
  */
 export function Sidebar() {
   return (
-    <nav aria-label="Primary" className="flex h-full w-(--width-sidebar) shrink-0 flex-col border-r border-border bg-surface">
+    <nav aria-label="Primary" className="flex h-full w-(--width-sidebar) shrink-0 flex-col border-r border-border-strong bg-surface">
       <div className="flex items-center gap-2.5 border-b border-border px-4 py-4">
         <div className="flex h-7 w-7 items-center justify-center rounded-md bg-navy-800 text-[11px] font-bold text-white">
           SIE
         </div>
         <div>
-          <p className="text-sm font-semibold text-text-primary leading-tight">Safety Intelligence Engine</p>
+          <p className="text-sm font-semibold text-navy-900 leading-tight">Safety Intelligence Engine</p>
         </div>
       </div>
 
@@ -95,6 +112,7 @@ export function Sidebar() {
                     </li>
                   );
                 }
+                const activeClass = item.accent === 'teal' ? 'bg-teal-50 text-teal-700' : 'bg-navy-50 text-navy-900';
                 return (
                   <li key={item.label}>
                     <NavLink
@@ -104,9 +122,7 @@ export function Sidebar() {
                         cn(
                           'flex items-center gap-2.5 rounded-md px-3 py-2 text-sm font-medium transition-colors',
                           'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-teal-600',
-                          isActive
-                            ? 'bg-teal-50 text-teal-700'
-                            : 'text-text-secondary hover:bg-surface-muted hover:text-text-primary',
+                          isActive ? activeClass : 'text-text-secondary hover:bg-surface-muted hover:text-text-primary',
                         )
                       }
                     >

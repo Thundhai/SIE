@@ -76,7 +76,7 @@ export function RiskAssessmentsPage() {
   return (
     <PageContainer>
       <div>
-        <h1 className="text-xl font-semibold text-text-primary">Risk Assessments</h1>
+        <h1 className="text-xl font-semibold text-navy-900">Risk Assessments</h1>
         <p className="mt-1 text-sm text-text-secondary">Formal enterprise risk assessments and their current status.</p>
       </div>
 

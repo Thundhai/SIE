@@ -70,7 +70,7 @@ export function IntelligencePage() {
   return (
     <PageContainer>
       <div>
-        <h1 className="text-xl font-semibold text-text-primary">Intelligence</h1>
+        <h1 className="text-xl font-semibold text-navy-900">Intelligence</h1>
         <p className="mt-1 text-sm text-text-secondary">
           Deterministic risk, trend, anomaly, and pattern intelligence computed from your organization's recorded events.
         </p>
@@ -126,7 +126,12 @@ function IntelligenceContent({
 
       <Section title="Enterprise risk" description={`As of ${new Date(data.as_of).toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}, based on the last ${data.window_days} days.`}>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <div className="rounded-lg border border-border bg-surface p-4">
+          {/* SIE Milestone UI-DESIGN-01: the headline enterprise-risk
+              number is this page's one Level-3 "elevated important
+              content" tile — a restrained shadow on top of the ordinary
+              card border. Classification/data-sufficiency stay plain
+              Level-2 cards. */}
+          <div className="rounded-lg border border-border bg-surface p-4 shadow-xs">
             <p className="text-xs font-medium uppercase tracking-wide text-text-muted">Risk score</p>
             <p className="mt-1 text-2xl font-semibold text-text-primary">
               {data.deterministic_risk.score !== null ? data.deterministic_risk.score.toFixed(1) : '—'}

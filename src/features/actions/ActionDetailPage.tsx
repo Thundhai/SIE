@@ -150,7 +150,7 @@ function ActionDetailContent({
     <>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold text-text-primary">{action.title}</h1>
+          <h1 className="text-xl font-semibold text-navy-900">{action.title}</h1>
           <p className="mt-1 text-sm text-text-secondary">
             {actionTypeLabel(action.actionType)}
             {action.siteName ? ` · ${action.siteName}` : ''}

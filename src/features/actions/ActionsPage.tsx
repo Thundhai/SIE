@@ -138,7 +138,7 @@ export function ActionsPage() {
     <PageContainer>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold text-text-primary">Actions</h1>
+          <h1 className="text-xl font-semibold text-navy-900">Actions</h1>
           <p className="mt-1 text-sm text-text-secondary">
             Track what needs to be corrected, who owns it, and what happens next.
           </p>

@@ -110,7 +110,7 @@ function RiskAssessmentDetailContent({ assessment }: { assessment: RiskAssessmen
     <>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold text-text-primary">{assessment.title}</h1>
+          <h1 className="text-xl font-semibold text-navy-900">{assessment.title}</h1>
           <p className="mt-1 text-sm text-text-secondary">
             {assessmentTypeLabel(assessment.assessment_type)} · {assessmentScopeLabel(assessment.scope)}
             {assessment.version > 1 ? ` · Version ${assessment.version}` : ''}

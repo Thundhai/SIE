@@ -24,6 +24,7 @@ function renderShell(initialPath = '/') {
           <Route element={<AppShell />}>
             <Route index element={<h1>Home content</h1>} />
             <Route path="events" element={<h1>Events content</h1>} />
+            <Route path="intelligence" element={<h1>Intelligence content</h1>} />
           </Route>
         </Routes>
       </MemoryRouter>
@@ -53,6 +54,18 @@ describe('AppShell', () => {
       expect(screen.getByText(label, { selector: 'span' })).toBeInTheDocument();
     }
     expect(screen.getAllByText('Coming later')).toHaveLength(3);
+  });
+
+  it('gives the active Intelligence link the teal intelligence accent (SIE Milestone UI-DESIGN-01)', () => {
+    renderShell('/intelligence');
+    expect(screen.getByRole('link', { name: 'Intelligence' }).className).toMatch(/bg-teal-50/);
+    expect(screen.getByRole('link', { name: 'Intelligence' }).className).not.toMatch(/bg-navy-50/);
+  });
+
+  it('gives other active links (e.g. Events) the navy structural accent, not teal — teal stays reserved for Intelligence (SIE Milestone UI-DESIGN-01)', () => {
+    renderShell('/events');
+    expect(screen.getByRole('link', { name: 'Events' }).className).toMatch(/bg-navy-50/);
+    expect(screen.getByRole('link', { name: 'Events' }).className).not.toMatch(/bg-teal-50/);
   });
 
   it('navigating from Home to Events swaps the routed content without a full page reload', async () => {

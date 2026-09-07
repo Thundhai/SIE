@@ -1,5 +1,7 @@
 /**
  * SIE design tokens — SIE Frontend Foundation & Core UX Implementation v0.1.
+ * Surface hierarchy and navy/teal balance revised by SIE Milestone
+ * UI-DESIGN-01: Visual Theme & Colour System v0.2.
  *
  * Centralized, Tailwind v4-native tokens (CSS custom properties inside an
  * `@theme` block). Tailwind v4 is CSS-first: every `--color-*` / `--radius-*`
@@ -8,20 +10,34 @@
  * `border-teal-600`, ...). Nothing outside this file should hardcode a raw
  * hex value for brand color, surface, border, text, or status color — that
  * was the legacy prototype's own pattern (`bg-[#09090B]` scattered through
- * 14 view files) and is exactly what this milestone exists to stop.
+ * 14 view files) and is exactly what this milestone exists to stop. A
+ * repository-wide scan for `bg-[#`/`text-[#`/`border-[#` and default
+ * (non-token) Tailwind palette classes confirmed zero such usages anywhere
+ * in the new app (`src/app`, `src/auth`, `src/features`,
+ * `src/components/{ui,layout,data,intelligence}`) as of v0.2 — every
+ * screen already consumes these tokens rather than hardcoding a color, so
+ * v0.2's fixes live almost entirely in this file.
  *
  * IMPORTANT LIMITATION (documented per the milestone's own instruction not
  * to invent Figma-specific measurements): the Figma file
  * (https://www.figma.com/design/PkWBneIfrMuMUp8Du8aGnD, "SIE UX & Brand
- * Design System v0.1") could not be read directly in this session — the
- * Figma MCP connection was unavailable/rate-limited. The values below are
- * therefore restrained, professional, enterprise-SaaS defaults chosen from
- * the written brief ("light professional surfaces, white and soft neutral
- * backgrounds, deep navy, restrained teal, subtle borders, clear
- * typography, generous whitespace") — NOT measured from the Figma file.
- * Every value lives in exactly this one place so a future pass that DOES
- * have Figma access can correct them centrally without touching a single
- * component.
+ * Design System v0.1") could not be read directly in this session — no
+ * node-specific URL was available (only the bare file key), and the Figma
+ * MCP tools require a concrete node id rather than a guessed one. The
+ * values below remain restrained, professional, enterprise-SaaS choices,
+ * not measurements from the Figma file. Every value lives in exactly this
+ * one place so a future pass that DOES have Figma node access can correct
+ * them centrally without touching a single component.
+ *
+ * v0.2 surface-hierarchy correction: v0.1's application canvas
+ * (`--color-background: #f6f7f9`) sat only ~1% darker than `--color-surface`
+ * (`#ffffff`) — visually indistinguishable at a glance, which is exactly
+ * the "white-on-white" problem this milestone exists to fix. `--color-border`
+ * was also raised slightly for the same reason: hairline borders around
+ * white cards need to read clearly against the new, more visible canvas.
+ * Nothing else about the surface *model* changed — canvas/content/elevated
+ * remain three tokens (`--color-background`/`--color-surface`/border+shadow
+ * on top of `--color-surface`), not a fourth surface tier.
  */
 
 @theme {
@@ -39,16 +55,36 @@
   --color-teal-100: #e2f4f1;
   --color-teal-50: #f0faf8;
 
+  /* ---- Brand: light navy washes (v0.2) -----------------------------------
+   * A structural counterpart to teal-50/teal-100: teal is reserved for the
+   * Intelligence accent (active Intelligence nav item, active Intelligence
+   * tabs) — everything else that needs a "selected/active structural
+   * element" wash (Home/Events/Actions/Risk Assessments nav items) uses
+   * this navy wash instead, so teal keeps a single, consistent meaning
+   * across the app rather than doubling as a generic "active" color. */
+  --color-navy-100: #dbe7f2;
+  --color-navy-50: #eef3f9;
+
   /* ---- Neutral surfaces -------------------------------------------------
    * "background" is the page canvas; "surface" is a card/panel sitting on
    * it; "surface-muted" is a recessed/secondary panel (e.g. a table's
-   * header row, a filter bar). Kept close in value deliberately — SIE
-   * should read as calm and layered, not high-contrast/dashboard-glossy. */
-  --color-background: #f6f7f9;
+   * header row, a filter bar).
+   *
+   * v0.2: `background` was raised from #f6f7f9 to #eef1f5 — v0.1's value
+   * sat only ~1% darker than `surface` (#ffffff), which read as a single
+   * flat white/near-white field with no perceptible canvas-vs-content
+   * separation (SIE Milestone UI-DESIGN-01's core complaint). #eef1f5 is a
+   * clearly (if still gently) cool grey — "this grey area is the
+   * application, this white area contains information" now actually
+   * reads as two distinct tones, without becoming a high-contrast,
+   * dashboard-glossy canvas. `border`/`border-strong` were raised
+   * slightly alongside it so a white card's edge stays crisp against the
+   * now more visible canvas. */
+  --color-background: #eef1f5;
   --color-surface: #ffffff;
   --color-surface-muted: #f0f2f5;
-  --color-border: #e2e5eb;
-  --color-border-strong: #cbd1db;
+  --color-border: #dde2ea;
+  --color-border-strong: #c3cad6;
 
   /* ---- Text -------------------------------------------------------------
    * Near-black, not pure black — softer, more human than #000. */

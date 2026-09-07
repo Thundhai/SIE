@@ -114,7 +114,7 @@ export function HomePage() {
   return (
     <PageContainer>
       <div>
-        <h1 className="text-xl font-semibold text-text-primary">Home</h1>
+        <h1 className="text-xl font-semibold text-navy-900">Home</h1>
         <p className="mt-1 text-sm text-text-secondary">What needs your attention right now.</p>
       </div>
 
@@ -156,7 +156,12 @@ function EnterpriseRiskSection({
       {state.status === 'error' && <ErrorState description={state.message} onRetry={onRetry} />}
       {state.status === 'success' && (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <div className="rounded-lg border border-border bg-surface p-4">
+          {/* SIE Milestone UI-DESIGN-01: the one "elevated important
+              content" (Level 3) tile on this page — the headline
+              enterprise-risk number — gets a restrained shadow on top of
+              the ordinary card border, per the surface-hierarchy spec.
+              The other tiles in this grid stay plain Level-2 cards. */}
+          <div className="rounded-lg border border-border bg-surface p-4 shadow-xs">
             <p className="text-xs font-medium uppercase tracking-wide text-text-muted">Risk score</p>
             <p className="mt-1 text-2xl font-semibold text-text-primary">
               {state.data.deterministic_risk.score !== null ? state.data.deterministic_risk.score.toFixed(1) : '—'}
