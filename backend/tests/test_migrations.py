@@ -2733,3 +2733,220 @@ def test_project_attribution_history_migration_backfills_existing_current_state_
             assert created_at == forced_updated_at
     finally:
         engine.dispose()
+
+
+@requires_postgres
+def test_project_site_history_migration_downgrade_then_reupgrade_round_trips_cleanly(monkeypatch):
+    """SIE Milestone 36: Project/Site Temporal Scope Integrity
+    (migration 0025). Downgrading to 0024 must remove
+    `project_site_history` entirely, with everything 0024-and-earlier
+    untouched. Re-upgrading to head must recreate it correctly."""
+    engine = _fresh_schema_engine()
+    try:
+        monkeypatch.setattr("app.core.config.settings.DATABASE_URL", PG_TEST_DATABASE_URL)
+        config = _alembic_config()
+
+        command.upgrade(config, "head")
+
+        with engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version == _current_head_revision(config)
+
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+                ).all()
+            }
+            assert "project_site_history" in tables
+
+            columns = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' "
+                        "AND table_name = 'project_site_history'"
+                    )
+                ).all()
+            }
+            assert {"project_id", "site_id", "action", "created_at", "organization_id"} <= columns
+
+            fks = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT constraint_name FROM information_schema.table_constraints "
+                        "WHERE table_schema = 'public' AND table_name = 'project_site_history' "
+                        "AND constraint_type = 'FOREIGN KEY'"
+                    )
+                ).all()
+            }
+            assert "fk_project_site_history_project_id_organization_id" in fks
+            assert "fk_project_site_history_site_id_organization_id" in fks
+
+        command.downgrade(config, "0024")
+
+        with engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version == "0024"
+
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+                ).all()
+            }
+            assert "project_site_history" not in tables
+            # Untouched by 0025's downgrade.
+            assert "project_sites" in tables
+            assert "safety_event_project_attribution_history" in tables
+
+        command.upgrade(config, "head")
+
+        with engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version == _current_head_revision(config)
+
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+                ).all()
+            }
+            assert "project_site_history" in tables
+    finally:
+        engine.dispose()
+
+
+@requires_postgres
+def test_project_site_history_migration_backfills_existing_project_sites_rows(monkeypatch):
+    """SIE Milestone 36's own explicit backfill requirement: an existing
+    `project_sites` row must not silently vanish from historical
+    reconstruction the moment migration 0025 lands -- it needs a
+    synthesized `LINKED` history row. Unlike SIE Milestone 35B's own
+    backfill (which had to approximate via `updated_at`), this one uses
+    `project_sites.created_at` -- the *actual* link creation timestamp,
+    since `ProjectSite` rows are never updated after creation -- proven
+    here by asserting exact equality, not merely "close enough"."""
+    import uuid
+
+    from sqlalchemy.orm import Session
+
+    from app.models.organization import Organization
+    from app.models.project import Project
+    from app.models.project_enums import ProjectStatus
+    from app.models.project_site import ProjectSite
+    from app.models.site import Site
+
+    engine = _fresh_schema_engine()
+    try:
+        monkeypatch.setattr("app.core.config.settings.DATABASE_URL", PG_TEST_DATABASE_URL)
+        config = _alembic_config()
+
+        command.upgrade(config, "0024")
+
+        with Session(engine) as session:
+            org = Organization(name="Backfill Test Org")
+            session.add(org)
+            session.commit()
+
+            project = Project(organization_id=org.id, name="Backfill Project", status=ProjectStatus.ACTIVE)
+            site = Site(organization_id=org.id, name="Backfill Site")
+            session.add_all([project, site])
+            session.commit()
+
+            link = ProjectSite(organization_id=org.id, project_id=project.id, site_id=site.id)
+            session.add(link)
+            session.commit()
+            project_id, site_id, link_created_at = project.id, site.id, link.created_at
+
+        command.upgrade(config, "head")
+
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT action, created_at FROM project_site_history "
+                    "WHERE project_id = :project_id AND site_id = :site_id"
+                ),
+                {"project_id": project_id, "site_id": site_id},
+            ).all()
+            assert len(rows) == 1
+            action, created_at = rows[0]
+            assert action == "LINKED"
+            assert created_at == link_created_at
+    finally:
+        engine.dispose()
+
+
+@requires_postgres
+def test_project_site_history_composite_foreign_keys_reject_cross_tenant_rows_at_the_database_level(monkeypatch):
+    """SIE Milestone 36 item 8: tenant integrity is schema-enforced, not
+    merely application-checked -- mirrors
+    test_project_sites_composite_foreign_keys_reject_cross_tenant_rows_at_the_database_level
+    (SIE Milestone 35A) exactly, applied to `project_site_history`."""
+    import uuid
+
+    import psycopg
+    import pytest
+    from sqlalchemy.exc import IntegrityError
+
+    engine = _fresh_schema_engine()
+    try:
+        monkeypatch.setattr("app.core.config.settings.DATABASE_URL", PG_TEST_DATABASE_URL)
+        config = _alembic_config()
+        command.upgrade(config, "head")
+
+        with engine.connect() as conn:
+            org_a = uuid.uuid4()
+            org_b = uuid.uuid4()
+            conn.execute(
+                text(
+                    "INSERT INTO organizations (id, name, status, created_at, updated_at) "
+                    "VALUES (:id, 'Org A', 'active', now(), now())"
+                ),
+                {"id": org_a},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO organizations (id, name, status, created_at, updated_at) "
+                    "VALUES (:id, 'Org B', 'active', now(), now())"
+                ),
+                {"id": org_b},
+            )
+            project_a = uuid.uuid4()
+            site_b = uuid.uuid4()
+            conn.execute(
+                text(
+                    "INSERT INTO projects (id, organization_id, name, status, created_at, updated_at) "
+                    "VALUES (:id, :org_id, 'Project Alpha', 'ACTIVE', now(), now())"
+                ),
+                {"id": project_a, "org_id": org_a},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO sites (id, organization_id, name, status, created_at, updated_at) "
+                    "VALUES (:id, :org_id, 'Org B Site', 'active', now(), now())"
+                ),
+                {"id": site_b, "org_id": org_b},
+            )
+            conn.commit()
+
+            # The forbidden row: project_a (org_a) paired with site_b
+            # (org_b), claiming organization_id=org_a.
+            with pytest.raises((IntegrityError, psycopg.errors.ForeignKeyViolation)):
+                conn.execute(
+                    text(
+                        "INSERT INTO project_site_history "
+                        "(id, organization_id, project_id, site_id, action, created_at) "
+                        "VALUES (gen_random_uuid(), :org_id, :project_id, :site_id, 'LINKED', now())"
+                    ),
+                    {"org_id": org_a, "project_id": project_a, "site_id": site_b},
+                )
+                conn.commit()
+            # The failed INSERT leaves the connection's transaction
+            # aborted (real Postgres semantics) -- roll it back
+            # explicitly rather than relying on __exit__ to do the
+            # right thing.
+            conn.rollback()
+    finally:
+        engine.dispose()

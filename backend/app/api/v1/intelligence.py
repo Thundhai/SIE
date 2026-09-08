@@ -64,6 +64,7 @@ from app.intelligence.features import feature_engineering_service
 from app.intelligence.ingestion_service import safety_event_ingestion_service
 from app.intelligence.schemas import RawSafetyEventPayload
 from app.intelligence.signals import risk_signal_service
+from app.intelligence.temporal import is_project_site_associated_as_of, project_site_ids_as_of
 from app.models.project import Project
 from app.models.site import Site
 from app.schemas.attention import (
@@ -522,25 +523,57 @@ def _build_operational_scope(
     level: str,
     site: Site | None,
     project_id: uuid.UUID | None,
+    as_of: datetime | None,
 ) -> OperationalScopeRead | None:
-    """SIE Milestone 35: builds the additive, current-state
-    `operational_scope` label for a Field Intelligence Context response.
-    Returns `None` when `project_id` was never supplied -- every pre-M35
-    caller's response is therefore byte-for-byte unchanged. `level` is
-    always the *actual* `scope` this request computed over
-    (`"ORGANIZATION"`/`"SITE"`) -- this function never computes
-    anything itself, only labels what was already computed (see this
-    module's own schema docstring for the full "label, never a second
-    computation engine" rationale)."""
+    """SIE Milestone 35: builds the additive `operational_scope` label
+    for a Field Intelligence Context response. Returns `None` when
+    `project_id` was never supplied -- every pre-M35 caller's response
+    is therefore byte-for-byte unchanged. `level` is always the *actual*
+    `scope` this request computed over (`"ORGANIZATION"`/`"SITE"`) --
+    this function never computes anything itself, only labels what was
+    already computed (see this module's own schema docstring for the
+    full "label, never a second computation engine" rationale).
+
+    **`site_ids`/the site-consistency check are point-in-time correct
+    when the caller explicitly supplies `as_of` (SIE Milestone 36) --
+    current-state (the fast `project_sites` table, via
+    `project_site_ids()`) otherwise.** `as_of` here is the router's own
+    *raw* query parameter -- still `None` when the caller omitted it,
+    not yet defaulted to `utcnow()` the way
+    `compose_field_intelligence_context()` defaults it internally. This
+    is the deliberate CURRENT-vs-HISTORICAL split item 5 of this
+    milestone requires: the overwhelmingly common live case (`as_of`
+    omitted) never pays for a `ProjectSiteHistory` reconstruction query
+    it doesn't need; a caller who explicitly asks about a historical
+    instant gets a response whose `site_ids` and site-consistency
+    validation both genuinely reflect that instant, reconstructed from
+    `app/intelligence/temporal.py::project_site_ids_as_of()`/
+    `is_project_site_associated_as_of()` -- never today's `project_sites`
+    row. See `docs/OPERATIONAL_SCOPE_FOUNDATION_V0_1.md` §11 for the
+    full account, including why this is the one intelligence path this
+    milestone touches (every other path either has no semantic
+    dependency on `ProjectSite` membership at all, or -- like
+    `attribute_event_to_project()`'s own write-time site-consistency
+    check -- is deliberately a *current*-state business rule, not a
+    historical computation)."""
     if project_id is None:
         return None
     project = resolve_project_reference(db, organization_id=organization_id, project_id=project_id)
-    site_ids = project_site_ids(db, organization_id=organization_id, project_id=project.id)
-    if site is not None and site.id not in site_ids:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Site {site.id} is not currently associated with project {project.id}.",
+    if as_of is None:
+        site_ids = project_site_ids(db, organization_id=organization_id, project_id=project.id)
+        currently_associated = site is None or site.id in site_ids
+    else:
+        site_ids = project_site_ids_as_of(db, organization_id=organization_id, project_id=project.id, as_of=as_of)
+        currently_associated = site is None or is_project_site_associated_as_of(
+            db, organization_id=organization_id, project_id=project.id, site_id=site.id, as_of=as_of
         )
+    if site is not None and not currently_associated:
+        detail = (
+            f"Site {site.id} is not associated with project {project.id} as of {as_of.isoformat()}."
+            if as_of is not None
+            else f"Site {site.id} is not currently associated with project {project.id}."
+        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
     return OperationalScopeRead(
         level=level,
         site=(OperationalScopeSiteRead(id=site.id, name=site.name) if site is not None else None),
@@ -628,7 +661,7 @@ def field_intelligence_context(
     `NOT_QUERIED` rather than fabricating a search from other fields."""
     _validate_window_days(window_days)
     operational_scope = _build_operational_scope(
-        db, organization_id=organization_id, level="ORGANIZATION", site=None, project_id=project_id
+        db, organization_id=organization_id, level="ORGANIZATION", site=None, project_id=project_id, as_of=as_of
     )
     result = compose_field_intelligence_context(
         db,
@@ -658,8 +691,9 @@ def site_field_intelligence_context(
     knowledge_top_k: int | None = Query(default=None, ge=1, le=settings.RETRIEVAL_MAX_TOP_K),
     project_id: uuid.UUID | None = Query(
         default=None,
-        description="SIE Milestone 35A: must currently be associated with `site_id` (400 otherwise). See "
-        "GET /intelligence/context's own description for exactly what this genuinely filters.",
+        description="SIE Milestone 35A: must be associated with `site_id` (400 otherwise) -- as of `as_of` when "
+        "explicitly supplied (SIE Milestone 36), else currently. See GET /intelligence/context's own description "
+        "for exactly what this genuinely filters.",
     ),
     context: RequestContext = Depends(require_context_permission(Permission.INTELLIGENCE_READ)),
     db: Session = Depends(get_db),
@@ -671,7 +705,7 @@ def site_field_intelligence_context(
     _validate_window_days(window_days)
     site = _require_owned_site(db, organization_id=organization_id, site_id=site_id)
     operational_scope = _build_operational_scope(
-        db, organization_id=organization_id, level="SITE", site=site, project_id=project_id
+        db, organization_id=organization_id, level="SITE", site=site, project_id=project_id, as_of=as_of
     )
     result = compose_field_intelligence_context(
         db,

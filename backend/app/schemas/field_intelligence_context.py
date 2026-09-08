@@ -30,12 +30,16 @@ filtered to this project's explicitly-attributed `SafetyEvent` rows —
 never merely site co-location; M35's own first cut conflated the two,
 which is exactly what M35A corrects — see
 `docs/OPERATIONAL_SCOPE_FOUNDATION_V0_1.md`'s "Project attribution"
-section for the full history). `project.site_ids` is the project's
-*current* `ProjectSite` membership at the moment of this API call — not
-reconstructed as of `as_of` (see `app/models/project_site.py`'s own
-"point-in-time integrity" section); a historical `as_of` request's
-`project.site_ids` reflects today's relationships, never that
-historical instant's.
+section for the full history). `project.site_ids` is point-in-time
+correct as of SIE Milestone 36: when the caller explicitly supplies
+`as_of`, `site_ids` (and the `400` site-consistency check on
+`GET .../sites/{site_id}/context`) are reconstructed from
+`ProjectSiteHistory` and genuinely reflect that historical instant, not
+today's `project_sites` row (see
+`app/models/project_site_history.py`'s own docstring); when `as_of` is
+omitted (the live case), `site_ids` remains the fast, current-state
+`project_sites` lookup, unchanged from SIE Milestone 35 — see
+`docs/OPERATIONAL_SCOPE_FOUNDATION_V0_1.md` §11 for the full account.
 """
 
 from __future__ import annotations
@@ -111,8 +115,12 @@ class OperationalScopeProjectRead(BaseModel):
     status: str
     site_ids: list[uuid.UUID] = Field(
         default_factory=list,
-        description="The project's CURRENT associated site ids -- not reconstructed as of `as_of`. "
-        "See this module's own docstring.",
+        description=(
+            "SIE Milestone 36: the project's associated site ids AS OF this response's own `as_of` when the "
+            "caller explicitly supplied one -- reconstructed from ProjectSiteHistory, never today's project_sites "
+            "row. When `as_of` was omitted (the live case), this is the current project_sites lookup, unchanged "
+            "from SIE Milestone 35. See this module's own docstring."
+        ),
     )
     filtered: bool = Field(
         True,

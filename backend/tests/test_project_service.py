@@ -203,6 +203,117 @@ def test_unlink_project_site_removes_the_relationship(db_session):
     assert removed_again is False
 
 
+# --- ProjectSite history (SIE Milestone 36) -------------------------------------------------
+
+
+def _history_rows(db_session, project_id, site_id):
+    from app.models.project_site_history import ProjectSiteHistory
+
+    return db_session.execute(
+        select(ProjectSiteHistory)
+        .where(ProjectSiteHistory.project_id == project_id, ProjectSiteHistory.site_id == site_id)
+        .order_by(ProjectSiteHistory.created_at)
+    ).scalars().all()
+
+
+def test_link_project_site_writes_one_linked_history_row(db_session):
+    from app.models.project_site_history import ProjectSiteHistoryAction
+
+    org = make_org(db_session)
+    project = _create_project(db_session, org.id)
+    site = make_site(db_session, org.id)
+
+    link_project_site(
+        db_session, organization_id=org.id, project_id=project.id, site_id=site.id,
+        created_by_user_id=None, created_by_api_client_id=None,
+    )
+    rows = _history_rows(db_session, project.id, site.id)
+    assert len(rows) == 1
+    assert rows[0].action == ProjectSiteHistoryAction.LINKED
+    assert rows[0].organization_id == org.id
+
+
+def test_unlink_project_site_writes_one_unlinked_history_row(db_session):
+    from app.models.project_site_history import ProjectSiteHistoryAction
+
+    org = make_org(db_session)
+    project = _create_project(db_session, org.id)
+    site = make_site(db_session, org.id)
+    link_project_site(
+        db_session, organization_id=org.id, project_id=project.id, site_id=site.id,
+        created_by_user_id=None, created_by_api_client_id=None,
+    )
+
+    unlink_project_site(db_session, organization_id=org.id, project_id=project.id, site_id=site.id)
+    rows = _history_rows(db_session, project.id, site.id)
+    assert [r.action for r in rows] == [ProjectSiteHistoryAction.LINKED, ProjectSiteHistoryAction.UNLINKED]
+
+
+def test_repeated_link_and_unlink_write_no_duplicate_history_rows(db_session):
+    """Items 9-11: duplicate link/unlink remain true no-ops -- no
+    history noise."""
+    org = make_org(db_session)
+    project = _create_project(db_session, org.id)
+    site = make_site(db_session, org.id)
+
+    link_project_site(
+        db_session, organization_id=org.id, project_id=project.id, site_id=site.id,
+        created_by_user_id=None, created_by_api_client_id=None,
+    )
+    link_project_site(
+        db_session, organization_id=org.id, project_id=project.id, site_id=site.id,
+        created_by_user_id=None, created_by_api_client_id=None,
+    )
+    assert len(_history_rows(db_session, project.id, site.id)) == 1
+
+    unlink_project_site(db_session, organization_id=org.id, project_id=project.id, site_id=site.id)
+    unlink_project_site(db_session, organization_id=org.id, project_id=project.id, site_id=site.id)
+    assert len(_history_rows(db_session, project.id, site.id)) == 2  # exactly LINKED, UNLINKED -- no repeats
+
+
+def test_relinking_after_unlink_writes_a_second_linked_row(db_session):
+    """A genuine re-link (after a real unlink) IS a real transition --
+    distinct from item 9's "duplicate link while already linked" no-op."""
+    from app.models.project_site_history import ProjectSiteHistoryAction
+
+    org = make_org(db_session)
+    project = _create_project(db_session, org.id)
+    site = make_site(db_session, org.id)
+
+    link_project_site(
+        db_session, organization_id=org.id, project_id=project.id, site_id=site.id,
+        created_by_user_id=None, created_by_api_client_id=None,
+    )
+    unlink_project_site(db_session, organization_id=org.id, project_id=project.id, site_id=site.id)
+    link_project_site(
+        db_session, organization_id=org.id, project_id=project.id, site_id=site.id,
+        created_by_user_id=None, created_by_api_client_id=None,
+    )
+    rows = _history_rows(db_session, project.id, site.id)
+    assert [r.action for r in rows] == [
+        ProjectSiteHistoryAction.LINKED, ProjectSiteHistoryAction.UNLINKED, ProjectSiteHistoryAction.LINKED,
+    ]
+
+
+def test_linking_a_project_to_a_site_never_attributes_existing_events_at_that_site(db_session):
+    """Item 19 / acceptance criterion G: ProjectSite membership must
+    never become automatic SafetyEvent project attribution -- linking a
+    project to a site with pre-existing events must not set any of
+    those events' attributed_project_id."""
+    org = make_org(db_session)
+    project = _create_project(db_session, org.id)
+    site = make_site(db_session, org.id)
+    event = _add_event(db_session, org.id, site_id=site.id)
+    assert event.attributed_project_id is None
+
+    link_project_site(
+        db_session, organization_id=org.id, project_id=project.id, site_id=site.id,
+        created_by_user_id=None, created_by_api_client_id=None,
+    )
+    db_session.refresh(event)
+    assert event.attributed_project_id is None
+
+
 # --- SafetyEvent <-> Project attribution (SIE Milestone 35A) -----------------------------------
 
 

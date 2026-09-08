@@ -53,23 +53,26 @@ site being removed), this row's *entire meaning* is "this project is
 associated with this site" — it has no meaning independent of both
 still existing, so it is removed along with either.
 
-**Point-in-time integrity (item 7) — explicit, deliberate limitation.**
-This table records only the *current* project/site relationship set; it
-has no history table, no valid-from/valid-to columns, and no undo-by-
-soft-delete. Unlinking a site permanently deletes the row (mirrors
-`RiskAssessmentFindingAction`'s own "unlink is a hard delete" precedent
-— `AuditLog` still records the unlink event itself, just not a
-queryable "what was true as of instant X" reconstruction). Any code
-that reads `ProjectSite` (e.g. the `operational_scope.project.site_ids`
-label in `GET /api/v1/intelligence/context`) is reading *today's*
-membership regardless of the `as_of` the surrounding intelligence
-request itself specifies — this is documented on that response field
-directly, not merely here, so a caller reading a historical
-`as_of` response is never misled into believing `site_ids` reflects
-that same historical instant. If a future milestone needs true
-point-in-time project/site reconstruction, it requires a dedicated
-history mechanism (mirroring `RiskAssessmentHistory`'s own precedent) —
-deliberately not built speculatively in this one.
+**Point-in-time integrity (item 7) — corrected by SIE Milestone 36.**
+This table itself still records only the *current* project/site
+relationship set — no history table, no valid-from/valid-to columns,
+no undo-by-soft-delete, and unlinking a site still permanently deletes
+the row (mirrors `RiskAssessmentFindingAction`'s own "unlink is a hard
+delete" precedent). ~~If a future milestone needs true point-in-time
+project/site reconstruction, it requires a dedicated history mechanism
+... deliberately not built speculatively in this one.~~ SIE Milestone
+36 is that future milestone: `app/models/project_site_history.py`'s
+own `ProjectSiteHistory` table now provides exactly that reconstruction
+(mirroring `RiskAssessmentHistory`'s own precedent, as originally
+anticipated here), via
+`app/intelligence/temporal.py::is_project_site_associated_as_of()`/
+`project_site_ids_as_of()`. `ProjectSite` itself is unchanged and
+remains the fast, current-state answer every non-historical read uses
+— see that milestone's own docstring, and
+`docs/OPERATIONAL_SCOPE_FOUNDATION_V0_1.md` §11, for the full account,
+including exactly which reads (`operational_scope.project.site_ids`
+when `as_of` is explicitly supplied) now use the historical mechanism
+instead of this table directly.
 
 **Uniqueness.** `(project_id, site_id)` is unique — linking the same
 site to the same project twice is a no-op (the existing row is

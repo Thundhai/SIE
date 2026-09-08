@@ -608,4 +608,185 @@ implementation, no `SafetyAction`/`RiskAssessment` schema change (§9.3
 unchanged), no `anomalies`/`associations`/`predictive` project
 filtering (§9.4/§10.5 unchanged), and no `ProjectSite` point-in-time
 history (§5/§10.5 unchanged) — all consistent with this milestone's own
-explicit instruction to keep the correction narrow.
+explicit instruction to keep the correction narrow. **The last one —
+`ProjectSite` point-in-time history — is exactly what SIE Milestone 36
+(§11) adds.** §5's own limitation was accurate when written and stayed
+accurate through M35A and M35B; it is superseded, not retroactively
+wrong, by §11.
+
+## 11. SIE Milestone 36: Project/Site Temporal Scope Integrity
+
+### 11.1 The remaining gap after SIE Milestone 35B
+
+M35B made `SafetyEvent`'s own project *attribution* point-in-time
+correct. `ProjectSite` *membership* — "which sites does this project
+operate at" — remained current-state only (§5's own documented
+limitation): a historical `as_of` query could only ever answer "was
+Project P associated with Site S at instant T" using *today's*
+`project_sites` row, wrong the moment that membership has ever
+changed. This milestone closes that gap, narrowly, the same way M35B
+closed the analogous gap for attribution.
+
+### 11.2 What `ProjectSite` means, what historical membership means, and what neither means
+
+- **`ProjectSite` (current state, unchanged)**: "this project currently
+  operates at this site" — a candidate-set/operational-scope fact,
+  fast to query, used by every current-operations read
+  (`project_site_ids()`, the `/projects/{id}/sites` API surface,
+  `attribute_event_to_project()`'s own write-time site-consistency
+  check).
+- **`ProjectSiteHistory` (new, this milestone)**: the append-only log
+  of every `LINKED`/`UNLINKED` transition, letting
+  `is_project_site_associated_as_of()`/`project_site_ids_as_of()`
+  (`app/intelligence/temporal.py`) answer "was Project P associated
+  with Site S as of instant T" for any T — reconstructed the same way
+  `SafetyEventProjectAttributionHistory` already reconstructs
+  attribution (most-recent-qualifying-row-at-or-before-`as_of`).
+- **What neither means**: `ProjectSite`/`ProjectSiteHistory` never
+  prove a specific `SafetyEvent` belongs to a project — that remains
+  `SafetyEvent.attributed_project_id`/
+  `SafetyEventProjectAttributionHistory`'s own, separate concern (SIE
+  Milestone 35A's own central distinction, restated and preserved
+  here, not reopened). Nothing in this milestone reads `ProjectSite`/
+  `ProjectSiteHistory` to infer or set an event's attribution — proven
+  by `tests/test_project_service.py::test_linking_a_project_to_a_site_never_attributes_existing_events_at_that_site`.
+
+### 11.3 Temporal model
+
+Identical reconstruction technique to `_project_attributed_as_of_clause()`
+(SIE Milestone 35B), applied to `ProjectSiteHistory`'s own
+`LINKED`/`UNLINKED` actions: a `ProjectSiteHistory` row is the
+associated state as of `as_of` iff it is the most recent row for its
+own `(project_id, site_id)` pair with `created_at <= as_of` and its
+action is `LINKED`. `created_at` is the sole ordering signal — no
+separate `effective_at`, no sequence tiebreaker — identical convention
+to `RiskAssessmentHistory`/`SafetyActionHistory`/
+`SafetyEventProjectAttributionHistory`, none of which has one either.
+Two writes to the same `(project_id, site_id)` pair's membership in the
+same microsecond are not resolved deterministically — an explicit,
+accepted limitation matching that same established precedent, not a
+silent gap (it requires two concurrent link/unlink requests against the
+identical pair, an inherently racy scenario the write path's own
+single-row semantics do not otherwise guard against either).
+
+### 11.4 Backfill semantics
+
+Migration `0025` synthesizes one `LINKED` history row for every
+existing `project_sites` row, using that row's own `created_at`. Unlike
+SIE Milestone 35B's own `SafetyEvent.attributed_project_id` backfill
+(which had to approximate via `updated_at`, the closest available
+signal, since no column on `SafetyEvent` records exactly when its
+attribution was set), this backfill is **exact, not approximate**:
+`ProjectSite` rows are never updated after creation (unlink is a hard
+delete, not a status change — see that model's own "point-in-time
+integrity" section), so `created_at` genuinely *is* the moment the link
+was made. Proven by
+`tests/test_migrations.py::test_project_site_history_migration_backfills_existing_project_sites_rows`
+asserting exact timestamp equality, not merely "close enough."
+
+### 11.5 Tenant boundaries
+
+`project_site_history` uses composite foreign keys —
+`(project_id, organization_id) -> projects(id, organization_id)` and
+`(site_id, organization_id) -> sites(id, organization_id)` — mirroring
+`project_sites`' own SIE Milestone 35A hardening exactly, not
+`SafetyEventProjectAttributionHistory`'s single-column exception:
+nothing on this table needs `ON DELETE SET NULL` semantics (unlike
+`SafetyEvent.attributed_project_id`), so the identical composite
+technique applies cleanly. PostgreSQL itself rejects any
+`project_site_history` row whose `organization_id` does not match both
+the referenced project's and site's own — proven against real
+PostgreSQL by
+`tests/test_migrations.py::test_project_site_history_composite_foreign_keys_reject_cross_tenant_rows_at_the_database_level`.
+The reconstruction query itself also filters on `organization_id`
+directly (defense in depth, not merely relying on a caller having
+pre-validated ownership) — proven by
+`tests/test_project_site_temporal.py::test_tenant_isolation_cross_organization_reconstruction_is_false`.
+
+### 11.6 Current vs. historical query behavior
+
+`app/intelligence/temporal.py::is_project_site_associated_as_of()`/
+`project_site_ids_as_of()` are the one place point-in-time
+reconstruction happens; `project_site_ids()`
+(`app/services/project_site_service.py`) remains the fast,
+current-state answer and is not routed through history. The one
+intelligence-facing integration point this milestone touches is
+`_build_operational_scope()` (`app/api/v1/intelligence.py`)'s
+`operational_scope.project.site_ids` field and its site-consistency
+`400` check: when the caller explicitly supplies `as_of` on
+`GET /intelligence/context`/`GET /intelligence/sites/{site_id}/context`,
+both are reconstructed from `ProjectSiteHistory` and genuinely reflect
+that historical instant; when `as_of` is omitted (the overwhelmingly
+common, live case), both use the fast `project_sites` lookup, exactly
+as before this milestone — so the default hot path never pays for a
+history-table query it doesn't need (item 5's own explicit efficiency
+requirement). No other intelligence path was found to have a genuine
+semantic dependency on `ProjectSite` membership:
+`attribute_event_to_project()`'s own site-consistency check is a
+deliberate *current*-state write-time business rule (validating
+whether an attribution can be created right now, not reconstructing
+the past) and is unaffected;
+`compute_enterprise_intelligence()`/`events_as_of()`'s own `project_id`
+filter (SIE Milestone 35A/35B) reads `SafetyEvent.attributed_project_id`/
+`SafetyEventProjectAttributionHistory` directly and never touches
+`ProjectSite` at all.
+
+### 11.7 Write-path integrity
+
+`link_project_site()`/`unlink_project_site()`
+(`app/services/project_site_service.py`) remain the only two write
+paths for `ProjectSite` — each now writes one `ProjectSiteHistory` row
+in the same transaction as the `ProjectSite` row's own
+creation/deletion, and only on an actual transition: linking an
+already-linked pair, or unlinking an already-unlinked pair, remains a
+true no-op (no history row), matching this service's own pre-existing
+idempotency precedent. A genuine re-link after a real unlink IS a new
+transition (a second `LINKED` row) — distinct from a no-op repeat.
+
+### 11.8 API behavior
+
+No external contract change to the existing `/projects/{id}/sites`
+surface — `POST`/`GET`/`DELETE` all keep their existing request/response
+shapes and status codes. The only API-visible effect of this milestone
+is that `operational_scope.project.site_ids` (and its `400` check) on
+the two Field Intelligence Context endpoints become point-in-time
+correct when `as_of` is explicitly supplied (§11.6) — a correctness
+fix to a field whose own documentation already stated its prior
+"current, not historical" limitation, not a new endpoint or a new
+project-management feature.
+
+### 11.9 Tests added by this milestone
+
+- `tests/test_project_service.py`: `ProjectSiteHistory` row creation on
+  link/unlink, no-duplicate-history-on-repeat (both link and unlink), a
+  genuine re-link after unlink writing a second `LINKED` row, and the
+  event-attribution-not-inferred proof (item 19).
+- `tests/test_project_site_temporal.py`: direct
+  `is_project_site_associated_as_of()`/`project_site_ids_as_of()`
+  query-level tests, including the user's own full worked example
+  (Alpha linked June 1, unlinked June 20; Beta linked June 25; as_of
+  June 15/22/26 all answered correctly), the four individual
+  before/after-link/unlink cases, two projects at one site distinguished
+  independently, the no-history-at-all preservation check, the live
+  "as of now" regression check, and the cross-tenant reconstruction
+  check (item 20).
+- `tests/test_projects_api.py`: an end-to-end HTTP test proving
+  `operational_scope.project.site_ids` is now point-in-time correct
+  through the real `GET /intelligence/context` pipeline (superseding
+  the now-corrected M35 test that asserted the opposite, prior
+  behavior).
+- `tests/test_migrations.py`: a migration `0025` downgrade/re-upgrade
+  round-trip, the exact-timestamp backfill proof (§11.4), and the
+  cross-tenant composite-FK rejection proof (§11.5).
+
+### 11.10 Explicitly out of scope for this milestone
+
+No ML, no new predictive models, no LLM functionality, no agents, no
+outcome/learning, no automatic event-project attribution (§11.2), no
+`SafetyAction`/`RiskAssessment` project-attribution redesign, no
+project-management features (dashboards, schedules, budgets, contractor
+management, resource management, Gantt charts, task management,
+planning workflows), no new frontend workspace, no new dashboards, and
+no speculative abstractions beyond the one reconstruction mechanism
+item 3 required — consistent with this milestone's own explicit
+instruction to keep the correction narrow.

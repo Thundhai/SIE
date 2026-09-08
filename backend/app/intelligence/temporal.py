@@ -47,6 +47,28 @@ most recent history row for this event, at or before `as_of`, an
 history row (never attributed, or not yet as of `as_of`) is correctly
 excluded — identical behavior to before this milestone for records
 with no project attribution at all.
+
+**`ProjectSite` membership is point-in-time correct too (SIE Milestone
+36) — `is_project_site_associated_as_of()`/`project_site_ids_as_of()`
+below, not `events_as_of()` itself.** `ProjectSite` answers a different
+question than `project_id` above ("did this project operate at this
+site" — operational scope — never "does this event belong to this
+project" — attribution; see
+`app/models/project_site_history.py`'s own docstring for why the two
+must never be conflated), so it is not a parameter of `events_as_of()`
+— no caller needs "events at any site this project ever operated at"
+as a single query. Both new functions follow the identical
+reconstruction technique `_project_attributed_as_of_clause()` already
+establishes above (most-recent-qualifying-row-at-or-before-`as_of`,
+via a correlated `NOT EXISTS` "nothing supersedes this row" check),
+applied to `ProjectSiteHistory`'s own `LINKED`/`UNLINKED` actions
+instead of `ATTRIBUTED`/`CLEARED`. `project_sites` itself is unchanged
+and remains the fast, current-state table every non-historical read
+(`project_site_ids()`, the existing `/projects/{id}/sites` API surface,
+`attribute_event_to_project()`'s own write-time site-consistency check)
+continues to use directly — these two functions are the one additional
+place point-in-time reconstruction happens, deliberately not threaded
+into every current-operations read path.
 """
 
 from __future__ import annotations
@@ -55,9 +77,10 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import Select, select
-from sqlalchemy.orm import aliased
+from sqlalchemy.orm import Session, aliased
 
 from app.intelligence.enums import DataQualityStatus
+from app.models.project_site_history import ProjectSiteHistory, ProjectSiteHistoryAction
 from app.models.safety_event import SafetyEvent
 from app.models.safety_event_project_attribution_history import (
     SafetyEventProjectAttributionAction,
@@ -164,6 +187,73 @@ def events_as_of(
     clauses.append(SafetyEvent.data_quality_status.in_(allowed_statuses))
 
     return select(SafetyEvent).where(*clauses).order_by(SafetyEvent.event_time)
+
+
+def _project_site_ids_as_of_query(
+    *, organization_id: uuid.UUID, project_id: uuid.UUID, as_of: datetime, site_id: uuid.UUID | None = None
+) -> Select:
+    """Pure query builder (mirrors `events_as_of()`'s own "build, caller
+    executes" convention): the `site_id` column of every
+    `ProjectSiteHistory` row that is simultaneously (a) the most recent
+    row for its own `(project_id, site_id)` pair with `created_at <=
+    as_of`, and (b) a `LINKED` row — i.e. exactly the set of sites
+    genuinely associated with `project_id` as of `as_of`. Optionally
+    narrowed to one `site_id`, which both public functions below share
+    this one query for (per this milestone's own "avoid duplicating
+    temporal logic" instruction) rather than each writing their own
+    reconstruction SQL."""
+    latest = aliased(ProjectSiteHistory)
+    superseded = aliased(ProjectSiteHistory)
+
+    is_superseded = (
+        select(superseded.id)
+        .where(
+            superseded.project_id == latest.project_id,
+            superseded.site_id == latest.site_id,
+            superseded.created_at <= as_of,
+            superseded.created_at > latest.created_at,
+        )
+        .correlate(latest)
+        .exists()
+    )
+    clauses = [
+        latest.organization_id == organization_id,
+        latest.project_id == project_id,
+        latest.created_at <= as_of,
+        latest.action == ProjectSiteHistoryAction.LINKED,
+        ~is_superseded,
+    ]
+    if site_id is not None:
+        clauses.append(latest.site_id == site_id)
+    return select(latest.site_id).where(*clauses).distinct()
+
+
+def project_site_ids_as_of(
+    db: Session, *, organization_id: uuid.UUID, project_id: uuid.UUID, as_of: datetime
+) -> list[uuid.UUID]:
+    """The point-in-time-correct equivalent of
+    `app/services/project_site_service.py::project_site_ids()` (which
+    always answers "as of right now"): every site id `project_id` was
+    genuinely linked to as of `as_of`, reconstructed from
+    `ProjectSiteHistory` — never inferred from the current `project_sites`
+    table. Executes immediately (unlike `events_as_of()`'s "build only"
+    convention) because this is a small, standalone lookup, not a query
+    a caller composes further with additional joins/filters."""
+    query = _project_site_ids_as_of_query(organization_id=organization_id, project_id=project_id, as_of=as_of)
+    return list(db.execute(query).scalars().all())
+
+
+def is_project_site_associated_as_of(
+    db: Session, *, organization_id: uuid.UUID, project_id: uuid.UUID, site_id: uuid.UUID, as_of: datetime
+) -> bool:
+    """Was `project_id` associated with `site_id` as of `as_of`? The
+    single-pair convenience form of `project_site_ids_as_of()` above —
+    both share `_project_site_ids_as_of_query()`, so there is exactly
+    one place this reconstruction logic lives."""
+    query = _project_site_ids_as_of_query(
+        organization_id=organization_id, project_id=project_id, as_of=as_of, site_id=site_id
+    )
+    return db.execute(query).first() is not None
 
 
 def window_bounds(as_of: datetime, window_days: int) -> tuple[datetime, datetime]:

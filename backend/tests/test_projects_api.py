@@ -658,42 +658,48 @@ def test_project_scoped_context_is_point_in_time_correct_across_a_reassignment(c
     assert context(project_beta["id"], 23)["observed"]["event_count"] == 0
 
 
-def test_operational_scope_project_site_ids_reflects_current_not_historical_membership(client, db_session):
-    """SIE Milestone 35 item 7: `ProjectSite` carries no point-in-time
-    history. A historical `as_of` request's `operational_scope.project
-    .site_ids` reflects TODAY's relationships -- proven here by linking
-    a second site *after* the first context call and confirming the
-    second call (same historical `as_of`) picks it up."""
+def test_operational_scope_project_site_ids_is_point_in_time_correct_after_m36(client, db_session):
+    """SIE Milestone 36 corrects M35's own item 7 limitation: a
+    historical `as_of` request's `operational_scope.project.site_ids`
+    now genuinely reflects that historical instant (reconstructed from
+    `ProjectSiteHistory`), never today's `project_sites` row. Proven
+    here by linking a site AFTER a historical `as_of` instant and
+    confirming a query for that instant still reports it as
+    unassociated, while a query as of "now" (no `as_of`, or an `as_of`
+    after the link) correctly includes it."""
     org, user, headers = _make_org_and_manager(client, db_session)
     project = _create_project(client, org["id"], headers).json()
+    historical_as_of = (AS_OF - timedelta(days=90)).isoformat()
+
+    # Nothing linked yet, historical or live -- both empty.
+    before_link = client.get(
+        "/api/v1/intelligence/context",
+        params={"organization_id": org["id"], "project_id": project["id"], "as_of": historical_as_of},
+        headers=headers,
+    )
+    assert before_link.status_code == 200, before_link.text
+    assert before_link.json()["operational_scope"]["project"]["site_ids"] == []
+
     site_1 = _create_site(client, org["id"], "Site One")
     client.post(
         f"/api/v1/projects/{project['id']}/sites?organization_id={org['id']}",
         json={"site_id": site_1["id"]}, headers=headers,
     )
 
-    # historical_as_of's ISO timezone offset ("+00:00") contains a raw
-    # "+" -- passed via `params=` (not f-string-embedded) so httpx
-    # percent-encodes it correctly (see tests/test_intelligence_decisions_api.py's
-    # own established fix for the identical gotcha).
-    historical_as_of = (AS_OF - timedelta(days=90)).isoformat()
-    first = client.get(
+    # The link happened AFTER historical_as_of -- a query for that same
+    # historical instant must still report it as unassociated (M35's
+    # own bug: it would have incorrectly picked this up).
+    still_historical = client.get(
         "/api/v1/intelligence/context",
         params={"organization_id": org["id"], "project_id": project["id"], "as_of": historical_as_of},
         headers=headers,
     )
-    assert first.status_code == 200, first.text
-    assert first.json()["operational_scope"]["project"]["site_ids"] == [site_1["id"]]
+    assert still_historical.json()["operational_scope"]["project"]["site_ids"] == []
 
-    site_2 = _create_site(client, org["id"], "Site Two")
-    client.post(
-        f"/api/v1/projects/{project['id']}/sites?organization_id={org['id']}",
-        json={"site_id": site_2["id"]}, headers=headers,
-    )
-
-    second = client.get(
-        "/api/v1/intelligence/context",
-        params={"organization_id": org["id"], "project_id": project["id"], "as_of": historical_as_of},
+    # A live query (as_of omitted -- the fast current-state path) picks
+    # up the link immediately.
+    live = client.get(
+        "/api/v1/intelligence/context", params={"organization_id": org["id"], "project_id": project["id"]},
         headers=headers,
     )
-    assert {site_1["id"], site_2["id"]} == set(second.json()["operational_scope"]["project"]["site_ids"])
+    assert live.json()["operational_scope"]["project"]["site_ids"] == [site_1["id"]]

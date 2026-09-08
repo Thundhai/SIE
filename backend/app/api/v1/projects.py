@@ -210,6 +210,7 @@ def link_site_to_project(
         site_id=body.site_id,
         created_by_user_id=context.user_id,
         created_by_api_client_id=context.api_client_id,
+        request_id=request_id,
     )
     if created:
         db.commit()
@@ -253,7 +254,15 @@ def unlink_site_from_project(
     request_id: str | None = Depends(get_request_id),
     db: Session = Depends(get_db),
 ) -> Response:
-    removed = unlink_project_site(db, organization_id=organization_id, project_id=project_id, site_id=site_id)
+    removed = unlink_project_site(
+        db,
+        organization_id=organization_id,
+        project_id=project_id,
+        site_id=site_id,
+        changed_by_user_id=context.user_id,
+        changed_by_api_client_id=context.api_client_id,
+        request_id=request_id,
+    )
     if not removed:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="This project is not currently linked to that site."

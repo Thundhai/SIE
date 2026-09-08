@@ -34,6 +34,7 @@ from app.models.prediction import Prediction
 from app.models.prediction_outcome import PredictionOutcome
 from app.models.project import Project
 from app.models.project_site import ProjectSite
+from app.models.project_site_history import ProjectSiteHistory
 from app.models.risk_assessment import (
     RiskAssessment,
     RiskAssessmentControl,
@@ -81,6 +82,7 @@ __all__ = [
     "PredictionOutcome",
     "Project",
     "ProjectSite",
+    "ProjectSiteHistory",
     "RiskAssessment",
     "RiskAssessmentControl",
     "RiskAssessmentControlEvidence",
