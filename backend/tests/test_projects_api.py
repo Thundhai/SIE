@@ -345,6 +345,223 @@ def test_context_with_a_project_id_from_a_different_organization_is_404(client, 
     assert response.status_code == 404
 
 
+# --- SafetyEvent <-> Project attribution (SIE Milestone 35A) -----------------------------------
+
+
+def _seed_one_event(db_session, org_id, *, site_id=None):
+    event = make_safety_event(
+        organization_id=org_id, site_id=site_id, event_type="INCIDENT",
+        event_time=AS_OF, ingestion_time=AS_OF, source_record_id=str(uuid.uuid4()),
+    )
+    db_session.add(event)
+    db_session.commit()
+    db_session.refresh(event)
+    return event
+
+
+def test_attribute_event_to_project_over_http(client, db_session):
+    org, user, headers = _make_org_and_manager(client, db_session)
+    project = _create_project(client, org["id"], headers).json()
+    event = _seed_one_event(db_session, uuid.UUID(org["id"]))
+
+    response = client.put(
+        f"/api/v1/projects/{project['id']}/events/{event.id}?organization_id={org['id']}", headers=headers
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["attributed_project_id"] == project["id"]
+
+
+def test_attributing_an_event_requires_project_manage_not_just_read(client, db_session):
+    org, manager, manager_headers = _make_org_and_manager(client, db_session)
+    project = _create_project(client, org["id"], manager_headers).json()
+    event = _seed_one_event(db_session, uuid.UUID(org["id"]))
+    viewer = make_user(db_session, f"{uuid.uuid4().hex}@example.com")
+    make_membership(db_session, user_id=viewer.id, organization_id=uuid.UUID(org["id"]), role="VIEWER")
+
+    response = client.put(
+        f"/api/v1/projects/{project['id']}/events/{event.id}?organization_id={org['id']}",
+        headers=dev_auth_headers(viewer.id),
+    )
+    assert response.status_code == 403
+
+
+def test_attribute_event_to_project_404s_for_a_cross_tenant_event(client, db_session):
+    org_a, user_a, headers_a = _make_org_and_manager(client, db_session)
+    org_b, user_b, headers_b = _make_org_and_manager(client, db_session)
+    project_a = _create_project(client, org_a["id"], headers_a).json()
+    event_b = _seed_one_event(db_session, uuid.UUID(org_b["id"]))
+
+    response = client.put(
+        f"/api/v1/projects/{project_a['id']}/events/{event_b.id}?organization_id={org_a['id']}", headers=headers_a
+    )
+    assert response.status_code == 404
+
+
+def test_attribute_event_to_project_404s_for_a_cross_tenant_project(client, db_session):
+    org_a, user_a, headers_a = _make_org_and_manager(client, db_session)
+    org_b, user_b, headers_b = _make_org_and_manager(client, db_session)
+    project_b = _create_project(client, org_b["id"], headers_b).json()
+    event_a = _seed_one_event(db_session, uuid.UUID(org_a["id"]))
+
+    response = client.put(
+        f"/api/v1/projects/{project_b['id']}/events/{event_a.id}?organization_id={org_a['id']}", headers=headers_a
+    )
+    assert response.status_code == 404
+
+
+def test_attribute_event_to_project_422s_when_the_project_is_not_associated_with_the_events_site(client, db_session):
+    org, user, headers = _make_org_and_manager(client, db_session)
+    project = _create_project(client, org["id"], headers).json()
+    site = _create_site(client, org["id"])
+    # Deliberately never linked.
+    event = _seed_one_event(db_session, uuid.UUID(org["id"]), site_id=uuid.UUID(site["id"]))
+
+    response = client.put(
+        f"/api/v1/projects/{project['id']}/events/{event.id}?organization_id={org['id']}", headers=headers
+    )
+    assert response.status_code == 422
+
+
+def test_clear_event_project_attribution_over_http_is_idempotent(client, db_session):
+    org, user, headers = _make_org_and_manager(client, db_session)
+    project = _create_project(client, org["id"], headers).json()
+    event = _seed_one_event(db_session, uuid.UUID(org["id"]))
+    client.put(f"/api/v1/projects/{project['id']}/events/{event.id}?organization_id={org['id']}", headers=headers)
+
+    first = client.delete(
+        f"/api/v1/projects/{project['id']}/events/{event.id}?organization_id={org['id']}", headers=headers
+    )
+    assert first.status_code == 204
+    second = client.delete(
+        f"/api/v1/projects/{project['id']}/events/{event.id}?organization_id={org['id']}", headers=headers
+    )
+    assert second.status_code == 204
+
+    detail = client.get(f"/api/v1/events/{event.id}?organization_id={org['id']}", headers=headers)
+    assert detail.json()["attributed_project_id"] is None
+
+
+def test_list_project_events_returns_only_attributed_events(client, db_session):
+    org, user, headers = _make_org_and_manager(client, db_session)
+    project_alpha = _create_project(client, org["id"], headers, name="Project Alpha", code="ALPHA").json()
+    project_beta = _create_project(client, org["id"], headers, name="Project Beta", code="BETA").json()
+    event_alpha = _seed_one_event(db_session, uuid.UUID(org["id"]))
+    event_beta = _seed_one_event(db_session, uuid.UUID(org["id"]))
+    event_unattributed = _seed_one_event(db_session, uuid.UUID(org["id"]))
+    client.put(
+        f"/api/v1/projects/{project_alpha['id']}/events/{event_alpha.id}?organization_id={org['id']}",
+        headers=headers,
+    )
+    client.put(
+        f"/api/v1/projects/{project_beta['id']}/events/{event_beta.id}?organization_id={org['id']}", headers=headers
+    )
+
+    response = client.get(f"/api/v1/projects/{project_alpha['id']}/events?organization_id={org['id']}", headers=headers)
+    assert response.status_code == 200
+    body = response.json()
+    assert [e["id"] for e in body["items"]] == [str(event_alpha.id)]
+    assert str(event_beta.id) not in [e["id"] for e in body["items"]]
+    assert str(event_unattributed.id) not in [e["id"] for e in body["items"]]
+
+
+def test_two_projects_at_the_same_site_do_not_both_claim_an_events_attribution_over_http(client, db_session):
+    """The user's own explicitly required scenario, at the HTTP layer:
+    Site X hosts both Project Alpha and Project Beta. Attributing an
+    event at Site X to Alpha must not cause it to also appear under
+    Beta's event listing."""
+    org, user, headers = _make_org_and_manager(client, db_session)
+    site_x = _create_site(client, org["id"], "Site X")
+    project_alpha = _create_project(client, org["id"], headers, name="Project Alpha", code="ALPHA").json()
+    project_beta = _create_project(client, org["id"], headers, name="Project Beta", code="BETA").json()
+    for project in (project_alpha, project_beta):
+        client.post(
+            f"/api/v1/projects/{project['id']}/sites?organization_id={org['id']}",
+            json={"site_id": site_x["id"]}, headers=headers,
+        )
+    event = _seed_one_event(db_session, uuid.UUID(org["id"]), site_id=uuid.UUID(site_x["id"]))
+
+    attribute_response = client.put(
+        f"/api/v1/projects/{project_alpha['id']}/events/{event.id}?organization_id={org['id']}", headers=headers
+    )
+    assert attribute_response.status_code == 200, attribute_response.text
+
+    alpha_events = client.get(
+        f"/api/v1/projects/{project_alpha['id']}/events?organization_id={org['id']}", headers=headers
+    ).json()
+    beta_events = client.get(
+        f"/api/v1/projects/{project_beta['id']}/events?organization_id={org['id']}", headers=headers
+    ).json()
+    assert [e["id"] for e in alpha_events["items"]] == [str(event.id)]
+    assert beta_events["items"] == []
+
+
+# --- Field Intelligence Context genuine project filtering (SIE Milestone 35A) ------------------
+
+
+def test_project_scoped_context_genuinely_filters_event_count_not_merely_labels_it(client, db_session):
+    """M35A's own central requirement: `event_count` differs between two
+    projects at the same site based on explicit attribution, not merely
+    a shared `operational_scope` label wrapping identical site-wide
+    numbers (M35's original gap)."""
+    org, user, headers = _make_org_and_manager(client, db_session)
+    site = _create_site(client, org["id"])
+    project_alpha = _create_project(client, org["id"], headers, name="Project Alpha", code="ALPHA").json()
+    project_beta = _create_project(client, org["id"], headers, name="Project Beta", code="BETA").json()
+    for project in (project_alpha, project_beta):
+        client.post(
+            f"/api/v1/projects/{project['id']}/sites?organization_id={org['id']}",
+            json={"site_id": site["id"]}, headers=headers,
+        )
+
+    site_uuid = uuid.UUID(site["id"])
+    org_uuid = uuid.UUID(org["id"])
+    alpha_events = [
+        make_safety_event(
+            organization_id=org_uuid, site_id=site_uuid, event_type="INCIDENT",
+            event_time=AS_OF - timedelta(days=i), ingestion_time=AS_OF - timedelta(days=i),
+            source_record_id=str(uuid.uuid4()),
+        )
+        for i in range(3)
+    ]
+    beta_event = make_safety_event(
+        organization_id=org_uuid, site_id=site_uuid, event_type="INCIDENT",
+        event_time=AS_OF, ingestion_time=AS_OF, source_record_id=str(uuid.uuid4()),
+    )
+    for event in [*alpha_events, beta_event]:
+        db_session.add(event)
+    db_session.commit()
+    for event in alpha_events:
+        db_session.refresh(event)
+    db_session.refresh(beta_event)
+
+    for event in alpha_events:
+        client.put(
+            f"/api/v1/projects/{project_alpha['id']}/events/{event.id}?organization_id={org['id']}", headers=headers
+        )
+    client.put(
+        f"/api/v1/projects/{project_beta['id']}/events/{beta_event.id}?organization_id={org['id']}", headers=headers
+    )
+
+    alpha_context = client.get(
+        "/api/v1/intelligence/context",
+        params={"organization_id": org["id"], "project_id": project_alpha["id"]}, headers=headers,
+    ).json()
+    beta_context = client.get(
+        "/api/v1/intelligence/context",
+        params={"organization_id": org["id"], "project_id": project_beta["id"]}, headers=headers,
+    ).json()
+    site_wide_context = client.get(
+        "/api/v1/intelligence/context", params={"organization_id": org["id"]}, headers=headers
+    ).json()
+
+    assert alpha_context["observed"]["event_count"] == 3
+    assert beta_context["observed"]["event_count"] == 1
+    assert site_wide_context["observed"]["event_count"] == 4
+    assert alpha_context["operational_scope"]["project"]["filtered"] is True
+    assert set(alpha_context["observed"]["evidence_sample_event_ids"]) == {str(e.id) for e in alpha_events}
+    assert beta_context["observed"]["evidence_sample_event_ids"] == [str(beta_event.id)]
+
+
 def test_operational_scope_project_site_ids_reflects_current_not_historical_membership(client, db_session):
     """SIE Milestone 35 item 7: `ProjectSite` carries no point-in-time
     history. A historical `as_of` request's `operational_scope.project

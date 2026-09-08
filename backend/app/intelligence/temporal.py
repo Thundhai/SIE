@@ -52,6 +52,7 @@ def events_as_of(
     as_of: datetime,
     window_start: datetime | None = None,
     site_id: uuid.UUID | None = None,
+    project_id: uuid.UUID | None = None,
     event_type: str | None = None,
     event_types: list[str] | None = None,
     include_quarantined: bool = False,
@@ -61,6 +62,14 @@ def events_as_of(
     temporally correct as of `as_of`. Callers execute it themselves
     (`db.execute(events_as_of(...)).scalars().all()`) so this stays a
     pure query builder, not a service with its own session dependency.
+
+    `project_id` (SIE Milestone 35A) filters on
+    `SafetyEvent.attributed_project_id` -- the governed, explicit
+    attribution column, never `site_id`/`ProjectSite` co-location (see
+    `app/models/safety_event.py`'s own docstring for why the two are
+    not interchangeable). `None` (the default) applies no project
+    filter at all -- every pre-existing caller of this function is
+    unaffected.
     """
     clauses = [
         SafetyEvent.organization_id == organization_id,
@@ -72,6 +81,8 @@ def events_as_of(
         clauses.append(SafetyEvent.event_time >= window_start)
     if site_id is not None:
         clauses.append(SafetyEvent.site_id == site_id)
+    if project_id is not None:
+        clauses.append(SafetyEvent.attributed_project_id == project_id)
     if event_type is not None:
         clauses.append(SafetyEvent.event_type == event_type)
     if event_types is not None:

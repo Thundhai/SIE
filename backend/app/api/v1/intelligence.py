@@ -609,9 +609,11 @@ def field_intelligence_context(
     knowledge_top_k: int | None = Query(default=None, ge=1, le=settings.RETRIEVAL_MAX_TOP_K),
     project_id: uuid.UUID | None = Query(
         default=None,
-        description="SIE Milestone 35: optional operational-scope label. When supplied, the response's "
-        "`operational_scope.project` identifies this project (which must belong to `organization_id`) -- "
-        "purely additive, never changes what Observed/Deterministic/Predictive computed.",
+        description="SIE Milestone 35A: when supplied, genuinely filters observed.event_count/"
+        "evidence_sample_event_ids and deterministic.indicators/trend/concentrations/patterns/risk to "
+        "SafetyEvent rows explicitly attributed to this project (never site co-location). "
+        "deterministic.anomalies/associations, predictive, observed.actions, and observed.open_finding_sample "
+        "remain Organization/Site scope -- see the response's own operational_scope.project.filtered field.",
     ),
     context: RequestContext = Depends(require_context_permission(Permission.INTELLIGENCE_READ)),
     db: Session = Depends(get_db),
@@ -632,6 +634,7 @@ def field_intelligence_context(
         db,
         organization_id=organization_id,
         scope="organization",
+        project_id=project_id,
         as_of=as_of,
         window_days=window_days,
         knowledge_query=knowledge_query,
@@ -655,8 +658,8 @@ def site_field_intelligence_context(
     knowledge_top_k: int | None = Query(default=None, ge=1, le=settings.RETRIEVAL_MAX_TOP_K),
     project_id: uuid.UUID | None = Query(
         default=None,
-        description="SIE Milestone 35: optional operational-scope label -- must currently be associated "
-        "with `site_id`, or this returns 400. See GET /intelligence/context's own description.",
+        description="SIE Milestone 35A: must currently be associated with `site_id` (400 otherwise). See "
+        "GET /intelligence/context's own description for exactly what this genuinely filters.",
     ),
     context: RequestContext = Depends(require_context_permission(Permission.INTELLIGENCE_READ)),
     db: Session = Depends(get_db),
@@ -675,6 +678,7 @@ def site_field_intelligence_context(
         organization_id=organization_id,
         scope="site",
         site_id=site_id,
+        project_id=project_id,
         as_of=as_of,
         window_days=window_days,
         knowledge_query=knowledge_query,

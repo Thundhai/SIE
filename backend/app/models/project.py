@@ -43,24 +43,45 @@ different organization).
 
 **Why no `project_id` was added to `SafetyEvent`/`SafetyAction`/
 `RiskAssessment`/`RiskAssessmentFinding`/`IntelligenceDecision` (item 6's
-own explicit guardrail).** Every one of those already carries (or, for
-`IntelligenceDecision`, resolves through `AttentionItem`) a `site_id`.
-Project membership of a site is fully recoverable at query time by
-joining through `ProjectSite` — indiscriminately duplicating a
-`project_id` foreign key onto five more tables would (a) not be
-justified by any concrete, existing intelligence computation that
-needs it directly, (b) create a second, easily-inconsistent place a
-project/site relationship could be represented, and (c) collide with
-point-in-time integrity (item 7): a row's `project_id`, once written,
-would either need its own temporal snapshot to stay historically
-correct as project/site membership changes, or would silently
-misrepresent history — a cost this milestone's own minimum-coupling
-instruction does not justify paying today. See
+own explicit guardrail) — as originally reasoned in this milestone,
+`SafetyEvent` part CORRECTED by SIE Milestone 35A.** Every one of those
+already carries (or, for `IntelligenceDecision`, resolves through
+`AttentionItem`) a `site_id`. The original claim here was that "project
+membership of a site is fully recoverable at query time by joining
+through `ProjectSite`" — **that is false whenever a site hosts more
+than one project**, which this milestone's own `ProjectSite` design
+explicitly permits: `site_id -> ProjectSite` yields only the *set* of
+projects operating at a site, never which one (if any) a specific
+record belongs to. SIE Milestone 35A corrected this for `SafetyEvent`
+specifically — see `app/models/safety_event.py`'s own
+`attributed_project_id` docstring section and
+`docs/OPERATIONAL_SCOPE_FOUNDATION_V0_1.md` §9 for the full account.
+
+`SafetyAction`/`RiskAssessment`/`RiskAssessmentFinding`/
+`IntelligenceDecision` were re-evaluated under that same correction and
+still gained no column: `SafetyAction` can derive project context via a
+real join through its own `source_event_id ->
+SafetyEvent.attributed_project_id` (an authoritative upstream
+relationship, demonstrated by
+`tests/test_project_service.py::test_safety_action_can_derive_project_context_via_its_source_event`,
+not wired into any production query path); `RiskAssessment` has no
+equivalent single upstream `SafetyEvent` to derive through and gained
+neither a column nor a derivation path, left for a future milestone if
+a concrete need emerges; `RiskAssessmentFinding`/`IntelligenceDecision`
+were not re-evaluated beyond that (unchanged from the original
+reasoning below, which still applies to them): duplicating a
+`project_id` foreign key onto them would (a) not be justified by any
+concrete, existing intelligence computation that needs it directly, (b)
+create a second, easily-inconsistent place a project/site relationship
+could be represented, and (c) collide with point-in-time integrity
+(item 7): a row's `project_id`, once written, would either need its own
+temporal snapshot to stay historically correct as project/site
+membership changes, or would silently misrepresent history. See
 `app/intelligence/context_composition.py` and `app/api/v1/intelligence.py`
-(the one place `Project` *is* surfaced to intelligence output, purely as
-an additive, current-state `operational_scope` label — never a new
-computation engine) for the one place this milestone does connect
-Project to intelligence, and why it stops there.
+(where `Project` is surfaced to intelligence output — genuinely
+filtering, as of SIE Milestone 35A, not merely an additive label — see
+`docs/OPERATIONAL_SCOPE_FOUNDATION_V0_1.md` §9.4) for the one place this
+connects to intelligence.
 
 **Point-in-time integrity (item 7).** `ProjectSite` rows carry no
 temporal versioning in this milestone — see that model's own docstring.
@@ -78,7 +99,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import Index, String, Text
+from sqlalchemy import Index, String, Text, UniqueConstraint
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -91,6 +112,11 @@ class Project(UUIDPrimaryKeyMixin, OrganizationScopedMixin, TimestampMixin, Base
     __table_args__ = (
         Index("ix_projects_org_status", "organization_id", "status"),
         Index("ix_projects_org_code", "organization_id", "code"),
+        # SIE Milestone 35A -- see app/models/site.py's identical
+        # constraint and app/models/project_site.py's own docstring for
+        # what this enables: a genuine, DB-enforced composite foreign
+        # key from ProjectSite, not merely an application-checked one.
+        UniqueConstraint("id", "organization_id", name="uq_projects_id_organization_id"),
     )
 
     name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)

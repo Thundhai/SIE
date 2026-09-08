@@ -14,24 +14,28 @@ undifferentiated feed" rule). `deterministic` reuses
 inheritance) rather than redefining indicators/trend/anomaly/etc. a
 second time.
 
-**`operational_scope` (SIE Milestone 35: Organizational & Operational
-Scope Foundation v0.1) — a label, never a second computation.** Set only
-when the caller supplies `project_id` on `GET .../context` or
+**`operational_scope` (SIE Milestone 35, corrected by SIE Milestone
+35A: Canonical Project Attribution Correction).** Set only when the
+caller supplies `project_id` on `GET .../context` or
 `GET .../sites/{site_id}/context` (`app/api/v1/intelligence.py`); `None`
 otherwise, so every pre-M35 caller's response is byte-for-byte
 unchanged. `level` always states exactly what `deterministic`/
-`observed`/`predictive` were actually computed over — `"ORGANIZATION"`
-or `"SITE"`, the same `scope` this endpoint already accepts — never
-`"PROJECT"`: this milestone does not implement multi-site project-level
-intelligence aggregation (see `docs/OPERATIONAL_SCOPE_FOUNDATION_V0_1.md`'s
-"Limitations" section), so `operational_scope.project` is always a
-*label* identifying which project this call also concerns, never a
-claim that the numbers above were filtered to that project's sites.
-`project.site_ids` is the project's *current* `ProjectSite` membership
-at the moment of this API call — not reconstructed as of `as_of` (see
-`app/models/project_site.py`'s own "point-in-time integrity" section);
-a historical `as_of` request's `project.site_ids` reflects today's
-relationships, never that historical instant's.
+`observed`/`predictive` were actually computed *over* (the geographic/
+tenant scope) — `"ORGANIZATION"` or `"SITE"`, the same `scope` this
+endpoint already accepts — never `"PROJECT"`: geographic scope and
+project filtering are two independent, orthogonal dimensions (see
+`OperationalScopeProjectRead.filtered`'s own field docstring below for
+exactly which parts of the response are, and are not, genuinely
+filtered to this project's explicitly-attributed `SafetyEvent` rows —
+never merely site co-location; M35's own first cut conflated the two,
+which is exactly what M35A corrects — see
+`docs/OPERATIONAL_SCOPE_FOUNDATION_V0_1.md`'s "Project attribution"
+section for the full history). `project.site_ids` is the project's
+*current* `ProjectSite` membership at the moment of this API call — not
+reconstructed as of `as_of` (see `app/models/project_site.py`'s own
+"point-in-time integrity" section); a historical `as_of` request's
+`project.site_ids` reflects today's relationships, never that
+historical instant's.
 """
 
 from __future__ import annotations
@@ -109,6 +113,20 @@ class OperationalScopeProjectRead(BaseModel):
         default_factory=list,
         description="The project's CURRENT associated site ids -- not reconstructed as of `as_of`. "
         "See this module's own docstring.",
+    )
+    filtered: bool = Field(
+        True,
+        description=(
+            "SIE Milestone 35A. Always true when this field is present: observed.event_count/"
+            "evidence_sample_event_ids and deterministic.indicators/trend/concentrations/patterns/risk are "
+            "genuinely computed only from SafetyEvent rows explicitly attributed to this project "
+            "(SafetyEvent.attributed_project_id) -- never merely site co-located. "
+            "deterministic.anomalies/associations, predictive, observed.actions/open_action_sample, and "
+            "observed.open_finding_sample are NOT filtered by project (SafetyAction/RiskAssessmentFinding "
+            "carry no project attribution, and Prediction has no project dimension at all) and continue to "
+            "reflect the full site/organization population -- see "
+            "docs/OPERATIONAL_SCOPE_FOUNDATION_V0_1.md's 'Project attribution' section for the complete list."
+        ),
     )
 
 

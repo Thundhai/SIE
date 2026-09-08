@@ -318,6 +318,7 @@ def compute_enterprise_intelligence(
     organization_id: uuid.UUID,
     scope: str,
     site_id: uuid.UUID | None = None,
+    project_id: uuid.UUID | None = None,
     as_of: datetime | None = None,
     window_days: int | None = None,
 ) -> EnterpriseIntelligenceResult:
@@ -326,7 +327,28 @@ def compute_enterprise_intelligence(
     caller (see `app/api/v1/intelligence.py::_require_owned_site()`,
     mirroring `app/api/v1/predictions.py`'s own established pattern) --
     this function trusts `organization_id`/`site_id` exactly as every
-    other `app/intelligence/*.py` entry point already does."""
+    other `app/intelligence/*.py` entry point already does.
+
+    `project_id` (SIE Milestone 35A, default `None` -- every existing
+    caller's behavior is completely unaffected) genuinely filters
+    `event_count`/`indicators`/`trend`/`concentrations`/`patterns`/
+    `risk`/`explanations`/`data_sufficiency` to `SafetyEvent` rows
+    explicitly attributed to that project (`events_as_of(project_id=...)`
+    -- see that function's own docstring). It is deliberately NOT
+    threaded into `compute_enterprise_anomalies()`/
+    `compute_enterprise_associations()` (each runs its own, separate
+    multi-period baseline queries -- wiring project filtering through
+    those too is a materially larger change than this correction's own
+    narrow scope) nor into `_actions_context()`/`_predictive_context()`
+    (`SafetyAction` carries no project attribution in this correction,
+    and `Prediction` has no project dimension at all -- see
+    `app/models/project.py`'s own docstring for why). Callers that
+    surface this result to a caller-facing response must label which
+    parts were actually project-filtered -- never imply project scope
+    for anomalies/associations/actions/predictive when it wasn't
+    applied (see `app/schemas/field_intelligence_context.py`'s own
+    `OperationalScopeProjectRead.filtered` field for the one place this
+    codebase does that)."""
     as_of = as_of or utcnow()
     window_days = window_days or settings.ENTERPRISE_INTELLIGENCE_DEFAULT_WINDOW_DAYS
     window_start, _ = window_bounds(as_of, window_days)
@@ -335,7 +357,8 @@ def compute_enterprise_intelligence(
     previous_events = list(
         db.execute(
             events_as_of(
-                organization_id=organization_id, as_of=previous_end, window_start=previous_start, site_id=site_id
+                organization_id=organization_id, as_of=previous_end, window_start=previous_start, site_id=site_id,
+                project_id=project_id,
             )
         )
         .scalars()
@@ -359,7 +382,10 @@ def compute_enterprise_intelligence(
     current_events = [
         e
         for e in db.execute(
-            events_as_of(organization_id=organization_id, as_of=as_of, window_start=window_start, site_id=site_id)
+            events_as_of(
+                organization_id=organization_id, as_of=as_of, window_start=window_start, site_id=site_id,
+                project_id=project_id,
+            )
         )
         .scalars()
         .all()

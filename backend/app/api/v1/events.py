@@ -61,6 +61,7 @@ from app.api.deps import get_db
 from app.api.deps_context import RequestContext, require_context_permission
 from app.api.deps_rate_limit import RateLimitClass, require_rate_limit
 from app.models.data_source import DataSource
+from app.models.project import Project
 from app.models.safety_event import SafetyEvent
 from app.schemas.events import (
     EventListRead,
@@ -88,10 +89,13 @@ def _to_summary_read(event: SafetyEvent) -> SafetyEventSummaryRead:
         source_system=event.source_system,
         source_record_id=event.source_record_id,
         data_quality_status=event.data_quality_status,
+        attributed_project_id=event.attributed_project_id,
     )
 
 
-def _to_detail_read(event: SafetyEvent, *, data_source_name: str | None) -> SafetyEventDetailRead:
+def _to_detail_read(
+    event: SafetyEvent, *, data_source_name: str | None, attributed_project_name: str | None = None
+) -> SafetyEventDetailRead:
     return SafetyEventDetailRead(
         id=event.id,
         organization_id=event.organization_id,
@@ -114,6 +118,8 @@ def _to_detail_read(event: SafetyEvent, *, data_source_name: str | None) -> Safe
         attributes=event.attributes,
         data_quality_status=event.data_quality_status,
         data_quality_issues=event.data_quality_issues,
+        attributed_project_id=event.attributed_project_id,
+        attributed_project_name=attributed_project_name,
         provenance=EventProvenanceRead(
             organization_id=event.organization_id,
             source_system=event.source_system,
@@ -238,7 +244,12 @@ def get_event(
         data_source = db.get(DataSource, event.ingestion_source_id)
         data_source_name = data_source.name if data_source is not None else None
 
-    return _to_detail_read(event, data_source_name=data_source_name)
+    attributed_project_name: str | None = None
+    if event.attributed_project_id is not None:
+        project = db.get(Project, event.attributed_project_id)
+        attributed_project_name = project.name if project is not None else None
+
+    return _to_detail_read(event, data_source_name=data_source_name, attributed_project_name=attributed_project_name)
 
 
 __all__ = ["router"]

@@ -53,6 +53,12 @@ class SafetyEventSummaryRead(BaseModel):
     source_system: str
     source_record_id: str
     data_quality_status: str
+    # SIE Milestone 35A: the governed project attribution -- NULL means
+    # unattributed (the default, and every pre-M35A row's permanent
+    # state unless explicitly attributed). Distinct from the free-text
+    # `project` field on SafetyEventDetailRead below -- see
+    # app/models/safety_event.py's own docstring.
+    attributed_project_id: uuid.UUID | None = None
 
 
 class EventProvenanceRead(BaseModel):
@@ -104,6 +110,12 @@ class SafetyEventDetailRead(BaseModel):
     data_quality_status: str
     data_quality_issues: list | None
     provenance: EventProvenanceRead
+    # SIE Milestone 35A -- see SafetyEventSummaryRead's own field
+    # docstring above; `attributed_project_name` is resolved by the
+    # route (one extra by-id lookup, same pattern as `site_name`/
+    # `provenance.data_source_name` above), never fabricated when NULL.
+    attributed_project_id: uuid.UUID | None = None
+    attributed_project_name: str | None = None
 
 
 class EventListRead(BaseModel):

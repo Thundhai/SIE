@@ -1,4 +1,4 @@
-# SIE Operational Scope Foundation v0.1 (SIE Milestone 35)
+# SIE Operational Scope Foundation v0.1 (SIE Milestone 35, corrected by SIE Milestone 35A)
 
 Establishes a durable organizational and operational scope foundation
 so SIE's intelligence layer can distinguish between organization-wide
@@ -8,6 +8,17 @@ intelligence layer, not a project-management system: this milestone
 introduces no task list, schedule, budget, contractor, document,
 permit, or workflow functionality, and no new ML/predictive/LLM
 functionality.
+
+**This document records both milestones as they actually happened,
+including M35's own mistaken claim and M35A's correction of it** — see
+§9 for the full account. The short version: §3 point 1 below claims
+project membership of a site is "fully recoverable" via `ProjectSite`.
+That claim is **false** whenever a site hosts more than one project (a
+case M35 itself explicitly allows — §2), because `ProjectSite` proves
+only "this project operates at this site," never "this specific record
+belongs to this project." §9 explains the fix: a new, narrow,
+explicit `SafetyEvent.attributed_project_id` relationship — read §9
+before relying on anything §3–§4 say about project attribution.
 
 ## 1. Canonical scope hierarchy
 
@@ -64,16 +75,28 @@ Actions, Findings, Assessments and Decisions"): none of `SafetyEvent`,
 `SafetyAction`, `RiskAssessment`, `RiskAssessmentFinding`, or
 `IntelligenceDecision` gained a new column in this milestone.
 
-Reasoning:
+Reasoning (as originally written in M35 — **point 1 is corrected by
+M35A; see §9**):
 
-1. **Every one of those already carries (or resolves through) a
+1. ~~**Every one of those already carries (or resolves through) a
    `site_id`.** `SafetyEvent`/`SafetyAction`/`RiskAssessment` all have
    their own `site_id`; `IntelligenceDecision` denormalizes an
    `AttentionItem`, which itself derives from the same site-scoped
    computation. Project membership of a site is fully recoverable at
    query time by joining through `ProjectSite` — there is nothing a
    direct `project_id` column would let a caller compute that a
-   `site_id` -> `ProjectSite` join cannot already answer.
+   `site_id` -> `ProjectSite` join cannot already answer.**~~ **This is
+   false whenever a site hosts more than one project.** `site_id` ->
+   `ProjectSite` answers "which projects operate at this site" (a
+   *candidate set*), never "which one of them this specific record
+   belongs to" (an *attribution*) — the two are only the same thing
+   when a site hosts exactly one project, which §2 explicitly does not
+   guarantee. See §9 for the correction: `SafetyEvent` gained a narrow,
+   explicit, nullable `attributed_project_id` relationship for exactly
+   this reason. `SafetyAction`/`RiskAssessment`/`RiskAssessmentFinding`/
+   `IntelligenceDecision` were re-evaluated under M35A and still gained
+   no column — §9 documents that decision for each individually, not
+   merely by extension of this (incorrect) blanket reasoning.
 2. **No concrete, existing intelligence computation needs `project_id`
    directly.** Every M22–M34 computation (indicators, trend, anomaly,
    recurrence, risk score, Field Intelligence Context, Attention,
@@ -220,6 +243,9 @@ GET    /api/v1/projects/by-site/{site_id}                reverse lookup: a site'
 POST   /api/v1/projects/{project_id}/sites               link a site to a project
 GET    /api/v1/projects/{project_id}/sites                list a project's sites
 DELETE /api/v1/projects/{project_id}/sites/{site_id}      unlink a site
+PUT    /api/v1/projects/{project_id}/events/{event_id}     attribute an event to a project (M35A)
+DELETE /api/v1/projects/{project_id}/events/{event_id}     clear an event's project attribution (M35A)
+GET    /api/v1/projects/{project_id}/events                list a project's explicitly attributed events (M35A)
 ```
 
 No project-management UI, no task/schedule/budget endpoints. Every
@@ -230,3 +256,206 @@ rule — no new authorization mechanism. `Permission.PROJECT_READ`/
 `PROJECT_MANAGE` (new) are granted to the same roles as their existing
 `SITE_READ`/`SITE_MANAGE` counterparts, since `Project` is an
 operational-scope entity of the same shape as `Site`.
+
+## 9. SIE Milestone 35A: Canonical Project Attribution Correction
+
+### 9.1 The problem M35 missed
+
+M35 (§3 point 1, struck through above) assumed a `SafetyEvent`'s
+project membership could always be recovered from `SafetyEvent.site_id`
+joined through `ProjectSite`. That assumption breaks the moment a site
+hosts more than one project — a case §2 explicitly designs for:
+
+```
+Site X
+  +-- Project Alpha  (linked via ProjectSite)
+  +-- Project Beta   (linked via ProjectSite)
+
+SafetyEvent E occurs at Site X.
+```
+
+From `E.site_id` + `ProjectSite` alone, SIE can only conclude "Site X
+hosts Alpha and Beta" — never whether `E` itself belongs to Alpha, to
+Beta, to both, or to neither. `ProjectSite` is a **candidate-set
+relation** ("these projects operate here"); it is not, and was never
+designed to be, an **attribution relation** ("this record belongs to
+that project"). M35's own `operational_scope.project` label
+inherited this flaw silently: supplying `project_id` to
+`GET /intelligence/context` never filtered anything — it validated the
+project/site pair and then re-labeled an unfiltered Organization- or
+Site-scope result, which is not the same claim as "this is Project
+Alpha's intelligence."
+
+### 9.2 The fix: an explicit, governed attribution — not a wider guess
+
+`SafetyEvent` gained one new nullable column,
+`attributed_project_id` (migration `0023`,
+`app/models/safety_event.py`), set **only** by an explicit act — never
+inferred from `site_id`/`ProjectSite`:
+
+```
+PUT    /api/v1/projects/{project_id}/events/{event_id}     set the attribution (idempotent: sets the exact target state)
+DELETE /api/v1/projects/{project_id}/events/{event_id}     clear it back to NULL (idempotent)
+GET    /api/v1/projects/{project_id}/events                list every event explicitly attributed to this project
+```
+
+(`app/services/safety_event_project_service.py`, gated by
+`Permission.PROJECT_MANAGE` for the writes, `PROJECT_READ` for the
+list.) Nothing in this service, the migration, or the API layer ever
+reads `ProjectSite` to *guess* an event's project — the column is
+`NULL` (unattributed — the default and fully valid state) until a
+caller sets it explicitly.
+
+**Validation rule, unconditional, no historical/ingestion exception.**
+When the event has a `site_id`, the project being attributed must
+*currently* be one of that site's `ProjectSite` rows, or the request is
+rejected `422` — attributing "Project Beta" to an event whose site only
+"Project Alpha" operates at is refused, not silently accepted. An event
+with no `site_id` at all has nothing to cross-check, so any project in
+the same organization may be attributed. Re-attributing an
+already-attributed event to a different project is a **correction**
+(overwrite), not an error — an event is never attributed to two
+projects at once (proven by
+`tests/test_project_service.py::test_two_projects_at_the_same_site_do_not_both_claim_an_events_attribution`
+and its HTTP-layer twin in `tests/test_projects_api.py`).
+
+**No automatic reconciliation.** Unlinking a site from a project
+(`DELETE .../sites/{site_id}`) does **not** retroactively clear any
+event already attributed to that project — the attribution is a fact
+established at a point in time
+(`tests/test_project_service.py::test_unlinking_a_site_from_a_project_does_not_retroactively_clear_an_already_attributed_event`),
+mirroring `ProjectSite`'s own "no point-in-time reconstruction"
+limitation (§5) rather than inventing a second, inconsistent temporal
+model. SIE makes no claim to reconstruct historical project/site
+membership anywhere in this correction.
+
+**`SafetyEvent.project` (free text) is untouched and stays untouched.**
+The pre-existing free-text field is never read, migrated, or treated as
+authoritative by `attributed_project_id` — the two remain permanently
+distinct: one is unvalidated source-system text, the other is a
+governed, tenant-checked, site-consistency-validated relationship.
+
+### 9.3 SafetyAction and RiskAssessment: evaluated, neither gained a column
+
+**`SafetyAction`** — no new column. Where an action's project context
+is needed, it is derived via a real join through its own
+`source_event_id -> SafetyEvent.attributed_project_id` (an
+authoritative upstream relationship), proven directly by
+`tests/test_project_service.py::test_safety_action_can_derive_project_context_via_its_source_event`.
+Not every `SafetyAction` has a `source_event_id`, so this derivation is
+partial by nature — an action with no source event has no derivable
+project context, and none is fabricated for it. This correction does
+not wire that derivation into any production query path (no
+`SafetyAction`-listing endpoint filters by project) — it is
+demonstrated only, kept narrow per this milestone's own instruction to
+avoid new project-management/analytics surface area beyond the minimum
+`SafetyEvent` fix.
+
+**`RiskAssessment`** — no new column, and no derivation path was added
+either. Unlike `SafetyAction`, `RiskAssessment` has no `source_event_id`
+or equivalent single upstream `SafetyEvent` to derive through; its own
+`site_id` remains its only geographic scope. Concluded: introducing
+project attribution for `RiskAssessment` would require either a new
+direct column (rejected — no concrete computation reads it, identical
+reasoning to §3) or a new relationship this correction's scope does not
+call for. Left for a future milestone if a concrete need emerges.
+
+### 9.4 Field Intelligence Context: genuine filtering, not a wider label
+
+`project_id` on `GET /intelligence/context` /
+`GET /intelligence/sites/{site_id}/context` now genuinely filters —
+`events_as_of()` (`app/intelligence/temporal.py`) gained an equally
+optional `project_id` parameter (`SafetyEvent.attributed_project_id ==
+project_id`), threaded through both of
+`compute_enterprise_intelligence()`'s internal event fetches
+(`app/intelligence/enterprise_intelligence_service.py`). Because
+indicators, trend, concentration, recurrence, risk score, and
+explanations are all pure functions computed over that same fetched
+event list, filtering at that one boundary correctly cascades through
+all of them with no further change. Proven by
+`tests/test_projects_api.py::test_project_scoped_context_genuinely_filters_event_count_not_merely_labels_it`
+(two projects at one site, disjoint attributed events, `event_count`
+and `evidence_sample_event_ids` differ per `project_id` and both differ
+from the unfiltered site-wide total).
+
+**What remains unfiltered by project, and why — the response's own
+`operational_scope.project.filtered` field documents this list
+verbatim:**
+
+| Not filtered | Why |
+|---|---|
+| `deterministic.anomalies`/`associations` | Each runs its own separate multi-period baseline query (`_available_baseline_periods`/`_bucketed_events`) independent of the shared `events_as_of()` list this correction threads `project_id` through — narrowing those too is a materially larger change than this correction's own "keep it narrow" instruction allows. |
+| `predictive` | `Prediction.entity_type` is Organization/Site only — no project dimension exists in the prediction architecture at all. |
+| `observed.actions`/`open_action_sample` | `SafetyAction` gained no project attribution (§9.3) — only a documented, unwired derivation path. |
+| `observed.open_finding_sample` | `RiskAssessmentFinding` gained no project attribution (§9.3 — `RiskAssessment` itself has none). |
+
+`operational_scope.level` still never becomes `"PROJECT"` — geographic
+scope (`"ORGANIZATION"`/`"SITE"`, what the computation ran *over*
+geographically) and project filtering (what subset of that scope's
+events were counted) remain two independent, orthogonal response
+dimensions, exactly as §4 originally established; §4's own claim that
+a project is "always a label, never a third computation mode" is
+superseded only insofar as the label now also drives genuine
+event-level filtering for the fields listed above — it is still never
+a third *geographic* scope.
+
+### 9.5 Database tenant integrity for `project_sites`
+
+M35's own §2 described a cross-tenant `ProjectSite` row as impossible
+in the sense that the one write path (`link_project_site()`) validates
+both ends — true, but the schema itself only had independent
+single-column foreign keys, so a direct database write or a future
+code path bypassing that service could still create an inconsistent
+row. Migration `0023` closes that gap **at the schema level**:
+`projects`/`sites` each gained `UNIQUE(id, organization_id)`, and
+`project_sites.project_id`/`site_id` are now referenced via *composite*
+foreign keys — `(project_id, organization_id) -> projects(id,
+organization_id)` and `(site_id, organization_id) -> sites(id,
+organization_id)`. Postgres itself now rejects any `project_sites` row
+whose `organization_id` does not match both referenced rows' own
+`organization_id` — proven against real PostgreSQL, via a raw-SQL
+insert that deliberately bypasses the service layer, by
+`tests/test_migrations.py::test_project_sites_composite_foreign_keys_reject_cross_tenant_rows_at_the_database_level`.
+
+**The identical technique is deliberately not used for
+`SafetyEvent.attributed_project_id`.** A composite `ON DELETE SET NULL`
+foreign key nulls *every* column in the constraint together, including
+`organization_id` — which is `NOT NULL` on every tenant-owned table in
+this codebase. Applying the same composite technique there would make
+deleting a `Project` attempt to null a referencing event's
+`organization_id` too, violating that `NOT NULL` constraint and making
+the `Project` undeletable instead of cleanly clearing the event's
+attribution. `project_sites` avoids that conflict because both of its
+foreign keys use `ON DELETE CASCADE` (the whole row is removed, never
+partially nulled); `SafetyEvent.attributed_project_id` therefore keeps
+a plain single-column foreign key (`ON DELETE SET NULL`) and relies on
+the validated write path
+(`attribute_event_to_project()`/`clear_event_project_attribution()`)
+for tenant consistency instead — the one deliberate, documented
+exception to this correction's database-level hardening. See
+`app/models/project_site.py`'s own docstring for the complete
+reasoning.
+
+### 9.6 Tests added by this correction
+
+- `tests/test_project_service.py`: `attribute_event_to_project()`/
+  `clear_event_project_attribution()` direct service-layer coverage —
+  tenant isolation, the site-consistency `422`, idempotent clearing,
+  the two-projects-one-site non-attribution scenario, no-automatic-
+  reconciliation-on-unlink, and the `SafetyAction` derivation proof.
+- `tests/test_projects_api.py`: the same scenarios over HTTP (`403` for
+  a viewer, `404` for cross-tenant event/project, `422`, idempotent
+  `204` clear, `GET .../events` returning only that project's
+  attributed events), plus the genuine Field Intelligence Context
+  filtering test (§9.4).
+- `tests/test_migrations.py`: a migration `0023` downgrade/re-upgrade
+  round-trip, and the cross-tenant composite-FK rejection proof (§9.5).
+
+### 9.7 Explicitly out of scope for this correction
+
+No project-management features, no new ML, no outcome/learning
+implementation, no `RiskAssessment`/`SafetyAction` schema change, no
+`anomalies`/`associations`/`predictive` project filtering, and no
+point-in-time project/site reconstruction — all unchanged from M35's
+own non-goals (§6) and this correction's own explicit instruction to
+stay narrow.

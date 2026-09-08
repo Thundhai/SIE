@@ -471,6 +471,7 @@ def compose_field_intelligence_context(
     organization_id: uuid.UUID,
     scope: str,
     site_id: uuid.UUID | None = None,
+    project_id: uuid.UUID | None = None,
     as_of: datetime | None = None,
     window_days: int | None = None,
     knowledge_query: str | None = None,
@@ -481,12 +482,20 @@ def compose_field_intelligence_context(
     `"site"`, `site_id` must already have been verified to belong to
     `organization_id` by the caller (`app/api/v1/intelligence.py::
     _require_owned_site()`) -- this function trusts them exactly as
-    every other `app/intelligence/*.py` entry point does."""
+    every other `app/intelligence/*.py` entry point does.
+
+    `project_id` (SIE Milestone 35A, default `None`) is passed straight
+    through to `compute_enterprise_intelligence()` -- see that
+    function's own docstring for exactly which parts of `deterministic`
+    (and, via `enterprise.event_count`/`evidence_sample_event_ids`,
+    `observed`) it genuinely filters, and which it deliberately does
+    not."""
     as_of = as_of or utcnow()
     window_days = window_days or settings.ENTERPRISE_INTELLIGENCE_DEFAULT_WINDOW_DAYS
 
     enterprise = compute_enterprise_intelligence(
-        db, organization_id=organization_id, scope=scope, site_id=site_id, as_of=as_of, window_days=window_days
+        db, organization_id=organization_id, scope=scope, site_id=site_id, project_id=project_id, as_of=as_of,
+        window_days=window_days,
     )
 
     observed = _observed_fact_summary(db, enterprise=enterprise, organization_id=organization_id, as_of=as_of, site_id=site_id)

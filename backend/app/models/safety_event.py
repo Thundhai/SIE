@@ -1,6 +1,39 @@
 """SafetyEvent — the canonical, cross-domain representation of one piece
 of organizational safety data, from any connected source system.
 
+**`attributed_project_id` (SIE Milestone 35A: Canonical Project
+Attribution Correction) — governed, nullable, distinct from the
+pre-existing free-text `project` column below.** SIE Milestone 35
+introduced `Project`/`ProjectSite` (an organization owns projects; a
+project may span multiple sites; a site may host multiple projects) but
+initially assumed a project could be attributed to a record merely by
+its `site_id` being associated with that project via `ProjectSite`.
+That assumption breaks the moment a site hosts more than one project:
+`site_id` alone can only narrow an event down to the *set* of projects
+operating at that site, never to one specific project. `attributed_project_id`
+is the fix — an explicit, governed reference, set only through
+`app/services/safety_event_project_service.py::attribute_event_to_project()`
+(never inferred from `ProjectSite`, never bulk-backfilled, never set by
+ingestion), and the one field that actually answers "which project does
+this event belong to" unambiguously, when that is known. `NULL` (the
+default, and every pre-Milestone-35A row's permanent state unless
+explicitly attributed later) means exactly what it always meant:
+unattributed — a perfectly valid, still-fully-functional state, not an
+error. See that service module's own docstring for the validation rule
+(when the event has a `site_id`, the project must currently be
+associated with that site — `ProjectSite` — or the attribution is
+rejected) and `app/models/project.py`'s own docstring for why
+`SafetyAction`/`RiskAssessment` do not receive an equivalent column in
+this same correction.
+
+**Why not the existing free-text `project` column below.** That field
+predates Milestone 35 entirely, is never validated, and is never
+silently reinterpreted as this governed reference — an operator or
+source system may have typed "Alpha Expansion" into it years before
+`Project` existed as an entity at all; conflating the two would treat
+unvalidated free text as authoritative. The two coexist, unrelated,
+permanently.
+
 **Why one table, not one per domain.** The milestone spec lists eleven
 data domains (incidents, near misses, observations, inspections, audits,
 corrective actions, permits, training, workforce, equipment,
@@ -98,6 +131,17 @@ class SafetyEvent(UUIDPrimaryKeyMixin, OrganizationScopedMixin, TimestampMixin, 
     site_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("sites.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    # SIE Milestone 35A: the governed project-attribution column -- see
+    # module docstring's own "attributed_project_id" section for the
+    # full rationale and exactly how this differs from the pre-existing
+    # free-text `project` column below. Single-column FK (not the
+    # composite technique ProjectSite uses), deliberately -- see
+    # app/models/project_site.py's own docstring for why a composite FK
+    # is architecturally incompatible with this column's ON DELETE SET
+    # NULL semantics.
+    attributed_project_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
+    )
 
     # --- What kind of thing this is (see module docstring) -------------------
     event_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
@@ -185,6 +229,7 @@ class SafetyEvent(UUIDPrimaryKeyMixin, OrganizationScopedMixin, TimestampMixin, 
 
     organization: Mapped["Organization"] = relationship()  # noqa: F821
     site: Mapped["Site | None"] = relationship()  # noqa: F821
+    attributed_project: Mapped["Project | None"] = relationship()  # noqa: F821
 
     def __repr__(self) -> str:  # pragma: no cover
         return (

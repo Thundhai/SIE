@@ -13,8 +13,10 @@ import uuid
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy import select
 
 from app.models.project_enums import ProjectStatus
+from app.models.safety_event import SafetyEvent
 from app.schemas.project import ProjectCreate
 from app.services.project_service import project_service, resolve_project_reference
 from app.services.project_site_service import (
@@ -24,6 +26,7 @@ from app.services.project_site_service import (
     project_site_ids,
     unlink_project_site,
 )
+from app.services.safety_event_project_service import attribute_event_to_project, clear_event_project_attribution
 from tests.intelligence_test_helpers import make_org, make_site
 
 
@@ -198,6 +201,179 @@ def test_unlink_project_site_removes_the_relationship(db_session):
     # Unlinking again is a no-op, not an error.
     removed_again = unlink_project_site(db_session, organization_id=org.id, project_id=project.id, site_id=site.id)
     assert removed_again is False
+
+
+# --- SafetyEvent <-> Project attribution (SIE Milestone 35A) -----------------------------------
+
+
+def _add_event(db_session, org_id, *, site_id=None, **overrides):
+    from tests.intelligence_test_helpers import make_safety_event
+
+    event = make_safety_event(organization_id=org_id, site_id=site_id, **overrides)
+    db_session.add(event)
+    db_session.commit()
+    db_session.refresh(event)
+    return event
+
+
+def test_attribute_event_to_project_sets_the_column(db_session):
+    from app.services.safety_event_project_service import attribute_event_to_project
+
+    org = make_org(db_session)
+    project = _create_project(db_session, org.id)
+    event = _add_event(db_session, org.id)
+
+    updated = attribute_event_to_project(db_session, organization_id=org.id, event_id=event.id, project_id=project.id)
+    assert updated.attributed_project_id == project.id
+
+
+def test_attribute_event_to_project_404s_for_a_cross_tenant_event_or_project(db_session):
+    from app.services.safety_event_project_service import attribute_event_to_project
+
+    org_a = make_org(db_session, "Org A")
+    org_b = make_org(db_session, "Org B")
+    project_a = _create_project(db_session, org_a.id)
+    project_b = _create_project(db_session, org_b.id)
+    event_a = _add_event(db_session, org_a.id)
+    event_b = _add_event(db_session, org_b.id)
+
+    with pytest.raises(HTTPException) as exc_info:
+        attribute_event_to_project(db_session, organization_id=org_a.id, event_id=event_b.id, project_id=project_a.id)
+    assert exc_info.value.status_code == 404
+
+    with pytest.raises(HTTPException) as exc_info:
+        attribute_event_to_project(db_session, organization_id=org_a.id, event_id=event_a.id, project_id=project_b.id)
+    assert exc_info.value.status_code == 404
+
+
+def test_attribute_event_to_project_rejects_a_project_not_associated_with_the_events_site(db_session):
+    """M35A's own explicit validation rule -- unconditional, no
+    historical/ingestion exception in this correction."""
+    from app.services.safety_event_project_service import attribute_event_to_project
+
+    org = make_org(db_session)
+    site = make_site(db_session, org.id)
+    project = _create_project(db_session, org.id)
+    # Deliberately never linked to `site`.
+    event = _add_event(db_session, org.id, site_id=site.id)
+
+    with pytest.raises(HTTPException) as exc_info:
+        attribute_event_to_project(db_session, organization_id=org.id, event_id=event.id, project_id=project.id)
+    assert exc_info.value.status_code == 422
+
+
+def test_attribute_event_to_project_allows_a_siteless_event_regardless_of_project_site_membership(db_session):
+    from app.services.safety_event_project_service import attribute_event_to_project
+
+    org = make_org(db_session)
+    project = _create_project(db_session, org.id)
+    event = _add_event(db_session, org.id, site_id=None)
+
+    updated = attribute_event_to_project(db_session, organization_id=org.id, event_id=event.id, project_id=project.id)
+    assert updated.attributed_project_id == project.id
+
+
+def test_clear_event_project_attribution_is_idempotent(db_session):
+    from app.services.safety_event_project_service import attribute_event_to_project, clear_event_project_attribution
+
+    org = make_org(db_session)
+    project = _create_project(db_session, org.id)
+    event = _add_event(db_session, org.id)
+    attribute_event_to_project(db_session, organization_id=org.id, event_id=event.id, project_id=project.id)
+
+    cleared_once = clear_event_project_attribution(db_session, organization_id=org.id, event_id=event.id)
+    assert cleared_once.attributed_project_id is None
+    cleared_twice = clear_event_project_attribution(db_session, organization_id=org.id, event_id=event.id)
+    assert cleared_twice.attributed_project_id is None
+
+
+def test_two_projects_at_the_same_site_do_not_both_claim_an_events_attribution(db_session):
+    """The user's own explicitly required scenario: Site X hosts both
+    Project Alpha and Project Beta. An event at Site X is NOT
+    automatically attributed to either merely by site co-location
+    (`ProjectSite` is a candidate set, never an attribution). Explicitly
+    attributing the event to Alpha must not implicate Beta, and vice
+    versa -- attribution is exclusive and explicit, never inferred."""
+    org = make_org(db_session)
+    site_x = make_site(db_session, org.id, "Site X")
+    project_alpha = _create_project(db_session, org.id, name="Project Alpha", code="ALPHA")
+    project_beta = _create_project(db_session, org.id, name="Project Beta", code="BETA")
+    for project in (project_alpha, project_beta):
+        link_project_site(
+            db_session, organization_id=org.id, project_id=project.id, site_id=site_x.id,
+            created_by_user_id=None, created_by_api_client_id=None,
+        )
+
+    event = _add_event(db_session, org.id, site_id=site_x.id)
+    # Before any explicit attribution: co-location alone attributes the
+    # event to neither project.
+    assert event.attributed_project_id is None
+
+    updated = attribute_event_to_project(
+        db_session, organization_id=org.id, event_id=event.id, project_id=project_alpha.id
+    )
+    assert updated.attributed_project_id == project_alpha.id
+    assert updated.attributed_project_id != project_beta.id
+
+    # Re-attributing to Beta is a correction (overwrite), not an
+    # additive claim -- the event is never attributed to both at once.
+    corrected = attribute_event_to_project(
+        db_session, organization_id=org.id, event_id=event.id, project_id=project_beta.id
+    )
+    assert corrected.attributed_project_id == project_beta.id
+
+
+def test_unlinking_a_site_from_a_project_does_not_retroactively_clear_an_already_attributed_event(db_session):
+    """No automatic reconciliation (M35A's own documented limitation):
+    attribution is a fact established at a point in time, not a live
+    view recomputed from ProjectSite's current membership."""
+    org = make_org(db_session)
+    site = make_site(db_session, org.id)
+    project = _create_project(db_session, org.id)
+    link_project_site(
+        db_session, organization_id=org.id, project_id=project.id, site_id=site.id,
+        created_by_user_id=None, created_by_api_client_id=None,
+    )
+    event = _add_event(db_session, org.id, site_id=site.id)
+    attribute_event_to_project(db_session, organization_id=org.id, event_id=event.id, project_id=project.id)
+
+    unlink_project_site(db_session, organization_id=org.id, project_id=project.id, site_id=site.id)
+    db_session.refresh(event)
+    assert event.attributed_project_id == project.id
+
+
+def test_safety_action_can_derive_project_context_via_its_source_event(db_session):
+    """Documents the decision for SafetyAction (M35A's own required
+    per-model decision): it gains no new column of its own -- project
+    context, when needed, is derived via a real ORM join through
+    `source_event_id -> SafetyEvent.attributed_project_id`, an
+    authoritative upstream relationship, rather than direct attribution."""
+    from app.models.safety_action import SafetyAction
+    from app.models.safety_action_enums import ActionPriority, ActionStatus, ActionType
+
+    org = make_org(db_session)
+    site = make_site(db_session, org.id)
+    project = _create_project(db_session, org.id)
+    link_project_site(
+        db_session, organization_id=org.id, project_id=project.id, site_id=site.id,
+        created_by_user_id=None, created_by_api_client_id=None,
+    )
+    event = _add_event(db_session, org.id, site_id=site.id)
+    attribute_event_to_project(db_session, organization_id=org.id, event_id=event.id, project_id=project.id)
+
+    action = SafetyAction(
+        organization_id=org.id, site_id=site.id, source_event_id=event.id, title="Follow-up action",
+        action_type=ActionType.CORRECTIVE, priority=ActionPriority.MEDIUM, status=ActionStatus.OPEN,
+    )
+    db_session.add(action)
+    db_session.commit()
+    db_session.refresh(action)
+    assert not hasattr(action, "project_id")
+
+    derived_project_id = db_session.execute(
+        select(SafetyEvent.attributed_project_id).where(SafetyEvent.id == action.source_event_id)
+    ).scalar_one()
+    assert derived_project_id == project.id
 
 
 def test_existing_events_actions_and_findings_have_no_project_association_and_stay_valid(db_session):

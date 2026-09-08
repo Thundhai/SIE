@@ -2355,3 +2355,226 @@ def test_project_and_project_site_migration_downgrade_then_reupgrade_round_trips
             assert status_values == {"ACTIVE", "ON_HOLD", "COMPLETED", "CANCELLED"}
     finally:
         engine.dispose()
+
+
+@requires_postgres
+def test_safety_event_project_attribution_migration_downgrade_then_reupgrade_round_trips_cleanly(monkeypatch):
+    """SIE Milestone 35A: Canonical Project Attribution Correction
+    (migration 0023). Downgrading to 0022 must remove
+    `safety_events.attributed_project_id` and the tenant-integrity
+    hardening (composite `project_sites` foreign keys,
+    `UNIQUE(id, organization_id)` on `sites`/`projects`) entirely, with
+    everything 0022-and-earlier untouched. Re-upgrading to head must
+    recreate all of it correctly."""
+    engine = _fresh_schema_engine()
+    try:
+        monkeypatch.setattr("app.core.config.settings.DATABASE_URL", PG_TEST_DATABASE_URL)
+        config = _alembic_config()
+
+        command.upgrade(config, "head")
+
+        with engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version == _current_head_revision(config)
+
+            safety_event_columns = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = 'safety_events'"
+                    )
+                ).all()
+            }
+            assert "attributed_project_id" in safety_event_columns
+
+            unique_constraints = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT constraint_name FROM information_schema.table_constraints "
+                        "WHERE table_schema = 'public' AND constraint_type = 'UNIQUE'"
+                    )
+                ).all()
+            }
+            assert "uq_sites_id_organization_id" in unique_constraints
+            assert "uq_projects_id_organization_id" in unique_constraints
+
+            project_sites_fks = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT constraint_name FROM information_schema.table_constraints "
+                        "WHERE table_schema = 'public' AND table_name = 'project_sites' "
+                        "AND constraint_type = 'FOREIGN KEY'"
+                    )
+                ).all()
+            }
+            assert "fk_project_sites_project_id_organization_id" in project_sites_fks
+            assert "fk_project_sites_site_id_organization_id" in project_sites_fks
+
+        command.downgrade(config, "0022")
+
+        with engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version == "0022"
+
+            safety_event_columns = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = 'safety_events'"
+                    )
+                ).all()
+            }
+            assert "attributed_project_id" not in safety_event_columns
+            # Untouched by 0023's downgrade.
+            assert "site_id" in safety_event_columns
+            assert "project" in safety_event_columns  # the pre-existing free-text column, never removed
+
+            unique_constraints = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT constraint_name FROM information_schema.table_constraints "
+                        "WHERE table_schema = 'public' AND constraint_type = 'UNIQUE'"
+                    )
+                ).all()
+            }
+            assert "uq_sites_id_organization_id" not in unique_constraints
+            assert "uq_projects_id_organization_id" not in unique_constraints
+
+            project_sites_fks = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT constraint_name FROM information_schema.table_constraints "
+                        "WHERE table_schema = 'public' AND table_name = 'project_sites' "
+                        "AND constraint_type = 'FOREIGN KEY'"
+                    )
+                ).all()
+            }
+            assert "fk_project_sites_project_id_organization_id" not in project_sites_fks
+            assert "fk_project_sites_site_id_organization_id" not in project_sites_fks
+
+            # Untouched by 0023's downgrade -- projects/project_sites
+            # tables themselves (0022's own) still exist.
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+                ).all()
+            }
+            assert "projects" in tables
+            assert "project_sites" in tables
+
+        command.upgrade(config, "head")
+
+        with engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version == _current_head_revision(config)
+
+            safety_event_columns = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = 'safety_events'"
+                    )
+                ).all()
+            }
+            assert "attributed_project_id" in safety_event_columns
+
+            unique_constraints = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT constraint_name FROM information_schema.table_constraints "
+                        "WHERE table_schema = 'public' AND constraint_type = 'UNIQUE'"
+                    )
+                ).all()
+            }
+            assert "uq_sites_id_organization_id" in unique_constraints
+            assert "uq_projects_id_organization_id" in unique_constraints
+    finally:
+        engine.dispose()
+
+
+@requires_postgres
+def test_project_sites_composite_foreign_keys_reject_cross_tenant_rows_at_the_database_level(monkeypatch):
+    """SIE Milestone 35A: proves the tenant-integrity hardening is a
+    genuine, schema-level guarantee -- not merely application-checked.
+    Bypasses the service layer entirely (raw SQL `INSERT`) and asserts
+    PostgreSQL itself rejects a `project_sites` row whose
+    `organization_id` does not match its referenced project's/site's
+    own -- exactly the gap SIE Milestone 35's own first cut left open
+    (see app/models/project_site.py's own docstring)."""
+    import uuid
+
+    import psycopg
+    import pytest
+    from sqlalchemy.exc import IntegrityError
+
+    engine = _fresh_schema_engine()
+    try:
+        monkeypatch.setattr("app.core.config.settings.DATABASE_URL", PG_TEST_DATABASE_URL)
+        config = _alembic_config()
+        command.upgrade(config, "head")
+
+        with engine.connect() as conn:
+            org_a = uuid.uuid4()
+            org_b = uuid.uuid4()
+            conn.execute(
+                text(
+                    "INSERT INTO organizations (id, name, status, created_at, updated_at) "
+                    "VALUES (:id, 'Org A', 'active', now(), now())"
+                ),
+                {"id": org_a},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO organizations (id, name, status, created_at, updated_at) "
+                    "VALUES (:id, 'Org B', 'active', now(), now())"
+                ),
+                {"id": org_b},
+            )
+            project_a = uuid.uuid4()
+            site_b = uuid.uuid4()
+            conn.execute(
+                text(
+                    "INSERT INTO projects (id, organization_id, name, status, created_at, updated_at) "
+                    "VALUES (:id, :org_id, 'Project Alpha', 'ACTIVE', now(), now())"
+                ),
+                {"id": project_a, "org_id": org_a},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO sites (id, organization_id, name, status, created_at, updated_at) "
+                    "VALUES (:id, :org_id, 'Org B Site', 'active', now(), now())"
+                ),
+                {"id": site_b, "org_id": org_b},
+            )
+            conn.commit()
+
+            # The forbidden row: project_a (org_a) linked to site_b
+            # (org_b), claiming organization_id=org_a. A plain
+            # single-column FK on each of project_id/site_id would
+            # happily accept this (both ids individually exist); the
+            # composite FK must not.
+            with pytest.raises((IntegrityError, psycopg.errors.ForeignKeyViolation)):
+                conn.execute(
+                    text(
+                        "INSERT INTO project_sites (id, organization_id, project_id, site_id, created_at, updated_at) "
+                        "VALUES (gen_random_uuid(), :org_id, :project_id, :site_id, now(), now())"
+                    ),
+                    {"org_id": org_a, "project_id": project_a, "site_id": site_b},
+                )
+                conn.commit()
+            # The failed INSERT leaves the connection's transaction
+            # aborted (real Postgres semantics) -- roll it back
+            # explicitly rather than relying on __exit__ to do the
+            # right thing.
+            conn.rollback()
+    finally:
+        engine.dispose()
