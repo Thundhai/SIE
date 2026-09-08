@@ -120,6 +120,16 @@ OPENAPI_TAGS = [
         ),
     },
     {
+        "name": "projects",
+        "description": (
+            "Organizational & operational scope — SIE Milestone 35. A `Project` is an organization-owned "
+            "identity (name, code, lifecycle status) that may span multiple `Site`s, and a `Site` may host "
+            "multiple `Project`s, via an explicit, tenant-safe Project/Site relationship. Identity and "
+            "relationships only — no task/schedule/budget management "
+            "(`project:read` to read, `project:manage` to create projects and manage relationships)."
+        ),
+    },
+    {
         "name": "intelligence-decisions",
         "description": (
             "Human decision provenance for an intelligence/attention signal — SIE Milestone 34. "

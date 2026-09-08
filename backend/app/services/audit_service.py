@@ -155,6 +155,10 @@ class AuditAction:
     # first durable write in the SIE intelligence workflow (M30-M33
     # were architecture/read-only).
     INTELLIGENCE_DECISION_RECORDED = "INTELLIGENCE_DECISION_RECORDED"
+    # SIE Milestone 35: Organizational & Operational Scope Foundation v0.1.
+    PROJECT_CREATED = "PROJECT_CREATED"
+    PROJECT_SITE_LINKED = "PROJECT_SITE_LINKED"
+    PROJECT_SITE_UNLINKED = "PROJECT_SITE_UNLINKED"
 
 
 class AuditService:

@@ -2229,3 +2229,129 @@ def test_intelligence_decision_migration_downgrade_then_reupgrade_round_trips_cl
             assert decision_values == {"ACT", "DO_NOT_ACT", "DEFER", "ALREADY_ADDRESSED", "NOT_RELEVANT"}
     finally:
         engine.dispose()
+
+
+@requires_postgres
+def test_project_and_project_site_migration_downgrade_then_reupgrade_round_trips_cleanly(monkeypatch):
+    """SIE Milestone 35: Organizational & Operational Scope Foundation
+    v0.1 (migration 0022). Downgrading to 0021 must drop `project_sites`
+    and `projects` entirely, along with the native `project_status` enum
+    type, while leaving every 0021-and-earlier table/type/enum value
+    untouched. Re-upgrading to head must recreate both tables and the
+    enum type correctly, with every status value intact."""
+    engine = _fresh_schema_engine()
+    try:
+        monkeypatch.setattr("app.core.config.settings.DATABASE_URL", PG_TEST_DATABASE_URL)
+        config = _alembic_config()
+
+        command.upgrade(config, "head")
+
+        with engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version == _current_head_revision(config)
+
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+                ).all()
+            }
+            assert "projects" in tables
+            assert "project_sites" in tables
+
+            enum_types = {row[0] for row in conn.execute(text("SELECT typname FROM pg_type WHERE typtype = 'e'")).all()}
+            assert "project_status" in enum_types
+
+            status_values = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT enumlabel FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid "
+                        "WHERE t.typname = 'project_status'"
+                    )
+                ).all()
+            }
+            assert status_values == {"ACTIVE", "ON_HOLD", "COMPLETED", "CANCELLED"}
+
+        command.downgrade(config, "0021")
+
+        with engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version == "0021"
+
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+                ).all()
+            }
+            assert "projects" not in tables
+            assert "project_sites" not in tables
+            # Untouched by 0022's downgrade.
+            assert "intelligence_decisions" in tables
+            assert "sites" in tables
+            assert "safety_actions" in tables
+
+            enum_types = {row[0] for row in conn.execute(text("SELECT typname FROM pg_type WHERE typtype = 'e'")).all()}
+            assert "project_status" not in enum_types
+            # Not dropped/redefined by this migration's downgrade.
+            assert "intelligence_decision_type" in enum_types
+
+        command.upgrade(config, "head")
+
+        with engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version == _current_head_revision(config)
+
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+                ).all()
+            }
+            assert "projects" in tables
+            assert "project_sites" in tables
+
+            project_columns = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = 'projects'"
+                    )
+                ).all()
+            }
+            assert "organization_id" in project_columns
+            assert "name" in project_columns
+            assert "code" in project_columns
+            assert "status" in project_columns
+            assert "description" in project_columns
+
+            project_site_columns = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = 'project_sites'"
+                    )
+                ).all()
+            }
+            assert "project_id" in project_site_columns
+            assert "site_id" in project_site_columns
+            assert "organization_id" in project_site_columns
+
+            enum_types = {row[0] for row in conn.execute(text("SELECT typname FROM pg_type WHERE typtype = 'e'")).all()}
+            assert "project_status" in enum_types
+
+            status_values = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT enumlabel FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid "
+                        "WHERE t.typname = 'project_status'"
+                    )
+                ).all()
+            }
+            assert status_values == {"ACTIVE", "ON_HOLD", "COMPLETED", "CANCELLED"}
+    finally:
+        engine.dispose()

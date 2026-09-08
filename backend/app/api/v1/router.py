@@ -15,6 +15,7 @@ from app.api.v1 import (
     model_governance,
     organizations,
     predictions,
+    projects,
     rag,
     retrieval,
     risk_assessments,
@@ -24,6 +25,7 @@ from app.api.v1 import (
 api_router = APIRouter()
 api_router.include_router(organizations.router)
 api_router.include_router(sites.router)
+api_router.include_router(projects.router)
 api_router.include_router(data_sources.router)
 api_router.include_router(knowledge.router)
 api_router.include_router(memberships.router)

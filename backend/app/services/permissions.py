@@ -113,6 +113,17 @@ class Permission(str, Enum):
     # but never mutates it). A genuinely new capability, so one new
     # permission, not an overload of either.
     INTELLIGENCE_DECISION_WRITE = "intelligence:decision_write"
+    # SIE Milestone 35: Organizational & Operational Scope Foundation
+    # v0.1. `Project` sits alongside `Site` as an operational-scope
+    # entity (see app/models/project.py's own docstring) -- not a
+    # "reading/writing intelligence" concern (INTELLIGENCE_*) and not
+    # "managing an intervention" (INTERVENTION_*). Checked against the
+    # existing vocabulary first, same discipline as items 21/34 above; a
+    # genuinely new capability, so two new permissions mirroring
+    # SITE_READ/SITE_MANAGE's own shape exactly, granted to the same
+    # roles as their Site counterparts (see ROLE_PERMISSIONS below).
+    PROJECT_READ = "project:read"
+    PROJECT_MANAGE = "project:manage"
 
 
 ALL_PERMISSIONS: frozenset[Permission] = frozenset(Permission)
@@ -132,6 +143,8 @@ ROLE_PERMISSIONS: dict[OrganizationRole, frozenset[Permission]] = {
             Permission.ORGANIZATION_READ,
             Permission.SITE_READ,
             Permission.SITE_MANAGE,
+            Permission.PROJECT_READ,
+            Permission.PROJECT_MANAGE,
             Permission.KNOWLEDGE_READ,
             Permission.KNOWLEDGE_MANAGE,
             Permission.KNOWLEDGE_VERIFY,
@@ -155,6 +168,7 @@ ROLE_PERMISSIONS: dict[OrganizationRole, frozenset[Permission]] = {
         {
             Permission.ORGANIZATION_READ,
             Permission.SITE_READ,
+            Permission.PROJECT_READ,
             Permission.KNOWLEDGE_READ,
             Permission.KNOWLEDGE_MANAGE,
             Permission.SAFETY_DATA_READ,
@@ -172,6 +186,7 @@ ROLE_PERMISSIONS: dict[OrganizationRole, frozenset[Permission]] = {
         {
             Permission.ORGANIZATION_READ,
             Permission.SITE_READ,
+            Permission.PROJECT_READ,
             Permission.KNOWLEDGE_READ,
             Permission.SAFETY_DATA_READ,
             Permission.SAFETY_DATA_WRITE,
@@ -185,6 +200,7 @@ ROLE_PERMISSIONS: dict[OrganizationRole, frozenset[Permission]] = {
         {
             Permission.ORGANIZATION_READ,
             Permission.SITE_READ,
+            Permission.PROJECT_READ,
             Permission.KNOWLEDGE_READ,
             Permission.SAFETY_DATA_READ,
             Permission.INTELLIGENCE_READ,

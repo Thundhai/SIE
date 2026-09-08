@@ -64,6 +64,7 @@ from app.intelligence.features import feature_engineering_service
 from app.intelligence.ingestion_service import safety_event_ingestion_service
 from app.intelligence.schemas import RawSafetyEventPayload
 from app.intelligence.signals import risk_signal_service
+from app.models.project import Project
 from app.models.site import Site
 from app.schemas.attention import (
     AttentionCategoryStatusRead,
@@ -93,6 +94,9 @@ from app.schemas.field_intelligence_context import (
     ObservedActionRead,
     ObservedFactRead,
     ObservedFindingRead,
+    OperationalScopeProjectRead,
+    OperationalScopeRead,
+    OperationalScopeSiteRead,
     PredictiveSignalRead,
 )
 from app.schemas.intelligence import (
@@ -112,6 +116,8 @@ from app.schemas.intelligence import (
 )
 from app.schemas.retrieval import RetrievalResultRead
 from app.services.permissions import Permission
+from app.services.project_service import resolve_project_reference
+from app.services.project_site_service import project_site_ids
 
 router = APIRouter(prefix="/intelligence", tags=["intelligence"])
 
@@ -509,7 +515,44 @@ def _to_retrieval_result_read(r) -> RetrievalResultRead:
     )
 
 
-def _to_field_intelligence_context_read(result: FieldIntelligenceContextResult) -> FieldIntelligenceContextRead:
+def _build_operational_scope(
+    db: Session,
+    *,
+    organization_id: uuid.UUID,
+    level: str,
+    site: Site | None,
+    project_id: uuid.UUID | None,
+) -> OperationalScopeRead | None:
+    """SIE Milestone 35: builds the additive, current-state
+    `operational_scope` label for a Field Intelligence Context response.
+    Returns `None` when `project_id` was never supplied -- every pre-M35
+    caller's response is therefore byte-for-byte unchanged. `level` is
+    always the *actual* `scope` this request computed over
+    (`"ORGANIZATION"`/`"SITE"`) -- this function never computes
+    anything itself, only labels what was already computed (see this
+    module's own schema docstring for the full "label, never a second
+    computation engine" rationale)."""
+    if project_id is None:
+        return None
+    project = resolve_project_reference(db, organization_id=organization_id, project_id=project_id)
+    site_ids = project_site_ids(db, organization_id=organization_id, project_id=project.id)
+    if site is not None and site.id not in site_ids:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Site {site.id} is not currently associated with project {project.id}.",
+        )
+    return OperationalScopeRead(
+        level=level,
+        site=(OperationalScopeSiteRead(id=site.id, name=site.name) if site is not None else None),
+        project=OperationalScopeProjectRead(
+            id=project.id, name=project.name, code=project.code, status=project.status.value, site_ids=site_ids
+        ),
+    )
+
+
+def _to_field_intelligence_context_read(
+    result: FieldIntelligenceContextResult, *, operational_scope: OperationalScopeRead | None = None
+) -> FieldIntelligenceContextRead:
     observed = result.observed
     predictive = result.predictive
     knowledge = result.knowledge
@@ -549,6 +592,7 @@ def _to_field_intelligence_context_read(result: FieldIntelligenceContextResult) 
             result_count=(knowledge_response.result_count if knowledge_response else 0),
         ),
         calculation_versions=result.calculation_versions,
+        operational_scope=operational_scope,
     )
 
 
@@ -563,6 +607,12 @@ def field_intelligence_context(
     window_days: int = Query(default=settings.ENTERPRISE_INTELLIGENCE_DEFAULT_WINDOW_DAYS),
     knowledge_query: str | None = Query(default=None, min_length=1, max_length=2000),
     knowledge_top_k: int | None = Query(default=None, ge=1, le=settings.RETRIEVAL_MAX_TOP_K),
+    project_id: uuid.UUID | None = Query(
+        default=None,
+        description="SIE Milestone 35: optional operational-scope label. When supplied, the response's "
+        "`operational_scope.project` identifies this project (which must belong to `organization_id`) -- "
+        "purely additive, never changes what Observed/Deterministic/Predictive computed.",
+    ),
     context: RequestContext = Depends(require_context_permission(Permission.INTELLIGENCE_READ)),
     db: Session = Depends(get_db),
 ) -> FieldIntelligenceContextRead:
@@ -575,6 +625,9 @@ def field_intelligence_context(
     is optional: when omitted, the Knowledge/Evidence category reports
     `NOT_QUERIED` rather than fabricating a search from other fields."""
     _validate_window_days(window_days)
+    operational_scope = _build_operational_scope(
+        db, organization_id=organization_id, level="ORGANIZATION", site=None, project_id=project_id
+    )
     result = compose_field_intelligence_context(
         db,
         organization_id=organization_id,
@@ -585,7 +638,7 @@ def field_intelligence_context(
         knowledge_top_k=knowledge_top_k,
     )
     _audit_analytics_query(db, context=context, organization_id=organization_id, endpoint="context")
-    return _to_field_intelligence_context_read(result)
+    return _to_field_intelligence_context_read(result, operational_scope=operational_scope)
 
 
 @router.get(
@@ -600,6 +653,11 @@ def site_field_intelligence_context(
     window_days: int = Query(default=settings.ENTERPRISE_INTELLIGENCE_DEFAULT_WINDOW_DAYS),
     knowledge_query: str | None = Query(default=None, min_length=1, max_length=2000),
     knowledge_top_k: int | None = Query(default=None, ge=1, le=settings.RETRIEVAL_MAX_TOP_K),
+    project_id: uuid.UUID | None = Query(
+        default=None,
+        description="SIE Milestone 35: optional operational-scope label -- must currently be associated "
+        "with `site_id`, or this returns 400. See GET /intelligence/context's own description.",
+    ),
     context: RequestContext = Depends(require_context_permission(Permission.INTELLIGENCE_READ)),
     db: Session = Depends(get_db),
 ) -> FieldIntelligenceContextRead:
@@ -608,7 +666,10 @@ def site_field_intelligence_context(
     organization (or a nonexistent id) is a 404, never a 403, mirroring
     `site_intelligence()` above exactly."""
     _validate_window_days(window_days)
-    _require_owned_site(db, organization_id=organization_id, site_id=site_id)
+    site = _require_owned_site(db, organization_id=organization_id, site_id=site_id)
+    operational_scope = _build_operational_scope(
+        db, organization_id=organization_id, level="SITE", site=site, project_id=project_id
+    )
     result = compose_field_intelligence_context(
         db,
         organization_id=organization_id,
@@ -620,7 +681,7 @@ def site_field_intelligence_context(
         knowledge_top_k=knowledge_top_k,
     )
     _audit_analytics_query(db, context=context, organization_id=organization_id, endpoint="sites_context")
-    return _to_field_intelligence_context_read(result)
+    return _to_field_intelligence_context_read(result, operational_scope=operational_scope)
 
 
 # --- Attention & Delivery (SIE Milestone 33, human OR machine, tenant-authorized) ---

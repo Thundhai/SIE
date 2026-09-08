@@ -13,6 +13,25 @@ undifferentiated feed" rule). `deterministic` reuses
 `EnterpriseIntelligenceRead` verbatim (via composition, not
 inheritance) rather than redefining indicators/trend/anomaly/etc. a
 second time.
+
+**`operational_scope` (SIE Milestone 35: Organizational & Operational
+Scope Foundation v0.1) — a label, never a second computation.** Set only
+when the caller supplies `project_id` on `GET .../context` or
+`GET .../sites/{site_id}/context` (`app/api/v1/intelligence.py`); `None`
+otherwise, so every pre-M35 caller's response is byte-for-byte
+unchanged. `level` always states exactly what `deterministic`/
+`observed`/`predictive` were actually computed over — `"ORGANIZATION"`
+or `"SITE"`, the same `scope` this endpoint already accepts — never
+`"PROJECT"`: this milestone does not implement multi-site project-level
+intelligence aggregation (see `docs/OPERATIONAL_SCOPE_FOUNDATION_V0_1.md`'s
+"Limitations" section), so `operational_scope.project` is always a
+*label* identifying which project this call also concerns, never a
+claim that the numbers above were filtered to that project's sites.
+`project.site_ids` is the project's *current* `ProjectSite` membership
+at the moment of this API call — not reconstructed as of `as_of` (see
+`app/models/project_site.py`'s own "point-in-time integrity" section);
+a historical `as_of` request's `project.site_ids` reflects today's
+relationships, never that historical instant's.
 """
 
 from __future__ import annotations
@@ -20,7 +39,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.schemas.enterprise_intelligence import (
     ActionsContextRead,
@@ -76,6 +95,29 @@ class KnowledgeEvidenceRead(BaseModel):
     result_count: int
 
 
+class OperationalScopeSiteRead(BaseModel):
+    id: uuid.UUID
+    name: str
+
+
+class OperationalScopeProjectRead(BaseModel):
+    id: uuid.UUID
+    name: str
+    code: str | None
+    status: str
+    site_ids: list[uuid.UUID] = Field(
+        default_factory=list,
+        description="The project's CURRENT associated site ids -- not reconstructed as of `as_of`. "
+        "See this module's own docstring.",
+    )
+
+
+class OperationalScopeRead(BaseModel):
+    level: str = "ORGANIZATION | SITE -- what deterministic/observed/predictive were actually computed over"
+    site: OperationalScopeSiteRead | None = None
+    project: OperationalScopeProjectRead | None = None
+
+
 class FieldIntelligenceContextRead(BaseModel):
     scope: str
     organization_id: uuid.UUID
@@ -88,6 +130,7 @@ class FieldIntelligenceContextRead(BaseModel):
     predictive: PredictiveSignalRead
     knowledge: KnowledgeEvidenceRead
     calculation_versions: dict[str, str]
+    operational_scope: OperationalScopeRead | None = None
 
 
 __all__ = [
@@ -96,5 +139,8 @@ __all__ = [
     "ObservedFactRead",
     "PredictiveSignalRead",
     "KnowledgeEvidenceRead",
+    "OperationalScopeSiteRead",
+    "OperationalScopeProjectRead",
+    "OperationalScopeRead",
     "FieldIntelligenceContextRead",
 ]

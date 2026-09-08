@@ -32,6 +32,8 @@ from app.models.organization import Organization
 from app.models.organization_membership import OrganizationMembership
 from app.models.prediction import Prediction
 from app.models.prediction_outcome import PredictionOutcome
+from app.models.project import Project
+from app.models.project_site import ProjectSite
 from app.models.risk_assessment import (
     RiskAssessment,
     RiskAssessmentControl,
@@ -76,6 +78,8 @@ __all__ = [
     "OrganizationMembership",
     "Prediction",
     "PredictionOutcome",
+    "Project",
+    "ProjectSite",
     "RiskAssessment",
     "RiskAssessmentControl",
     "RiskAssessmentControlEvidence",
