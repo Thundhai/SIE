@@ -21,9 +21,24 @@ automatically if no real PostgreSQL + pgvector server is reachable.
 
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, text
 
 from tests.postgres_support import PG_TEST_DATABASE_URL, requires_postgres
+
+
+def _current_head_revision(config: Config) -> str:
+    """Resolves the migration chain's actual current head via Alembic's
+    own `ScriptDirectory` API -- never a hardcoded literal. Every
+    "still/now at head" assertion in this file must compare against
+    this, not a string like `"0020"`, so a new migration becoming the
+    new true head (e.g. `0021`) never re-breaks this test class the way
+    SIE Milestone 34 did. (A `downgrade(config, "0017")` -- or any other
+    *specific historical* target -- is a different thing entirely: that
+    literal names the migration under test's own predecessor and is
+    correct forever, regardless of where head later moves; only "head"
+    itself is the moving target this helper exists for.)"""
+    return ScriptDirectory.from_config(config).get_current_head()
 
 
 def _fresh_schema_engine():
@@ -60,12 +75,13 @@ def test_fresh_postgres_database_migrates_through_head_with_no_manual_interventi
         # here is what makes `command.upgrade()` below target it instead
         # of the application's own configured database.
         monkeypatch.setattr("app.core.config.settings.DATABASE_URL", PG_TEST_DATABASE_URL)
+        config = _alembic_config()
 
-        command.upgrade(_alembic_config(), "head")
+        command.upgrade(config, "head")
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0020"
+            assert version == _current_head_revision(config)
 
             enum_types = {
                 row[0]
@@ -267,7 +283,7 @@ def test_downgrade_then_reupgrade_round_trips_cleanly(monkeypatch):
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0020"
+            assert version == _current_head_revision(config)
     finally:
         engine.dispose()
 
@@ -309,7 +325,7 @@ def test_intelligence_migration_downgrade_then_reupgrade_round_trips_cleanly(mon
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0020"
+            assert version == _current_head_revision(config)
 
             tables = {
                 row[0]
@@ -365,7 +381,7 @@ def test_predictive_modeling_migration_downgrade_then_reupgrade_round_trips_clea
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0020"
+            assert version == _current_head_revision(config)
 
             tables = {
                 row[0]
@@ -436,7 +452,7 @@ def test_governance_migration_downgrade_then_reupgrade_round_trips_cleanly(monke
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0020"
+            assert version == _current_head_revision(config)
 
             tables = {
                 row[0]
@@ -525,7 +541,7 @@ def test_enterprise_api_migration_downgrade_then_reupgrade_round_trips_cleanly(m
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0020"
+            assert version == _current_head_revision(config)
 
             tables = {
                 row[0]
@@ -633,7 +649,7 @@ def test_data_ingestion_migration_downgrade_then_reupgrade_round_trips_cleanly(m
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0020"
+            assert version == _current_head_revision(config)
 
             tables = {
                 row[0]
@@ -776,7 +792,7 @@ def test_real_enterprise_terminology_ontology_calibration_migration_downgrade_th
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0020"
+            assert version == _current_head_revision(config)
 
             tables = {
                 row[0]
@@ -851,7 +867,7 @@ def test_sie_enterprise_ontology_migration_downgrade_then_reupgrade_round_trips_
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0020"
+            assert version == _current_head_revision(config)
 
             tables = {
                 row[0]
@@ -947,7 +963,7 @@ def test_actions_and_intervention_migration_downgrade_then_reupgrade_round_trips
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0020"
+            assert version == _current_head_revision(config)
 
             tables = {
                 row[0]
@@ -1046,7 +1062,7 @@ def test_risk_assessment_migration_downgrade_then_reupgrade_round_trips_cleanly(
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0020"
+            assert version == _current_head_revision(config)
 
             tables = {
                 row[0]
@@ -1214,7 +1230,7 @@ def test_risk_assessment_ontology_taxonomy_migration_downgrade_then_reupgrade_ro
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0020"
+            assert version == _current_head_revision(config)
 
             concept_columns = {
                 row[0]
@@ -1411,7 +1427,7 @@ def test_formal_risk_assessment_engine_migration_downgrade_then_reupgrade_round_
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0020"
+            assert version == _current_head_revision(config)
 
             tables = {
                 row[0]
@@ -1538,7 +1554,7 @@ def test_formal_risk_assessment_engine_migration_downgrade_refuses_while_an_arch
             # The failed downgrade must not have left the schema
             # half-migrated -- still at head.
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0020"
+            assert version == _current_head_revision(config)
     finally:
         engine.dispose()
 
@@ -1653,7 +1669,7 @@ def test_finding_action_relationship_migration_downgrade_then_reupgrade_round_tr
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0020"
+            assert version == _current_head_revision(config)
 
             tables = {
                 row[0]
@@ -1740,7 +1756,7 @@ def test_finding_action_relationship_migration_preserves_existing_m26_data_on_fr
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0020"
+            assert version == _current_head_revision(config)
 
             relationship = conn.execute(
                 text(
@@ -1916,7 +1932,7 @@ def test_control_effectiveness_evidence_migration_downgrade_then_reupgrade_round
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0020"
+            assert version == _current_head_revision(config)
 
             tables = {
                 row[0]
@@ -2024,7 +2040,7 @@ def test_control_effectiveness_evidence_migration_downgrade_refuses_with_new_con
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-            assert version == "0020"
+            assert version == _current_head_revision(config)
     finally:
         engine.dispose()
 
@@ -2093,6 +2109,123 @@ def test_control_effectiveness_evidence_migration_downgrade_refuses_with_new_sta
 
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version == _current_head_revision(config)
+    finally:
+        engine.dispose()
+
+
+@requires_postgres
+def test_intelligence_decision_migration_downgrade_then_reupgrade_round_trips_cleanly(monkeypatch):
+    """SIE Milestone 34: Human Decision & Intervention Trace (migration
+    0021). Downgrading to 0020 must drop `intelligence_decisions`
+    entirely, along with its own native `intelligence_decision_type`
+    enum type, while leaving every 0020-and-earlier table/type/enum
+    value untouched. Re-upgrading to head must recreate the table and
+    enum type correctly, with every decision-type value intact."""
+    engine = _fresh_schema_engine()
+    try:
+        monkeypatch.setattr("app.core.config.settings.DATABASE_URL", PG_TEST_DATABASE_URL)
+        config = _alembic_config()
+
+        command.upgrade(config, "head")
+
+        with engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version == _current_head_revision(config)
+
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+                ).all()
+            }
+            assert "intelligence_decisions" in tables
+
+            enum_types = {row[0] for row in conn.execute(text("SELECT typname FROM pg_type WHERE typtype = 'e'")).all()}
+            assert "intelligence_decision_type" in enum_types
+
+            decision_values = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT enumlabel FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid "
+                        "WHERE t.typname = 'intelligence_decision_type'"
+                    )
+                ).all()
+            }
+            assert decision_values == {"ACT", "DO_NOT_ACT", "DEFER", "ALREADY_ADDRESSED", "NOT_RELEVANT"}
+
+        command.downgrade(config, "0020")
+
+        with engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
             assert version == "0020"
+
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+                ).all()
+            }
+            assert "intelligence_decisions" not in tables
+            # Untouched by 0021's downgrade.
+            assert "risk_assessment_control_evidence" in tables
+            assert "risk_assessments" in tables
+            assert "safety_actions" in tables
+            assert "ontology_concepts" in tables
+
+            enum_types = {row[0] for row in conn.execute(text("SELECT typname FROM pg_type WHERE typtype = 'e'")).all()}
+            assert "intelligence_decision_type" not in enum_types
+            # Not dropped/redefined by this migration's downgrade.
+            assert "risk_control_effectiveness" in enum_types
+
+        command.upgrade(config, "head")
+
+        with engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version == _current_head_revision(config)
+
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+                ).all()
+            }
+            assert "intelligence_decisions" in tables
+
+            decision_columns = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = 'intelligence_decisions'"
+                    )
+                ).all()
+            }
+            assert "organization_id" in decision_columns
+            assert "site_id" in decision_columns
+            assert "attention_reference" in decision_columns
+            assert "attention_category" in decision_columns
+            assert "attention_priority" in decision_columns
+            assert "decision" in decision_columns
+            assert "rationale" in decision_columns
+            assert "linked_action_id" in decision_columns
+            assert "decided_by_user_id" in decision_columns
+            assert "decided_by_api_client_id" in decision_columns
+            assert "decided_at" in decision_columns
+
+            enum_types = {row[0] for row in conn.execute(text("SELECT typname FROM pg_type WHERE typtype = 'e'")).all()}
+            assert "intelligence_decision_type" in enum_types
+
+            decision_values = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT enumlabel FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid "
+                        "WHERE t.typname = 'intelligence_decision_type'"
+                    )
+                ).all()
+            }
+            assert decision_values == {"ACT", "DO_NOT_ACT", "DEFER", "ALREADY_ADDRESSED", "NOT_RELEVANT"}
     finally:
         engine.dispose()
