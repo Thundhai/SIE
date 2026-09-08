@@ -51,6 +51,7 @@ from app.api.deps_rate_limit import RateLimitClass, require_rate_limit
 from app.core.config import settings
 from app.intelligence.adapters import GenericJSONAdapter
 from app.intelligence.analytics import compute_summary, compute_trend
+from app.intelligence.attention import AttentionResult, compose_attention
 from app.intelligence.context_composition import (
     FieldIntelligenceContextResult,
     compose_field_intelligence_context,
@@ -64,6 +65,12 @@ from app.intelligence.ingestion_service import safety_event_ingestion_service
 from app.intelligence.schemas import RawSafetyEventPayload
 from app.intelligence.signals import risk_signal_service
 from app.models.site import Site
+from app.schemas.attention import (
+    AttentionCategoryStatusRead,
+    AttentionEvidenceRead,
+    AttentionItemRead,
+    AttentionResultRead,
+)
 from app.schemas.enterprise_intelligence import (
     ActionsContextRead,
     ConcentrationContributorRead,
@@ -614,6 +621,93 @@ def site_field_intelligence_context(
     )
     _audit_analytics_query(db, context=context, organization_id=organization_id, endpoint="sites_context")
     return _to_field_intelligence_context_read(result)
+
+
+# --- Attention & Delivery (SIE Milestone 33, human OR machine, tenant-authorized) ---
+
+
+def _to_attention_read(result: AttentionResult) -> AttentionResultRead:
+    return AttentionResultRead(
+        scope=result.scope,
+        organization_id=result.organization_id,
+        entity_id=result.entity_id,
+        as_of=result.as_of,
+        window_days=result.window_days,
+        generated_at=result.generated_at,
+        items=[
+            AttentionItemRead(
+                category=item.category,
+                priority=item.priority,
+                title=item.title,
+                explanation=item.explanation,
+                scope=item.scope,
+                site_id=item.site_id,
+                site_label=item.site_label,
+                as_of=item.as_of,
+                window_days=item.window_days,
+                evidence=AttentionEvidenceRead(**vars(item.evidence)),
+                limitation=item.limitation,
+            )
+            for item in result.items
+        ],
+        category_statuses=[AttentionCategoryStatusRead(**vars(s)) for s in result.category_statuses],
+        calculation_versions=result.calculation_versions,
+    )
+
+
+@router.get(
+    "/attention",
+    response_model=AttentionResultRead,
+    dependencies=[Depends(require_rate_limit(RateLimitClass.READ))],
+)
+def organization_attention(
+    organization_id: uuid.UUID = Query(...),
+    as_of: datetime | None = Query(default=None),
+    window_days: int = Query(default=settings.ENTERPRISE_INTELLIGENCE_DEFAULT_WINDOW_DAYS),
+    context: RequestContext = Depends(require_context_permission(Permission.INTELLIGENCE_READ)),
+    db: Session = Depends(get_db),
+) -> AttentionResultRead:
+    """Organization-scope attention (SIE Milestone 33): "what should a
+    human pay attention to right now, and why?" -- built entirely on top
+    of the existing Field Intelligence Context (M32) and enterprise
+    intelligence orchestration (M22-24); see `app/intelligence/attention.py`
+    for the full category/prioritization contract. Read-only: this
+    endpoint creates nothing (no action, no finding, no intervention) --
+    it only surfaces and explains what already-existing intelligence
+    already computed. Permission-gated identically to
+    `/intelligence/enterprise` and `/intelligence/context` above (same
+    `INTELLIGENCE_READ` permission, same authorize-then-trust
+    `organization_id`)."""
+    _validate_window_days(window_days)
+    result = compose_attention(db, organization_id=organization_id, scope="organization", as_of=as_of, window_days=window_days)
+    _audit_analytics_query(db, context=context, organization_id=organization_id, endpoint="attention")
+    return _to_attention_read(result)
+
+
+@router.get(
+    "/sites/{site_id}/attention",
+    response_model=AttentionResultRead,
+    dependencies=[Depends(require_rate_limit(RateLimitClass.READ))],
+)
+def site_attention(
+    site_id: uuid.UUID,
+    organization_id: uuid.UUID = Query(...),
+    as_of: datetime | None = Query(default=None),
+    window_days: int = Query(default=settings.ENTERPRISE_INTELLIGENCE_DEFAULT_WINDOW_DAYS),
+    context: RequestContext = Depends(require_context_permission(Permission.INTELLIGENCE_READ)),
+    db: Session = Depends(get_db),
+) -> AttentionResultRead:
+    """Site-scope attention (SIE Milestone 33). The site must belong to
+    `organization_id` -- a site from a different organization (or a
+    nonexistent id) is a 404, never a 403, mirroring
+    `site_field_intelligence_context()` above exactly."""
+    _validate_window_days(window_days)
+    _require_owned_site(db, organization_id=organization_id, site_id=site_id)
+    result = compose_attention(
+        db, organization_id=organization_id, scope="site", site_id=site_id, as_of=as_of, window_days=window_days
+    )
+    _audit_analytics_query(db, context=context, organization_id=organization_id, endpoint="sites_attention")
+    return _to_attention_read(result)
 
 
 def _audit_analytics_query(db: Session, *, context: RequestContext, organization_id: uuid.UUID, endpoint: str) -> None:
