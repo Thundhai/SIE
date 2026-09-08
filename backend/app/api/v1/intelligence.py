@@ -51,6 +51,10 @@ from app.api.deps_rate_limit import RateLimitClass, require_rate_limit
 from app.core.config import settings
 from app.intelligence.adapters import GenericJSONAdapter
 from app.intelligence.analytics import compute_summary, compute_trend
+from app.intelligence.context_composition import (
+    FieldIntelligenceContextResult,
+    compose_field_intelligence_context,
+)
 from app.intelligence.enterprise_intelligence_service import (
     EnterpriseIntelligenceResult,
     compute_enterprise_intelligence,
@@ -76,6 +80,14 @@ from app.schemas.enterprise_intelligence import (
     RiskScoreComponentRead,
     RiskScoreRead,
 )
+from app.schemas.field_intelligence_context import (
+    FieldIntelligenceContextRead,
+    KnowledgeEvidenceRead,
+    ObservedActionRead,
+    ObservedFactRead,
+    ObservedFindingRead,
+    PredictiveSignalRead,
+)
 from app.schemas.intelligence import (
     AnalyticsSummaryRead,
     BatchIngestionRead,
@@ -91,6 +103,7 @@ from app.schemas.intelligence import (
     TrendPeriodRead,
     TrendResultRead,
 )
+from app.schemas.retrieval import RetrievalResultRead
 from app.services.permissions import Permission
 
 router = APIRouter(prefix="/intelligence", tags=["intelligence"])
@@ -445,6 +458,162 @@ def site_intelligence(
     )
     _audit_analytics_query(db, context=context, organization_id=organization_id, endpoint="sites")
     return _to_enterprise_intelligence_read(result)
+
+
+# --- Field Intelligence Context (SIE Milestone 32, human OR machine, tenant-authorized) ---
+
+
+def _to_retrieval_result_read(r) -> RetrievalResultRead:
+    """Identical field mapping to `app/api/v1/retrieval.py::search_knowledge()`'s
+    own inline construction — not a second retrieval implementation,
+    just the same one-time dataclass -> schema conversion every route
+    that returns a `RetrievalResult` performs for its own response
+    model."""
+    return RetrievalResultRead(
+        rank=r.rank,
+        chunk_id=r.chunk_id,
+        similarity=r.similarity,
+        relevance=r.relevance.value,
+        content=r.content,
+        content_type=r.content_type,
+        source_id=r.source_id,
+        document_id=r.document_id,
+        document_version_id=r.document_version_id,
+        source=r.source_name,
+        document=r.document_title,
+        version=r.version_label,
+        location=r.location,
+        page_number=r.page_number,
+        sheet_name=r.sheet_name,
+        row_number=r.row_number,
+        slide_number=r.slide_number,
+        section_title=r.section_title,
+        section_path=r.section_path,
+        extraction_quality=r.extraction_quality,
+        extraction_method=r.extraction_method,
+        source_authority_level=r.source_authority_level,
+        verification_status=r.verification_status,
+        scope=r.scope,
+        organization_id=r.organization_id,
+        jurisdiction=r.jurisdiction,
+        industry_sector=r.industry_sector,
+        publication_date=r.publication_date,
+        effective_date=r.effective_date,
+    )
+
+
+def _to_field_intelligence_context_read(result: FieldIntelligenceContextResult) -> FieldIntelligenceContextRead:
+    observed = result.observed
+    predictive = result.predictive
+    knowledge = result.knowledge
+    knowledge_response = knowledge.response
+    return FieldIntelligenceContextRead(
+        scope=result.scope,
+        organization_id=result.organization_id,
+        entity_id=result.entity_id,
+        as_of=result.as_of,
+        window_days=result.window_days,
+        generated_at=result.generated_at,
+        observed=ObservedFactRead(
+            outcome=observed.outcome,
+            unavailable_reason=observed.unavailable_reason,
+            event_count=observed.event_count,
+            evidence_sample_event_ids=observed.evidence_sample_event_ids,
+            open_finding_count=observed.open_finding_count,
+            open_finding_sample=[
+                ObservedFindingRead(**vars(f)) for f in observed.open_finding_sample
+            ],
+            open_finding_control_count=observed.open_finding_control_count,
+            actions=(ActionsContextRead(**vars(observed.actions)) if observed.actions else None),
+            open_action_sample=[ObservedActionRead(**vars(a)) for a in observed.open_action_sample],
+        ),
+        deterministic=_to_enterprise_intelligence_read(result.deterministic),
+        predictive=PredictiveSignalRead(
+            outcome=predictive.outcome,
+            value=(PredictiveContextRead(**vars(predictive.value)) if predictive.value else None),
+        ),
+        knowledge=KnowledgeEvidenceRead(
+            outcome=knowledge.outcome,
+            unavailable_reason=knowledge.unavailable_reason,
+            query=knowledge_response.query if knowledge_response else None,
+            results=(
+                [_to_retrieval_result_read(r) for r in knowledge_response.results] if knowledge_response else []
+            ),
+            result_count=(knowledge_response.result_count if knowledge_response else 0),
+        ),
+        calculation_versions=result.calculation_versions,
+    )
+
+
+@router.get(
+    "/context",
+    response_model=FieldIntelligenceContextRead,
+    dependencies=[Depends(require_rate_limit(RateLimitClass.READ))],
+)
+def field_intelligence_context(
+    organization_id: uuid.UUID = Query(...),
+    as_of: datetime | None = Query(default=None),
+    window_days: int = Query(default=settings.ENTERPRISE_INTELLIGENCE_DEFAULT_WINDOW_DAYS),
+    knowledge_query: str | None = Query(default=None, min_length=1, max_length=2000),
+    knowledge_top_k: int | None = Query(default=None, ge=1, le=settings.RETRIEVAL_MAX_TOP_K),
+    context: RequestContext = Depends(require_context_permission(Permission.INTELLIGENCE_READ)),
+    db: Session = Depends(get_db),
+) -> FieldIntelligenceContextRead:
+    """Organization-scope Field Intelligence Context (SIE Milestone 32).
+    Composes the four categories defined by
+    `backend/docs/SIE_FIELD_INTELLIGENCE_CONTEXT_V0_1.md` §7 — Observed,
+    Deterministic, Predictive, Knowledge/Evidence — never merging them.
+    `organization_id` is the same authorize-then-trust query parameter
+    every other endpoint in this router already uses. `knowledge_query`
+    is optional: when omitted, the Knowledge/Evidence category reports
+    `NOT_QUERIED` rather than fabricating a search from other fields."""
+    _validate_window_days(window_days)
+    result = compose_field_intelligence_context(
+        db,
+        organization_id=organization_id,
+        scope="organization",
+        as_of=as_of,
+        window_days=window_days,
+        knowledge_query=knowledge_query,
+        knowledge_top_k=knowledge_top_k,
+    )
+    _audit_analytics_query(db, context=context, organization_id=organization_id, endpoint="context")
+    return _to_field_intelligence_context_read(result)
+
+
+@router.get(
+    "/sites/{site_id}/context",
+    response_model=FieldIntelligenceContextRead,
+    dependencies=[Depends(require_rate_limit(RateLimitClass.READ))],
+)
+def site_field_intelligence_context(
+    site_id: uuid.UUID,
+    organization_id: uuid.UUID = Query(...),
+    as_of: datetime | None = Query(default=None),
+    window_days: int = Query(default=settings.ENTERPRISE_INTELLIGENCE_DEFAULT_WINDOW_DAYS),
+    knowledge_query: str | None = Query(default=None, min_length=1, max_length=2000),
+    knowledge_top_k: int | None = Query(default=None, ge=1, le=settings.RETRIEVAL_MAX_TOP_K),
+    context: RequestContext = Depends(require_context_permission(Permission.INTELLIGENCE_READ)),
+    db: Session = Depends(get_db),
+) -> FieldIntelligenceContextRead:
+    """Site-scope Field Intelligence Context (SIE Milestone 32). The
+    site must belong to `organization_id` — a site from a different
+    organization (or a nonexistent id) is a 404, never a 403, mirroring
+    `site_intelligence()` above exactly."""
+    _validate_window_days(window_days)
+    _require_owned_site(db, organization_id=organization_id, site_id=site_id)
+    result = compose_field_intelligence_context(
+        db,
+        organization_id=organization_id,
+        scope="site",
+        site_id=site_id,
+        as_of=as_of,
+        window_days=window_days,
+        knowledge_query=knowledge_query,
+        knowledge_top_k=knowledge_top_k,
+    )
+    _audit_analytics_query(db, context=context, organization_id=organization_id, endpoint="sites_context")
+    return _to_field_intelligence_context_read(result)
 
 
 def _audit_analytics_query(db: Session, *, context: RequestContext, organization_id: uuid.UUID, endpoint: str) -> None:
