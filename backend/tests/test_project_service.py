@@ -223,8 +223,34 @@ def test_attribute_event_to_project_sets_the_column(db_session):
     project = _create_project(db_session, org.id)
     event = _add_event(db_session, org.id)
 
-    updated = attribute_event_to_project(db_session, organization_id=org.id, event_id=event.id, project_id=project.id)
+    updated, changed = attribute_event_to_project(
+        db_session, organization_id=org.id, event_id=event.id, project_id=project.id
+    )
     assert updated.attributed_project_id == project.id
+    assert changed is True
+
+
+def test_attribute_event_to_project_to_its_already_attributed_project_is_a_true_no_op(db_session):
+    """SIE Milestone 35B: no history row, `changed=False` -- distinct
+    from re-attributing to a *different* project, which is a real
+    transition (see test_two_projects_at_the_same_site_... below)."""
+    from app.models.safety_event_project_attribution_history import SafetyEventProjectAttributionHistory
+    from app.services.safety_event_project_service import attribute_event_to_project
+
+    org = make_org(db_session)
+    project = _create_project(db_session, org.id)
+    event = _add_event(db_session, org.id)
+
+    attribute_event_to_project(db_session, organization_id=org.id, event_id=event.id, project_id=project.id)
+    _, changed_again = attribute_event_to_project(
+        db_session, organization_id=org.id, event_id=event.id, project_id=project.id
+    )
+    assert changed_again is False
+
+    history_count = db_session.execute(
+        select(SafetyEventProjectAttributionHistory).where(SafetyEventProjectAttributionHistory.event_id == event.id)
+    ).scalars().all()
+    assert len(history_count) == 1
 
 
 def test_attribute_event_to_project_404s_for_a_cross_tenant_event_or_project(db_session):
@@ -269,11 +295,17 @@ def test_attribute_event_to_project_allows_a_siteless_event_regardless_of_projec
     project = _create_project(db_session, org.id)
     event = _add_event(db_session, org.id, site_id=None)
 
-    updated = attribute_event_to_project(db_session, organization_id=org.id, event_id=event.id, project_id=project.id)
+    updated, _ = attribute_event_to_project(db_session, organization_id=org.id, event_id=event.id, project_id=project.id)
     assert updated.attributed_project_id == project.id
 
 
-def test_clear_event_project_attribution_is_idempotent(db_session):
+def test_clear_event_project_attribution_clears_and_then_404s_on_a_second_call(db_session):
+    """SIE Milestone 35B correction: `clear_event_project_attribution()`
+    is no longer unconditionally idempotent -- a second call, with
+    nothing left to clear, 404s rather than silently succeeding again
+    (the fix mirrors DELETE's own new "target must match current
+    attribution" rule; see test_clear_event_project_attribution_requires_the_target_project_to_match_current_attribution
+    below for the cross-project case)."""
     from app.services.safety_event_project_service import attribute_event_to_project, clear_event_project_attribution
 
     org = make_org(db_session)
@@ -281,10 +313,36 @@ def test_clear_event_project_attribution_is_idempotent(db_session):
     event = _add_event(db_session, org.id)
     attribute_event_to_project(db_session, organization_id=org.id, event_id=event.id, project_id=project.id)
 
-    cleared_once = clear_event_project_attribution(db_session, organization_id=org.id, event_id=event.id)
+    cleared_once = clear_event_project_attribution(
+        db_session, organization_id=org.id, event_id=event.id, project_id=project.id
+    )
     assert cleared_once.attributed_project_id is None
-    cleared_twice = clear_event_project_attribution(db_session, organization_id=org.id, event_id=event.id)
-    assert cleared_twice.attributed_project_id is None
+
+    with pytest.raises(HTTPException) as exc_info:
+        clear_event_project_attribution(db_session, organization_id=org.id, event_id=event.id, project_id=project.id)
+    assert exc_info.value.status_code == 404
+
+
+def test_clear_event_project_attribution_requires_the_target_project_to_match_current_attribution(db_session):
+    """SIE Milestone 35B's own correctness fix: clearing via a
+    `project_id` the event is NOT currently attributed to is rejected,
+    not silently accepted -- M35A's first cut ignored `project_id`
+    entirely beyond tenant-validating it."""
+    from app.services.safety_event_project_service import attribute_event_to_project, clear_event_project_attribution
+
+    org = make_org(db_session)
+    project_alpha = _create_project(db_session, org.id, name="Alpha", code="ALPHA")
+    project_beta = _create_project(db_session, org.id, name="Beta", code="BETA")
+    event = _add_event(db_session, org.id)
+    attribute_event_to_project(db_session, organization_id=org.id, event_id=event.id, project_id=project_alpha.id)
+
+    with pytest.raises(HTTPException) as exc_info:
+        clear_event_project_attribution(
+            db_session, organization_id=org.id, event_id=event.id, project_id=project_beta.id
+        )
+    assert exc_info.value.status_code == 404
+    db_session.refresh(event)
+    assert event.attributed_project_id == project_alpha.id
 
 
 def test_two_projects_at_the_same_site_do_not_both_claim_an_events_attribution(db_session):
@@ -309,18 +367,20 @@ def test_two_projects_at_the_same_site_do_not_both_claim_an_events_attribution(d
     # event to neither project.
     assert event.attributed_project_id is None
 
-    updated = attribute_event_to_project(
+    updated, changed = attribute_event_to_project(
         db_session, organization_id=org.id, event_id=event.id, project_id=project_alpha.id
     )
     assert updated.attributed_project_id == project_alpha.id
     assert updated.attributed_project_id != project_beta.id
+    assert changed is True
 
     # Re-attributing to Beta is a correction (overwrite), not an
     # additive claim -- the event is never attributed to both at once.
-    corrected = attribute_event_to_project(
+    corrected, corrected_changed = attribute_event_to_project(
         db_session, organization_id=org.id, event_id=event.id, project_id=project_beta.id
     )
     assert corrected.attributed_project_id == project_beta.id
+    assert corrected_changed is True
 
 
 def test_unlinking_a_site_from_a_project_does_not_retroactively_clear_an_already_attributed_event(db_session):

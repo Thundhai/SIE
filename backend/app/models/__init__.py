@@ -46,6 +46,7 @@ from app.models.risk_assessment_history import RiskAssessmentHistory
 from app.models.safety_action import SafetyAction
 from app.models.safety_action_history import SafetyActionHistory
 from app.models.safety_event import SafetyEvent
+from app.models.safety_event_project_attribution_history import SafetyEventProjectAttributionHistory
 from app.models.site import Site
 from app.models.terminology_mapping_decision import TerminologyMappingDecision
 from app.models.user import User
@@ -90,6 +91,7 @@ __all__ = [
     "SafetyAction",
     "SafetyActionHistory",
     "SafetyEvent",
+    "SafetyEventProjectAttributionHistory",
     "Site",
     "TerminologyMappingDecision",
     "User",

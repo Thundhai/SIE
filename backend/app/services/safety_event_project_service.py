@@ -1,5 +1,6 @@
 """SafetyEvent <-> Project attribution service — SIE Milestone 35A:
-Canonical Project Attribution Correction. The one write path for
+Canonical Project Attribution Correction; corrected by SIE Milestone
+35B: Project Attribution Temporal Integrity. The one write path for
 `SafetyEvent.attributed_project_id` — mirrors
 `app/services/project_site_service.py::link_project_site()`'s own
 "resolve both ends scoped to the caller's authorized organization_id
@@ -25,16 +26,48 @@ exception exists in this correction: the check is unconditional. When
 the event has no `site_id` at all, there is nothing to cross-check, and
 any project belonging to the same organization may be attributed.
 
+**Every genuine state transition writes a `SafetyEventProjectAttributionHistory`
+row (SIE Milestone 35B).** `SafetyEvent.attributed_project_id` remains
+the fast, current-state column every non-temporal read uses (event
+detail, `GET /projects/{id}/events`, the `DELETE` target-match check
+below), but it alone cannot answer "was this event Project Alpha's as
+of an earlier instant" once the event has ever been re-attributed or
+cleared — see `app/models/safety_event_project_attribution_history.py`'s
+own docstring for the full rationale and
+`app/intelligence/temporal.py::events_as_of()` for the point-in-time
+reconstruction this history now makes possible. A history row is
+written only on an actual transition: re-attributing an event to the
+project it is already attributed to, or clearing an event that is
+already unattributed, is a true no-op — no redundant row, no history
+noise (mirrors `ProjectSite`'s own "linking an already-linked pair is a
+no-op" idempotency precedent).
+
 **No automatic reconciliation.** If a site is later unlinked from a
 project (`DELETE /projects/{project_id}/sites/{site_id}`), any event
 already attributed to that project keeps its attribution — the
-attribution was a fact established at a specific time
-(`SafetyEvent.updated_at` records when), not a live view recomputed
-from `ProjectSite`'s current state. This mirrors `ProjectSite`'s own
-"no point-in-time reconstruction" limitation (see that model's own
-docstring) rather than inventing a second, inconsistent temporal model:
-this service does not attempt to reconcile past attributions against
-later relationship changes, and does not claim to.
+attribution was a fact established at a specific time (this history
+table's own `created_at` records exactly when), not a live view
+recomputed from `ProjectSite`'s current state. This mirrors
+`ProjectSite`'s own "no point-in-time reconstruction" limitation (see
+that model's own docstring) rather than inventing a second,
+inconsistent temporal model: this service does not attempt to
+reconcile past attributions against later relationship changes, and
+does not claim to.
+
+**`clear_event_project_attribution()` now requires the target project
+to match the event's current attribution (SIE Milestone 35B's own
+correctness fix).** M35A's version accepted any tenant-owned
+`project_id` in the URL and cleared whatever was currently attributed,
+regardless of whether it matched — `DELETE
+/projects/{beta_id}/events/{event_id}` would silently clear an
+attribution to Alpha. That is no longer accepted: the caller's
+`project_id` must equal `event.attributed_project_id` at the moment of
+the call, or this raises `404` (mirrors `unlink_project_site()`'s own
+"not currently associated" 404, not a new status-code convention).
+Calling it on an already-unattributed event is likewise `404` (there is
+no attribution for any `project_id` to match) — this is a deliberate,
+documented narrowing from M35A's own "always idempotent, never an
+error" framing; see `docs/OPERATIONAL_SCOPE_FOUNDATION_V0_1.md` §10.
 """
 
 from __future__ import annotations
@@ -46,6 +79,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.safety_event import SafetyEvent
+from app.models.safety_event_project_attribution_history import (
+    SafetyEventProjectAttributionAction,
+    SafetyEventProjectAttributionHistory,
+)
 from app.services.project_service import resolve_project_reference
 from app.services.project_site_service import project_site_ids
 
@@ -59,19 +96,59 @@ def _resolve_owned_event(db: Session, *, organization_id: uuid.UUID, event_id: u
     return event
 
 
+def _record_history(
+    db: Session,
+    *,
+    organization_id: uuid.UUID,
+    event_id: uuid.UUID,
+    project_id: uuid.UUID,
+    action: str,
+    changed_by_user_id: uuid.UUID | None,
+    changed_by_api_client_id: uuid.UUID | None,
+    request_id: str | None,
+) -> None:
+    db.add(
+        SafetyEventProjectAttributionHistory(
+            organization_id=organization_id,
+            event_id=event_id,
+            project_id=project_id,
+            action=action,
+            changed_by_user_id=changed_by_user_id,
+            changed_by_api_client_id=changed_by_api_client_id,
+            request_id=request_id,
+        )
+    )
+
+
 def attribute_event_to_project(
-    db: Session, *, organization_id: uuid.UUID, event_id: uuid.UUID, project_id: uuid.UUID
-) -> SafetyEvent:
+    db: Session,
+    *,
+    organization_id: uuid.UUID,
+    event_id: uuid.UUID,
+    project_id: uuid.UUID,
+    changed_by_user_id: uuid.UUID | None = None,
+    changed_by_api_client_id: uuid.UUID | None = None,
+    request_id: str | None = None,
+) -> tuple[SafetyEvent, bool]:
     """Sets `event.attributed_project_id = project_id`. Both the event
     and the project must belong to `organization_id` (404 otherwise).
     When the event has a `site_id`, `project_id` must currently be
     associated with that site via `ProjectSite`, or this raises `422`
     (see module docstring's "Validation rule"). Re-attributing an
     already-attributed event to a different project is allowed (a
-    correction, not blocked) — the previous value is simply overwritten;
-    callers that need to know a change occurred should compare the
-    returned row's previous state themselves or rely on the audit log
-    entry the API layer writes alongside this call."""
+    correction, not blocked) — the previous value is simply overwritten.
+    Calling this with the project the event is already attributed to is
+    a true no-op: no history row, `event.updated_at` untouched.
+    `changed_by_user_id`/`changed_by_api_client_id`/`request_id` are
+    recorded on the `SafetyEventProjectAttributionHistory` row this
+    writes on an actual transition (SIE Milestone 35B) — the same
+    actor/request-id convention `link_project_site()` already
+    established, threaded here for exactly the same reason.
+
+    Returns `(event, changed)` — `changed` mirrors `link_project_site()`'s
+    own `(link, created)` return-tuple precedent, so the caller (the API
+    route) knows whether to write an audit log entry: a true no-op wrote
+    nothing worth auditing."""
     event = _resolve_owned_event(db, organization_id=organization_id, event_id=event_id)
     project = resolve_project_reference(db, organization_id=organization_id, project_id=project_id)
 
@@ -87,16 +164,58 @@ def attribute_event_to_project(
                 ),
             )
 
+    if event.attributed_project_id == project.id:
+        return event, False
+
     event.attributed_project_id = project.id
+    _record_history(
+        db,
+        organization_id=organization_id,
+        event_id=event.id,
+        project_id=project.id,
+        action=SafetyEventProjectAttributionAction.ATTRIBUTED,
+        changed_by_user_id=changed_by_user_id,
+        changed_by_api_client_id=changed_by_api_client_id,
+        request_id=request_id,
+    )
     db.flush()
-    return event
+    return event, True
 
 
-def clear_event_project_attribution(db: Session, *, organization_id: uuid.UUID, event_id: uuid.UUID) -> SafetyEvent:
+def clear_event_project_attribution(
+    db: Session,
+    *,
+    organization_id: uuid.UUID,
+    event_id: uuid.UUID,
+    project_id: uuid.UUID,
+    changed_by_user_id: uuid.UUID | None = None,
+    changed_by_api_client_id: uuid.UUID | None = None,
+    request_id: str | None = None,
+) -> SafetyEvent:
     """Sets `event.attributed_project_id = NULL` -- returns the event to
-    its default, fully-valid "unattributed" state. Never an error, even
-    if it was already `NULL` (idempotent)."""
+    its default, fully-valid "unattributed" state. `project_id` (SIE
+    Milestone 35B) must equal `event.attributed_project_id` at the
+    moment of the call, or this raises `404` -- see module docstring's
+    own "now requires the target project to match" section for why this
+    is no longer unconditionally idempotent the way SIE Milestone 35A
+    first built it."""
     event = _resolve_owned_event(db, organization_id=organization_id, event_id=event_id)
+    if event.attributed_project_id != project_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Event {event.id} is not currently attributed to project {project_id}.",
+        )
+
+    _record_history(
+        db,
+        organization_id=organization_id,
+        event_id=event.id,
+        project_id=project_id,
+        action=SafetyEventProjectAttributionAction.CLEARED,
+        changed_by_user_id=changed_by_user_id,
+        changed_by_api_client_id=changed_by_api_client_id,
+        request_id=request_id,
+    )
     event.attributed_project_id = None
     db.flush()
     return event

@@ -422,7 +422,11 @@ def test_attribute_event_to_project_422s_when_the_project_is_not_associated_with
     assert response.status_code == 422
 
 
-def test_clear_event_project_attribution_over_http_is_idempotent(client, db_session):
+def test_clear_event_project_attribution_over_http_then_second_call_404s(client, db_session):
+    """SIE Milestone 35B correction: a repeat DELETE, with nothing left
+    to clear, now 404s rather than silently re-succeeding (M35A's
+    original "always idempotent" framing is deliberately narrowed --
+    see app/services/safety_event_project_service.py's own docstring)."""
     org, user, headers = _make_org_and_manager(client, db_session)
     project = _create_project(client, org["id"], headers).json()
     event = _seed_one_event(db_session, uuid.UUID(org["id"]))
@@ -435,10 +439,31 @@ def test_clear_event_project_attribution_over_http_is_idempotent(client, db_sess
     second = client.delete(
         f"/api/v1/projects/{project['id']}/events/{event.id}?organization_id={org['id']}", headers=headers
     )
-    assert second.status_code == 204
+    assert second.status_code == 404
 
     detail = client.get(f"/api/v1/events/{event.id}?organization_id={org['id']}", headers=headers)
     assert detail.json()["attributed_project_id"] is None
+
+
+def test_clear_event_project_attribution_over_http_rejects_a_mismatched_project(client, db_session):
+    """SIE Milestone 35B's own correctness fix: DELETE via a project the
+    event is not currently attributed to is rejected, not silently
+    accepted."""
+    org, user, headers = _make_org_and_manager(client, db_session)
+    project_alpha = _create_project(client, org["id"], headers, name="Alpha", code="ALPHA").json()
+    project_beta = _create_project(client, org["id"], headers, name="Beta", code="BETA").json()
+    event = _seed_one_event(db_session, uuid.UUID(org["id"]))
+    client.put(
+        f"/api/v1/projects/{project_alpha['id']}/events/{event.id}?organization_id={org['id']}", headers=headers
+    )
+
+    response = client.delete(
+        f"/api/v1/projects/{project_beta['id']}/events/{event.id}?organization_id={org['id']}", headers=headers
+    )
+    assert response.status_code == 404
+
+    detail = client.get(f"/api/v1/events/{event.id}?organization_id={org['id']}", headers=headers)
+    assert detail.json()["attributed_project_id"] == project_alpha["id"]
 
 
 def test_list_project_events_returns_only_attributed_events(client, db_session):
@@ -560,6 +585,77 @@ def test_project_scoped_context_genuinely_filters_event_count_not_merely_labels_
     assert alpha_context["operational_scope"]["project"]["filtered"] is True
     assert set(alpha_context["observed"]["evidence_sample_event_ids"]) == {str(e.id) for e in alpha_events}
     assert beta_context["observed"]["evidence_sample_event_ids"] == [str(beta_event.id)]
+
+
+def test_project_scoped_context_is_point_in_time_correct_across_a_reassignment(client, db_session):
+    """SIE Milestone 35B, end-to-end through the real
+    GET /intelligence/context pipeline (not just events_as_of() in
+    isolation): an event attributed to Alpha on June 20, reassigned to
+    Beta on June 25, must still show up in Alpha's `event_count` for an
+    `as_of` of June 23 (before the reassignment) and disappear from it
+    for an `as_of` of June 26 (after) -- while Beta's context shows the
+    opposite. History rows are written directly (backdating `created_at`
+    -- the real PUT/DELETE routes always use `utcnow()` and cannot be
+    backdated over HTTP) to simulate the two calls having actually
+    happened on those two dates."""
+    from app.models.safety_event_project_attribution_history import (
+        SafetyEventProjectAttributionAction,
+        SafetyEventProjectAttributionHistory,
+    )
+
+    org, user, headers = _make_org_and_manager(client, db_session)
+    site = _create_site(client, org["id"])
+    project_alpha = _create_project(client, org["id"], headers, name="Alpha", code="ALPHA").json()
+    project_beta = _create_project(client, org["id"], headers, name="Beta", code="BETA").json()
+    for project in (project_alpha, project_beta):
+        client.post(
+            f"/api/v1/projects/{project['id']}/sites?organization_id={org['id']}",
+            json={"site_id": site["id"]}, headers=headers,
+        )
+
+    org_uuid = uuid.UUID(org["id"])
+    site_uuid = uuid.UUID(site["id"])
+    event_time = datetime(2026, 6, 1, tzinfo=timezone.utc)
+    event = make_safety_event(
+        organization_id=org_uuid, site_id=site_uuid, event_type="INCIDENT",
+        event_time=event_time, ingestion_time=event_time, source_record_id=str(uuid.uuid4()),
+    )
+    db_session.add(event)
+    db_session.commit()
+    db_session.refresh(event)
+
+    db_session.add(
+        SafetyEventProjectAttributionHistory(
+            organization_id=org_uuid, event_id=event.id, project_id=uuid.UUID(project_alpha["id"]),
+            action=SafetyEventProjectAttributionAction.ATTRIBUTED,
+            created_at=datetime(2026, 6, 20, tzinfo=timezone.utc),
+        )
+    )
+    db_session.add(
+        SafetyEventProjectAttributionHistory(
+            organization_id=org_uuid, event_id=event.id, project_id=uuid.UUID(project_beta["id"]),
+            action=SafetyEventProjectAttributionAction.ATTRIBUTED,
+            created_at=datetime(2026, 6, 25, tzinfo=timezone.utc),
+        )
+    )
+    db_session.commit()
+
+    def context(project_id, as_of_day):
+        response = client.get(
+            "/api/v1/intelligence/context",
+            params={
+                "organization_id": org["id"], "project_id": project_id,
+                "as_of": datetime(2026, 6, as_of_day, tzinfo=timezone.utc).isoformat(),
+            },
+            headers=headers,
+        )
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    assert context(project_alpha["id"], 23)["observed"]["event_count"] == 1
+    assert context(project_alpha["id"], 26)["observed"]["event_count"] == 0
+    assert context(project_beta["id"], 26)["observed"]["event_count"] == 1
+    assert context(project_beta["id"], 23)["observed"]["event_count"] == 0
 
 
 def test_operational_scope_project_site_ids_reflects_current_not_historical_membership(client, db_session):

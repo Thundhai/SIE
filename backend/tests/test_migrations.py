@@ -2578,3 +2578,158 @@ def test_project_sites_composite_foreign_keys_reject_cross_tenant_rows_at_the_da
             conn.rollback()
     finally:
         engine.dispose()
+
+
+@requires_postgres
+def test_project_attribution_history_migration_downgrade_then_reupgrade_round_trips_cleanly(monkeypatch):
+    """SIE Milestone 35B: Project Attribution Temporal Integrity
+    (migration 0024). Downgrading to 0023 must remove
+    `safety_event_project_attribution_history` entirely, with everything
+    0023-and-earlier untouched. Re-upgrading to head must recreate it
+    correctly."""
+    engine = _fresh_schema_engine()
+    try:
+        monkeypatch.setattr("app.core.config.settings.DATABASE_URL", PG_TEST_DATABASE_URL)
+        config = _alembic_config()
+
+        command.upgrade(config, "head")
+
+        with engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version == _current_head_revision(config)
+
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+                ).all()
+            }
+            assert "safety_event_project_attribution_history" in tables
+
+            columns = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' "
+                        "AND table_name = 'safety_event_project_attribution_history'"
+                    )
+                ).all()
+            }
+            assert {"event_id", "project_id", "action", "created_at", "organization_id"} <= columns
+
+        command.downgrade(config, "0023")
+
+        with engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version == "0023"
+
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+                ).all()
+            }
+            assert "safety_event_project_attribution_history" not in tables
+            # Untouched by 0024's downgrade.
+            assert "safety_events" in tables
+            assert "project_sites" in tables
+
+            safety_event_columns = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = 'safety_events'"
+                    )
+                ).all()
+            }
+            assert "attributed_project_id" in safety_event_columns  # 0023's own, not touched by 0024
+
+        command.upgrade(config, "head")
+
+        with engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version == _current_head_revision(config)
+
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+                ).all()
+            }
+            assert "safety_event_project_attribution_history" in tables
+    finally:
+        engine.dispose()
+
+
+@requires_postgres
+def test_project_attribution_history_migration_backfills_existing_current_state_attributions(monkeypatch):
+    """SIE Milestone 35B's own explicit backfill requirement: a
+    `safety_events` row with `attributed_project_id` already set (from
+    SIE Milestone 35A-era code, before this history table existed) must
+    not silently vanish from every project-filtered query the moment
+    migration 0024 lands -- it needs a synthesized `ATTRIBUTED` history
+    row, using the event's own `updated_at` as the best-available
+    "when this was set" signal. Proven by inserting such a row *before*
+    running 0024, then asserting the backfilled history row appears with
+    exactly that timestamp."""
+    import uuid
+    from datetime import datetime, timezone
+
+    from sqlalchemy.orm import Session
+
+    from app.models.organization import Organization
+    from app.models.project import Project
+    from app.models.project_enums import ProjectStatus
+    from tests.intelligence_test_helpers import make_safety_event
+
+    engine = _fresh_schema_engine()
+    try:
+        monkeypatch.setattr("app.core.config.settings.DATABASE_URL", PG_TEST_DATABASE_URL)
+        config = _alembic_config()
+
+        command.upgrade(config, "0023")
+
+        with Session(engine) as session:
+            org = Organization(name="Backfill Test Org")
+            session.add(org)
+            session.commit()
+
+            project = Project(organization_id=org.id, name="Backfill Project", status=ProjectStatus.ACTIVE)
+            session.add(project)
+            session.commit()
+
+            event = make_safety_event(organization_id=org.id, site_id=None, source_record_id="backfill-event")
+            event.attributed_project_id = project.id
+            session.add(event)
+            session.commit()
+            event_id = event.id
+            project_id = project.id
+
+        # Force a specific, known updated_at -- distinct from created_at
+        # -- so the assertion below proves the migration reads
+        # updated_at specifically, not merely "some" timestamp.
+        forced_updated_at = datetime(2026, 3, 15, 9, 30, tzinfo=timezone.utc)
+        with engine.begin() as conn:
+            conn.execute(
+                text("UPDATE safety_events SET updated_at = :updated_at WHERE id = :id"),
+                {"updated_at": forced_updated_at, "id": event_id},
+            )
+
+        command.upgrade(config, "head")
+
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT project_id, action, created_at FROM safety_event_project_attribution_history "
+                    "WHERE event_id = :event_id"
+                ),
+                {"event_id": event_id},
+            ).all()
+            assert len(rows) == 1
+            backfilled_project_id, action, created_at = rows[0]
+            assert backfilled_project_id == project_id
+            assert action == "ATTRIBUTED"
+            assert created_at == forced_updated_at
+    finally:
+        engine.dispose()

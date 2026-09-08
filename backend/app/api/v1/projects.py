@@ -35,12 +35,18 @@ mirroring every other tenant-scoped resource in this codebase (see
 `app/services/project_site_service.py`).
 
 **Event attribution (SIE Milestone 35A) is the fix for M35's own
-"site membership ≠ project attribution" gap** — see
-`app/services/safety_event_project_service.py`'s own docstring for the
-full rationale. `PUT .../events/{event_id}` is idempotent by
-construction (it sets the exact target state, `project_id`, not "link
-if absent"); `DELETE .../events/{event_id}` clears it back to `NULL`
-(unattributed), also idempotently. Both are gated by
+"site membership ≠ project attribution" gap; SIE Milestone 35B makes
+it point-in-time correct and fixes `DELETE`'s own target-match gap** —
+see `app/services/safety_event_project_service.py`'s own docstring for
+the full rationale. `PUT .../events/{event_id}` sets the exact target
+state, `project_id` -- a true no-op (no history row, no audit entry)
+when the event is already attributed to that project, a correction
+(overwrite) when attributed elsewhere. `DELETE .../events/{event_id}`
+clears it back to `NULL` (unattributed) only when `project_id` equals
+the event's *current* attribution -- `404` otherwise, including when
+the event is already unattributed (SIE Milestone 35B correction: M35A's
+first cut ignored `project_id` beyond tenant-validating it and cleared
+unconditionally, which this fixes). Both are gated by
 `Permission.PROJECT_MANAGE` -- attributing an event to a project is a
 project-domain write, mirroring `POST .../sites`'s own gating exactly.
 """
@@ -285,19 +291,31 @@ def attribute_event_to_project_route(
     associated with that site (`422` otherwise) -- see
     `app/services/safety_event_project_service.py`'s own docstring for
     the full validation rule. Re-attributing an already-attributed
-    event to a different project is a correction, not an error."""
-    event = attribute_event_to_project(db, organization_id=organization_id, event_id=event_id, project_id=project_id)
-    db.commit()
-    audit_service.log(
+    event to a different project is a correction, not an error;
+    attributing an event to the project it is already attributed to is
+    a true no-op (no history row, no audit log entry -- SIE Milestone
+    35B)."""
+    event, changed = attribute_event_to_project(
         db,
-        action=AuditAction.SAFETY_EVENT_PROJECT_ATTRIBUTED,
-        resource_type="SafetyEvent",
-        resource_id=event.id,
         organization_id=organization_id,
-        user_id=context.user_id,
-        metadata={"event_id": str(event.id), "project_id": str(project_id)},
+        event_id=event_id,
+        project_id=project_id,
+        changed_by_user_id=context.user_id,
+        changed_by_api_client_id=context.api_client_id,
         request_id=request_id,
     )
+    db.commit()
+    if changed:
+        audit_service.log(
+            db,
+            action=AuditAction.SAFETY_EVENT_PROJECT_ATTRIBUTED,
+            resource_type="SafetyEvent",
+            resource_id=event.id,
+            organization_id=organization_id,
+            user_id=context.user_id,
+            metadata={"event_id": str(event.id), "project_id": str(project_id)},
+            request_id=request_id,
+        )
     return _to_event_summary_read(event)
 
 
@@ -315,13 +333,24 @@ def clear_event_project_attribution_route(
     db: Session = Depends(get_db),
 ) -> Response:
     """Clears `event_id`'s project attribution back to `NULL`
-    (unattributed) -- idempotent, never an error even if it was already
-    unattributed or attributed to a different project than
-    `project_id`. `project_id` itself is not otherwise used here beyond
-    being a required, tenant-validated path segment, mirroring
-    `DELETE .../sites/{site_id}`'s own shape."""
+    (unattributed). SIE Milestone 35B correction: `project_id` must
+    equal the event's *current* `attributed_project_id`, or this is
+    `404` -- clearing Alpha's attribution via
+    `DELETE /projects/{beta_id}/events/{event_id}` is rejected, not
+    silently accepted (M35A's original version ignored `project_id`
+    beyond tenant-validating it, which this fixes). Calling this on an
+    already-unattributed event is likewise `404` -- see
+    `app/services/safety_event_project_service.py`'s own docstring."""
     resolve_project_reference(db, organization_id=organization_id, project_id=project_id)
-    event = clear_event_project_attribution(db, organization_id=organization_id, event_id=event_id)
+    event = clear_event_project_attribution(
+        db,
+        organization_id=organization_id,
+        event_id=event_id,
+        project_id=project_id,
+        changed_by_user_id=context.user_id,
+        changed_by_api_client_id=context.api_client_id,
+        request_id=request_id,
+    )
     db.commit()
     audit_service.log(
         db,

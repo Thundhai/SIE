@@ -458,4 +458,154 @@ implementation, no `RiskAssessment`/`SafetyAction` schema change, no
 `anomalies`/`associations`/`predictive` project filtering, and no
 point-in-time project/site reconstruction — all unchanged from M35's
 own non-goals (§6) and this correction's own explicit instruction to
-stay narrow.
+stay narrow. **This last one — point-in-time reconstruction — is
+exactly what SIE Milestone 35B (§10) adds, but only for `SafetyEvent`'s
+own project *attribution*, never for `ProjectSite`'s site *membership***
+— §5's own limitation (a project's `site_ids` always reflects today's
+`ProjectSite` rows, never a historical `as_of`) is untouched by M35B
+and remains true after it. See §10.5 for the precise boundary between
+what is, and still is not, point-in-time correct after this milestone.
+
+## 10. SIE Milestone 35B: Project Attribution Temporal Integrity
+
+### 10.1 The problem M35A missed
+
+M35A gave `SafetyEvent.attributed_project_id` — a single current-state
+column — and filtered `events_as_of(project_id=...)` on that column
+directly. Correct for "as of right now," silently wrong for any
+historical `as_of`: an event attributed to Project Alpha on June 20,
+reassigned to Project Beta on June 25, asked about ("Alpha's
+intelligence as of June 23") would incorrectly read as "always Beta" —
+even though the event genuinely was Alpha's as of that instant. A
+single current-state column cannot answer a question about the past
+once the present has changed.
+
+### 10.2 Two options considered, and why a small history table was chosen
+
+**Option A — a single `project_attributed_at` timestamp alongside
+`attributed_project_id`.** Rejected: insufficient on its own. The
+worked example above is the proof — after the June 25 reassignment,
+`attributed_project_id` reads Beta and a single timestamp cannot
+recover "it was Alpha before that instant, for whichever earlier
+instants the caller might ask about." A single timestamp can express
+*when the current value became current*, never a sequence of past
+values.
+
+**Option B — an append-only attribution history table.** Chosen. A
+`SafetyEventProjectAttributionHistory` row per state transition
+(`ATTRIBUTED`/`CLEARED`, `event_id`, `project_id`, `created_at`) is the
+minimum structure that can answer "what was true as of instant T" for
+any T, by finding the most recent qualifying row at or before T. See
+`app/models/safety_event_project_attribution_history.py`'s own
+docstring for the full schema and reconstruction-query rationale, and
+`app/intelligence/temporal.py::events_as_of()`'s own docstring for the
+SQL that does the reconstruction.
+
+**Option C — prohibit project-filtered historical intelligence
+outright.** Considered and rejected as unnecessarily regressive: M35A
+had already shipped a `project_id` parameter callers could combine with
+a historical `as_of`, and simply refusing that combination (rather than
+answering it correctly) would be a worse outcome than the small,
+narrow mechanism Option B actually required. Given where this system's
+own trajectory is heading (eventual outcome/learning work that will
+itself need to reason about "what did we know, attributed to which
+project, at a given point in time"), building the correct mechanism now
+— while it is still small — was judged preferable to deferring it.
+
+**Why not a full bitemporal model, or a dedicated ordering/sequence
+column.** Neither `RiskAssessmentHistory` nor `SafetyActionHistory` —
+the two existing history tables inspected before building this one, per
+this milestone's own instruction to inspect the existing architecture
+first — carries a business-time column distinct from `created_at`, or
+an ordering tiebreaker beyond `created_at` itself; both accept the same
+microsecond-resolution-only ordering this table now also accepts (see
+`app/models/safety_event_project_attribution_history.py`'s own
+docstring for the full reasoning). Matching that established precedent
+was judged more consistent than inventing new machinery — an
+autoincrement/sequence column would be the first of its kind anywhere
+in this schema (every table uses a UUID primary key).
+
+### 10.3 Deterministic re-attribution and clearing semantics
+
+- A history row is written only on an actual state transition.
+  Attributing an event to the project it is already attributed to, or
+  clearing an already-unattributed event, is a true no-op: no history
+  row, no audit log entry (`attribute_event_to_project()` now returns
+  `(event, changed)`, mirroring `link_project_site()`'s own
+  `(link, created)` precedent).
+- Re-attributing an already-attributed event to a *different* project
+  is a real transition: a new `ATTRIBUTED` row, naming the new project.
+  The event is never attributed to two projects "at once" — proven by
+  `tests/test_project_attribution_temporal.py::test_two_projects_never_simultaneously_claim_the_same_event_at_any_instant`.
+- `SafetyEvent.attributed_project_id` remains the fast, current-state
+  answer every non-temporal read uses (event detail, `GET
+  /projects/{id}/events`, the `DELETE` target-match check below) — this
+  milestone does not remove or bypass it, it adds the one place
+  (`events_as_of()`) that needs point-in-time correctness instead.
+
+### 10.4 `DELETE` now requires the target project to match
+
+M35A's `DELETE /projects/{project_id}/events/{event_id}` accepted any
+tenant-owned `project_id` in the URL and cleared whatever was currently
+attributed, regardless of whether it matched — `DELETE
+/projects/{beta_id}/events/{event_id}` would silently clear an
+attribution to Alpha. SIE Milestone 35B fixes this:
+`clear_event_project_attribution()` now requires `project_id` to equal
+`event.attributed_project_id` at the moment of the call, or raises
+`404` (mirroring `unlink_project_site()`'s own "not currently
+associated" 404) — including when the event is already unattributed
+(there is nothing for any `project_id` to match). This is a deliberate
+narrowing from M35A's "always idempotent, never an error" framing: a
+second `DELETE` call now `404`s rather than silently re-succeeding. See
+`app/services/safety_event_project_service.py`'s own docstring and
+`tests/test_project_service.py::test_clear_event_project_attribution_requires_the_target_project_to_match_current_attribution`
+/ `tests/test_projects_api.py::test_clear_event_project_attribution_over_http_rejects_a_mismatched_project`.
+
+### 10.5 Exactly what is, and is not, point-in-time correct after this milestone
+
+| Point-in-time correct after M35B | Still current-state only |
+|---|---|
+| `SafetyEvent`'s own project attribution, via `events_as_of(project_id=...)` and everything built on it (`compute_enterprise_intelligence()`'s indicators/trend/concentration/recurrence/risk/explanations, Field Intelligence Context's `observed.event_count`/`evidence_sample_event_ids`) | `ProjectSite` — a project's `site_ids` (§5) always reflects *today's* membership, never reconstructed as of `as_of`; unchanged by this milestone |
+| | `deterministic.anomalies`/`associations` — separate baseline queries, not threaded with `project_id` at all (§9.4, unchanged) |
+| | `observed.actions`/`open_action_sample`, `observed.open_finding_sample`, `predictive` — no project attribution mechanism exists for these at all (§9.3/§9.4, unchanged) |
+
+### 10.6 Backfill
+
+Migration `0024` synthesizes one `ATTRIBUTED` history row for every
+`safety_events` row that already had `attributed_project_id` set before
+this history table existed (necessarily written by M35A-era code), so
+such a row does not silently disappear from every project-filtered
+query the moment this migration lands. The synthesized row's
+`created_at` uses that event's own `updated_at` — the closest available
+signal, though not exact if the row was touched by something unrelated
+afterward. This runs only against whatever M35A-era data exists in this
+development branch; there is no real production data behind it. See
+`tests/test_migrations.py::test_project_attribution_history_migration_backfills_existing_current_state_attributions`.
+
+### 10.7 Tests added by this milestone
+
+- `tests/test_project_attribution_temporal.py`: direct `events_as_of()`
+  query-level tests, including the user's own full worked example
+  (attribute Alpha June 20 → as_of June 10 excluded, June 21 included;
+  reassign to Beta June 25 → Alpha as_of June 23 still included, June 26
+  excluded; Beta as_of June 26 included), a cleared-attribution case, the
+  live "as of now" regression check, the no-attribution-at-all
+  preservation check, and the two-projects-never-simultaneous check.
+- `tests/test_projects_api.py`: an end-to-end HTTP test through the real
+  `GET /intelligence/context` pipeline proving the same point-in-time
+  correctness (not just `events_as_of()` in isolation), plus the two new
+  `DELETE`-fix tests (§10.4).
+- `tests/test_project_service.py`: the no-op-attribution (`changed=False`)
+  test and the two `clear_event_project_attribution()` correctness tests
+  (second-call `404`, mismatched-project `404`).
+- `tests/test_migrations.py`: a migration `0024` downgrade/re-upgrade
+  round-trip, and the backfill proof (§10.6).
+
+### 10.8 Explicitly out of scope for this milestone
+
+No project-management features, no new ML, no outcome/learning
+implementation, no `SafetyAction`/`RiskAssessment` schema change (§9.3
+unchanged), no `anomalies`/`associations`/`predictive` project
+filtering (§9.4/§10.5 unchanged), and no `ProjectSite` point-in-time
+history (§5/§10.5 unchanged) — all consistent with this milestone's own
+explicit instruction to keep the correction narrow.

@@ -117,14 +117,17 @@ class OperationalScopeProjectRead(BaseModel):
     filtered: bool = Field(
         True,
         description=(
-            "SIE Milestone 35A. Always true when this field is present: observed.event_count/"
-            "evidence_sample_event_ids and deterministic.indicators/trend/concentrations/patterns/risk are "
-            "genuinely computed only from SafetyEvent rows explicitly attributed to this project "
-            "(SafetyEvent.attributed_project_id) -- never merely site co-located. "
-            "deterministic.anomalies/associations, predictive, observed.actions/open_action_sample, and "
-            "observed.open_finding_sample are NOT filtered by project (SafetyAction/RiskAssessmentFinding "
-            "carry no project attribution, and Prediction has no project dimension at all) and continue to "
-            "reflect the full site/organization population -- see "
+            "SIE Milestone 35A, made point-in-time correct by SIE Milestone 35B. Always true when this field "
+            "is present: observed.event_count/evidence_sample_event_ids and deterministic.indicators/trend/"
+            "concentrations/patterns/risk are genuinely computed only from SafetyEvent rows attributed to this "
+            "project AS OF this response's own `as_of` -- reconstructed from the append-only "
+            "SafetyEventProjectAttributionHistory log, never merely the current-state "
+            "SafetyEvent.attributed_project_id column and never merely site co-location, so a historical `as_of` "
+            "correctly reflects what this project's attribution genuinely was at that instant even across a "
+            "later re-attribution or clear. deterministic.anomalies/associations, predictive, "
+            "observed.actions/open_action_sample, and observed.open_finding_sample are NOT filtered by project "
+            "(SafetyAction/RiskAssessmentFinding carry no project attribution, and Prediction has no project "
+            "dimension at all) and continue to reflect the full site/organization population -- see "
             "docs/OPERATIONAL_SCOPE_FOUNDATION_V0_1.md's 'Project attribution' section for the complete list."
         ),
     )
