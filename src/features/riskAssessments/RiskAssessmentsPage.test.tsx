@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
@@ -9,8 +9,14 @@ import { RiskAssessmentsPage } from './RiskAssessmentsPage';
 vi.mock('../../services/api/riskAssessments', () => ({
   listRiskAssessments: vi.fn(),
 }));
+vi.mock('../../services/api/sites', () => ({
+  listSites: vi.fn(),
+}));
 
 import { listRiskAssessments } from '../../services/api/riskAssessments';
+import { listSites } from '../../services/api/sites';
+
+vi.mocked(listSites).mockResolvedValue([]);
 
 const ORGANIZATION = { id: 'org-1', name: 'Acme' };
 
@@ -60,7 +66,7 @@ describe('RiskAssessmentsPage', () => {
 
     await waitFor(() => expect(screen.getByRole('table')).toBeInTheDocument());
     expect(screen.getByText('Q3 Enterprise Assessment')).toBeInTheDocument();
-    expect(screen.getByText('Approved')).toBeInTheDocument();
+    expect(within(screen.getByRole('table')).getByText('Approved')).toBeInTheDocument();
     expect(screen.queryByText(ONE_ASSESSMENT.id)).not.toBeInTheDocument();
   });
 
@@ -100,5 +106,34 @@ describe('RiskAssessmentsPage', () => {
       </AuthProviderStub>,
     );
     expect(screen.getByText('No organization context available')).toBeInTheDocument();
+  });
+
+  it('re-queries with the real status/scope filters the backend supports', async () => {
+    vi.mocked(listRiskAssessments).mockResolvedValue({ items: [ONE_ASSESSMENT], total: 1, page: 1, page_size: 10 });
+
+    renderPage();
+    await waitFor(() => expect(screen.getByRole('table')).toBeInTheDocument());
+
+    await userEvent.selectOptions(screen.getByLabelText('Status'), 'APPROVED');
+    await waitFor(() =>
+      expect(listRiskAssessments).toHaveBeenLastCalledWith(
+        expect.objectContaining({ status: 'APPROVED', scope: undefined, siteId: undefined }),
+      ),
+    );
+
+    await userEvent.selectOptions(screen.getByLabelText('Scope'), 'SITE');
+    await waitFor(() =>
+      expect(listRiskAssessments).toHaveBeenLastCalledWith(expect.objectContaining({ status: 'APPROVED', scope: 'SITE' })),
+    );
+  });
+
+  it('never renders a raw assessment id as a table cell — reference/title only', async () => {
+    vi.mocked(listRiskAssessments).mockResolvedValue({ items: [ONE_ASSESSMENT], total: 1, page: 1, page_size: 10 });
+
+    renderPage();
+    await waitFor(() => expect(screen.getByRole('table')).toBeInTheDocument());
+    expect(screen.queryByText(ONE_ASSESSMENT.id)).not.toBeInTheDocument();
+    expect(screen.queryByText(ONE_ASSESSMENT.lineage_id)).not.toBeInTheDocument();
+    expect(screen.getByText('RA-2026-001')).toBeInTheDocument();
   });
 });

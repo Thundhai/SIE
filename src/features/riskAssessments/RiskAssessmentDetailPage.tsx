@@ -3,24 +3,25 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { Breadcrumb } from '../../components/layout/Breadcrumb';
 import { PageContainer } from '../../components/layout/PageContainer';
-import { Section } from '../../components/layout/Section';
 import { Button } from '../../components/ui/Button';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { ErrorState } from '../../components/ui/ErrorState';
 import { LoadingState } from '../../components/ui/LoadingState';
 import { StatusBadge } from '../../components/ui/StatusBadge';
+import { Tabs } from '../../components/ui/Tabs';
 import { ApiError } from '../../services/api/errors';
-import { getRiskAssessment, type RiskAssessmentDetail } from '../../services/api/riskAssessments';
+import { getRiskAssessment, type RiskAssessmentDetail, type RiskAssessmentFinding } from '../../services/api/riskAssessments';
 import type { AsyncState } from '../../types/common';
+import { RiskAssessmentActionsTab } from './RiskAssessmentActionsTab';
+import { RiskAssessmentControlsTab } from './RiskAssessmentControlsTab';
+import { RiskAssessmentEvidenceTab } from './RiskAssessmentEvidenceTab';
+import { RiskAssessmentFindingsTab } from './RiskAssessmentFindingsTab';
+import { RiskAssessmentOverviewTab } from './RiskAssessmentOverviewTab';
 import {
   assessmentScopeLabel,
   assessmentStatusLabel,
   assessmentStatusTone,
   assessmentTypeLabel,
-  findingRiskClassificationLabel,
-  findingRiskClassificationTone,
-  findingStatusLabel,
-  findingStatusTone,
 } from './riskAssessmentLabels';
 
 function formatDate(value: string | null): string {
@@ -28,13 +29,16 @@ function formatDate(value: string | null): string {
   return new Date(value).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
 }
 
+const ASSESSMENT_EDITABLE_STATUSES = new Set(['DRAFT', 'IN_REVIEW']);
+
+type TabValue = 'overview' | 'findings' | 'controls' | 'actions' | 'evidence';
+
 /**
- * Risk Assessment Detail — the assessment's own record plus its
- * findings' current risk ratings, read-only. Mirrors `ActionDetailPage`/
- * `EventDetailPage`'s established loading/error/not-found shape. A
- * finding's controls, effectiveness assessment, and evidence are not
- * shown here yet — see `RiskAssessmentsPage`'s own module docstring for
- * why this stays deliberately minimal in UI-01.
+ * Risk Assessment Detail — the main assessment workspace (SIE Milestone
+ * UI-02, Part 2): Overview / Findings / Controls / Actions / Evidence.
+ * Every tab is presentation over the real, already-built backend APIs —
+ * nothing here recalculates a risk rating, invents an endpoint, or
+ * bypasses the M29A dedicated control-effectiveness mutation path.
  */
 export function RiskAssessmentDetailPage() {
   const { assessmentId } = useParams<{ assessmentId: string }>();
@@ -42,6 +46,7 @@ export function RiskAssessmentDetailPage() {
   const navigate = useNavigate();
   const [state, setState] = useState<AsyncState<RiskAssessmentDetail | null>>({ status: 'loading' });
   const [reloadToken, setReloadToken] = useState(0);
+  const [tab, setTab] = useState<TabValue>('overview');
 
   useEffect(() => {
     if (!assessmentId || !auth.organization) return;
@@ -61,6 +66,16 @@ export function RiskAssessmentDetailPage() {
   }, [auth.organization, assessmentId, reloadToken]);
 
   const isPermissionDenied = state.status === 'error' && state.message.toLowerCase().includes('missing') && state.message.toLowerCase().includes('permission');
+
+  function handleFindingChanged(updated: RiskAssessmentFinding) {
+    setState((current) => {
+      if (current.status !== 'success' || !current.data) return current;
+      return {
+        status: 'success',
+        data: { ...current.data, findings: current.data.findings.map((f) => (f.id === updated.id ? updated : f)) },
+      };
+    });
+  }
 
   return (
     <PageContainer>
@@ -100,77 +115,88 @@ export function RiskAssessmentDetailPage() {
         />
       )}
 
-      {auth.organization && state.status === 'success' && state.data && <RiskAssessmentDetailContent assessment={state.data} />}
+      {auth.organization && state.status === 'success' && state.data && (
+        <RiskAssessmentDetailContent
+          organizationId={auth.organization.id}
+          assessment={state.data}
+          tab={tab}
+          onTabChange={setTab}
+          onFindingChanged={handleFindingChanged}
+        />
+      )}
     </PageContainer>
   );
 }
 
-function RiskAssessmentDetailContent({ assessment }: { assessment: RiskAssessmentDetail }) {
+function RiskAssessmentDetailContent({
+  organizationId,
+  assessment,
+  tab,
+  onTabChange,
+  onFindingChanged,
+}: {
+  organizationId: string;
+  assessment: RiskAssessmentDetail;
+  tab: TabValue;
+  onTabChange: (tab: TabValue) => void;
+  onFindingChanged: (finding: RiskAssessmentFinding) => void;
+}) {
+  const isEditable = ASSESSMENT_EDITABLE_STATUSES.has(assessment.status);
+
   return (
     <>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-xl font-semibold text-navy-900">{assessment.title}</h1>
+          <h1 className="text-xl font-semibold text-navy-900">Risk Assessment</h1>
+          <p className="mt-1 text-lg font-medium text-text-primary">
+            {assessment.title}
+            {assessment.reference ? ` · ${assessment.reference}` : ''}
+          </p>
           <p className="mt-1 text-sm text-text-secondary">
             {assessmentTypeLabel(assessment.assessment_type)} · {assessmentScopeLabel(assessment.scope)}
-            {assessment.version > 1 ? ` · Version ${assessment.version}` : ''}
+            {assessment.version > 1 ? ` · Version ${assessment.version}` : ''} · {formatDate(assessment.assessment_date)}
           </p>
         </div>
         <StatusBadge tone={assessmentStatusTone(assessment.status)} label={assessmentStatusLabel(assessment.status)} />
       </div>
 
-      <Section title="Details">
-        <dl className="grid grid-cols-2 gap-4 rounded-lg border border-border bg-surface p-4 sm:grid-cols-4">
-          <div>
-            <dt className="text-xs font-medium uppercase tracking-wide text-text-muted">Assessment date</dt>
-            <dd className="mt-0.5 text-sm text-text-primary">{formatDate(assessment.assessment_date)}</dd>
-          </div>
-          <div>
-            <dt className="text-xs font-medium uppercase tracking-wide text-text-muted">As of</dt>
-            <dd className="mt-0.5 text-sm text-text-primary">{formatDate(assessment.as_of)}</dd>
-          </div>
-          <div>
-            <dt className="text-xs font-medium uppercase tracking-wide text-text-muted">Reference</dt>
-            <dd className="mt-0.5 text-sm text-text-primary">{assessment.reference ?? '—'}</dd>
-          </div>
-          <div>
-            <dt className="text-xs font-medium uppercase tracking-wide text-text-muted">Methodology version</dt>
-            <dd className="mt-0.5 text-sm text-text-primary">{assessment.methodology_version}</dd>
-          </div>
-          <div>
-            <dt className="text-xs font-medium uppercase tracking-wide text-text-muted">Submitted</dt>
-            <dd className="mt-0.5 text-sm text-text-primary">{formatDate(assessment.submitted_at)}</dd>
-          </div>
-          <div>
-            <dt className="text-xs font-medium uppercase tracking-wide text-text-muted">Approved</dt>
-            <dd className="mt-0.5 text-sm text-text-primary">{formatDate(assessment.approved_at)}</dd>
-          </div>
-        </dl>
-      </Section>
+      <Tabs
+        items={[
+          { value: 'overview', label: 'Overview' },
+          { value: 'findings', label: `Findings (${assessment.findings.length})` },
+          { value: 'controls', label: 'Controls' },
+          { value: 'actions', label: 'Actions' },
+          { value: 'evidence', label: 'Evidence' },
+        ]}
+        value={tab}
+        onChange={(value) => onTabChange(value as TabValue)}
+      />
 
-      <Section title="Findings" description={`${assessment.findings.length} finding${assessment.findings.length === 1 ? '' : 's'} in this assessment.`}>
-        {assessment.findings.length === 0 ? (
-          <EmptyState title="No findings recorded" description="This assessment has no findings yet." />
-        ) : (
-          <ul className="flex flex-col gap-2">
-            {assessment.findings.map((finding) => (
-              <li key={finding.id} className="flex flex-col gap-1.5 rounded-lg border border-border bg-surface p-3.5 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <p className="text-sm font-medium text-text-primary">{finding.title}</p>
-                  <p className="mt-0.5 text-xs text-text-muted">{finding.risk_area.label}</p>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <StatusBadge tone={findingStatusTone(finding.status)} label={findingStatusLabel(finding.status)} />
-                  <StatusBadge
-                    tone={findingRiskClassificationTone(finding.residual_risk_classification ?? finding.inherent_risk_classification)}
-                    label={`Residual: ${findingRiskClassificationLabel(finding.residual_risk_classification)}`}
-                  />
-                </div>
-              </li>
-            ))}
-          </ul>
+      <div>
+        {tab === 'overview' && <RiskAssessmentOverviewTab organizationId={organizationId} assessmentId={assessment.id} />}
+        {tab === 'findings' && (
+          <RiskAssessmentFindingsTab
+            organizationId={organizationId}
+            assessmentId={assessment.id}
+            findings={assessment.findings}
+            isEditable={isEditable}
+            onFindingChanged={onFindingChanged}
+          />
         )}
-      </Section>
+        {tab === 'controls' && (
+          <RiskAssessmentControlsTab
+            organizationId={organizationId}
+            assessmentId={assessment.id}
+            findings={assessment.findings}
+            isEditable={isEditable}
+            onFindingChanged={onFindingChanged}
+          />
+        )}
+        {tab === 'actions' && (
+          <RiskAssessmentActionsTab organizationId={organizationId} assessmentId={assessment.id} findings={assessment.findings} />
+        )}
+        {tab === 'evidence' && <RiskAssessmentEvidenceTab findings={assessment.findings} />}
+      </div>
     </>
   );
 }

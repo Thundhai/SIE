@@ -474,12 +474,12 @@ causation claim for an association. An insufficient-data banner is
 shown honestly rather than hidden when `data_sufficiency.status` says
 so.
 
-**Risk Assessments is intentionally minimal** — list + detail only, per
-the milestone's explicit scope limit. No findings-editing, controls,
-effectiveness, evidence, or reporting UI (all backend-complete through
-M29A but deliberately left for a future UI milestone). Detail page
-handles a 404 as a calm "Risk assessment not found" state (`error
-instanceof ApiError && error.status === 404`), not a scary error.
+**Risk Assessments was intentionally minimal in UI-01** — list + detail
+only. §11 below (SIE Milestone UI-02) expands this into the full
+workspace the M25-M29A backend already supported. Detail page handles a
+404 as a calm "Risk assessment not found" state (`error instanceof
+ApiError && error.status === 404`), not a scary error — unchanged by
+§11.
 
 **Sidebar restructured into grouped navigation**
 (`src/components/layout/Sidebar.tsx`): Home; Work (Events, Actions, Risk
@@ -496,3 +496,81 @@ precedent: `RiskAssessmentsPage`'s table and `RiskAssessmentDetailPage`'s
 breadcrumb/heading always show the assessment's `title` (never `id`);
 `IntelligencePage` never surfaces `organization_id`/`entity_id` in
 prose.
+
+## 11. Risk Assessment & Actions Workspace (SIE Milestone UI-02)
+
+Turns UI-01's minimal Risk Assessment list/detail into a practical HSE
+operational workspace, entirely against the already-built M25-M29A
+backend — **zero backend changes**. Extends Actions only by wiring its
+existing, general-purpose components (`useActionRepository`,
+`ActionFormDrawer`'s field set, `actionStatus.ts` label helpers) into the
+new finding-scoped action UI; `ActionsPage`/`ActionDetailPage` themselves
+are unchanged.
+
+**Extended `src/services/api/riskAssessments.ts`.** UI-01's lean
+`RiskAssessmentSummary`/`RiskAssessmentDetail` grow full, field-for-field
+typed shapes for the whole M25-M29A contract (`RiskAssessmentFinding`,
+`RiskControl`, `RiskEvidence`, `RiskAreaConcept`) plus new calls:
+`getRiskAssessmentReport` (`GET .../report`, M28's read-only reporting
+endpoint), `assessControlEffectiveness` (`POST
+.../controls/{id}/assess-effectiveness` — the one M29A-governed
+mutation path), `listFindingActions`/`createFindingAction`/
+`linkFindingAction`/`unlinkFindingAction` (M27's finding↔action
+relationship), and `closeFinding` (`POST .../findings/{id}/close`, the
+one governed closure path). Every interface was checked directly against
+`backend/app/schemas/risk_assessment.py`/`risk_assessment_report.py`
+before being typed — nothing here is guessed. One correction worth
+flagging: the backend's actual `ControlEffectiveness` enum is
+`NOT_ASSESSED`/`INEFFECTIVE`/`PARTIALLY_EFFECTIVE`/`EFFECTIVE` — the
+frontend uses exactly these four values, not the differently-named set
+an earlier informal description of this work assumed.
+
+**Risk Assessment Detail is now a tabbed workspace**
+(`RiskAssessmentDetailPage.tsx` + `RiskAssessmentOverviewTab.tsx`/
+`RiskAssessmentFindingsTab.tsx`/`RiskAssessmentControlsTab.tsx`/
+`RiskAssessmentActionsTab.tsx`/`RiskAssessmentEvidenceTab.tsx`, via the
+existing `Tabs` primitive): Overview (the real `GET .../report`
+response — risk distribution, readiness, control-effectiveness and
+evidence-coverage summaries; never a frontend-computed score), Findings
+(each finding expands in place to its controls/evidence/linked actions
+and, where permitted, a closure control), Controls and Evidence
+(cross-finding aggregations of data already embedded in the loaded
+findings — no extra fetch), and Actions (aggregated via
+`listFindingActions` per finding, fetched once when the tab opens).
+
+**Control effectiveness** (`ControlEffectivenessDialog.tsx`) always
+calls `assessControlEffectiveness` — never a generic finding update.
+`NOT_ASSESSED` is never offered as a target (the backend rejects it as a
+conclusion); the rationale field is required because the backend
+requires it; on failure the entered rationale is preserved and an
+actionable error shown, never a fabricated success.
+
+**Finding closure** (`FindingCloseDialog.tsx`) always calls the
+dedicated close endpoint with a required closure reason — `CLOSED` is
+never offered through the generic finding path, and closure is never
+triggered automatically by a linked action's completion.
+
+**Finding-scoped actions** (`FindingActionsPanel.tsx`) — view linked
+actions, create a new action from the finding
+(`RISK_ASSESSMENT_WRITE`+`INTERVENTION_MANAGE`, `+INTERVENTION_ASSIGN`
+if an owner is set), link an existing one (search via
+`useActionRepository().list({ search })`, reusing the Actions domain's
+own repository rather than a second search mechanism), or unlink —
+every mutation control is hidden, not merely disabled, without the
+corresponding permission.
+
+**Risk Assessments list filters** now use exactly what `GET
+/risk-assessments` supports — `status`, `scope`, `site_id` (via the
+existing `listSites` service, `ActionsPage`'s own precedent) — no
+assessment-type, risk-level, or free-text filter, since the backend has
+none.
+
+**Evidence display** (`riskEvidenceDisplay.ts`) maps
+`RiskEvidenceRead` onto the shared `EvidenceRecord` shape `EvidenceList`/
+`EvidenceItem` already render (§9's evidence components, reused
+unchanged). `EVENT`/`ACTION` evidence links to its real source record;
+`KNOWLEDGE_DOCUMENT` evidence (no frontend route exists for it) is shown
+without a link; computed-intelligence evidence's `reference_label`
+machine key (e.g. `"anomaly:incident_count"`) is humanized the same way
+`formatCanonicalLabel` humanizes every other governed value elsewhere.
+No raw UUID is ever the visible label.
