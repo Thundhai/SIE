@@ -84,9 +84,10 @@ or `db.commit()`.
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
 
@@ -216,6 +217,14 @@ class AttentionItem:
     window_days: int
     evidence: AttentionEvidence
     limitation: str | None = None
+    # A stable, deterministic reference a caller can echo back later (SIE
+    # Milestone 34's own "smallest deterministic reference necessary" --
+    # never a random opaque id). Assigned by `_assign_references()` below,
+    # after construction -- every builder above leaves this at its
+    # default and never sets it directly, so there is exactly one place
+    # in this module that decides how a reference is built. See that
+    # function's own docstring.
+    reference: str = ""
 
 
 @dataclass
@@ -251,6 +260,49 @@ def _sort_key(item: AttentionItem) -> tuple:
 
 def _sort_items(items: list[AttentionItem]) -> list[AttentionItem]:
     return sorted(items, key=_sort_key)
+
+
+_SLUG_PATTERN = re.compile(r"[^a-z0-9]+")
+
+
+def _slugify(text: str) -> str:
+    return _SLUG_PATTERN.sub("-", text.lower()).strip("-")[:60]
+
+
+def build_attention_reference(item: AttentionItem) -> str:
+    """The "smallest deterministic reference necessary" SIE Milestone 34
+    needs to tie a durable human decision back to the exact attention
+    item it was made about, without inventing a random opaque id (a
+    reference no one could independently reconstruct or audit) and
+    without persisting the entire item. Built entirely from fields
+    already on the item -- every part is independently inspectable,
+    and the same inputs (same category/scope/site/as_of/window_days/
+    evidence/title) always produce the same reference, deterministically.
+
+    `category:scope:site:as_of:window_days:distinguishing` where
+    `distinguishing` combines the item's own title slug with the first
+    real evidence id (entity id, else event id) when one exists --
+    the title slug alone is usually already unique within one
+    `compose_attention()` call (each category's own title text includes
+    its distinguishing metric/site/finding), but two items can share a
+    title in principle (e.g. two `RECURRING_PATTERN` items at the same
+    site whose titles both omit `event_subtype`) while never sharing a
+    first evidence id -- combining both makes collision practically
+    impossible without adding a new, unaccountable field to the item.
+
+    Callers must treat this as an opaque lookup key regardless -- it is
+    documented here for auditability, not as a public string format
+    contract."""
+    site_part = str(item.site_id) if item.site_id is not None else "org"
+    distinguishing_id = (
+        item.evidence.entity_ids[0] if item.evidence.entity_ids else (item.evidence.event_ids[0] if item.evidence.event_ids else None)
+    )
+    tail = f"{_slugify(item.title)}-{distinguishing_id}" if distinguishing_id else _slugify(item.title)
+    return f"{item.category}:{item.scope}:{site_part}:{item.as_of.isoformat()}:{item.window_days}:{tail}"
+
+
+def _assign_references(items: list[AttentionItem]) -> list[AttentionItem]:
+    return [replace(item, reference=build_attention_reference(item)) for item in items]
 
 
 # --- Category builders -------------------------------------------------------------------------
@@ -737,7 +789,7 @@ def compose_attention(
         as_of=context.as_of,
         window_days=context.window_days,
         generated_at=context.generated_at,
-        items=_sort_items(items),
+        items=_sort_items(_assign_references(items)),
         category_statuses=category_statuses,
         calculation_versions=calculation_versions,
     )

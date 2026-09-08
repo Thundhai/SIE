@@ -647,6 +647,7 @@ def _to_attention_read(result: AttentionResult) -> AttentionResultRead:
                 window_days=item.window_days,
                 evidence=AttentionEvidenceRead(**vars(item.evidence)),
                 limitation=item.limitation,
+                reference=item.reference,
             )
             for item in result.items
         ],

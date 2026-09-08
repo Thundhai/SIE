@@ -119,6 +119,19 @@ OPENAPI_TAGS = [
             "`docs/RISK_ASSESSMENT_FOUNDATION_V0_1.md`."
         ),
     },
+    {
+        "name": "intelligence-decisions",
+        "description": (
+            "Human decision provenance for an intelligence/attention signal — SIE Milestone 34. "
+            "Records a typed decision (ACT/DO_NOT_ACT/DEFER/ALREADY_ADDRESSED/NOT_RELEVANT) and "
+            "free-text rationale against an `GET /intelligence/attention` item, with SIE's own "
+            "category/priority/evidence snapshot re-derived and preserved server-side, never "
+            "recalculated or overwritten by the human decision. May reference an existing "
+            "`SafetyAction` (never created automatically). The one intentional write path in the "
+            "otherwise read-only intelligence/attention/context workflow "
+            "(`intelligence:decision_write` to create, `intelligence:read` to read)."
+        ),
+    },
 ]
 
 _MACHINE_BEARER_DESCRIPTION = (

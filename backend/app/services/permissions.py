@@ -101,6 +101,18 @@ class Permission(str, Enum):
     RISK_ASSESSMENT_READ = "risk_assessment:read"
     RISK_ASSESSMENT_WRITE = "risk_assessment:write"
     RISK_ASSESSMENT_APPROVE = "risk_assessment:approve"
+    # SIE Milestone 34: Human Decision & Intervention Trace. Checked
+    # against the existing vocabulary first, same discipline as item 21
+    # above: recording a durable human decision about an intelligence
+    # signal is not "reading intelligence" (INTELLIGENCE_READ, which
+    # every read route in this domain -- including
+    # `GET /intelligence/decisions` -- already reuses unchanged) and not
+    # "managing an intervention" (INTERVENTION_MANAGE governs the
+    # SafetyAction row itself -- due date, owner, status, closure; a
+    # decision may *reference* an existing action via `linked_action_id`
+    # but never mutates it). A genuinely new capability, so one new
+    # permission, not an overload of either.
+    INTELLIGENCE_DECISION_WRITE = "intelligence:decision_write"
 
 
 ALL_PERMISSIONS: frozenset[Permission] = frozenset(Permission)
@@ -136,6 +148,7 @@ ROLE_PERMISSIONS: dict[OrganizationRole, frozenset[Permission]] = {
             Permission.RISK_ASSESSMENT_READ,
             Permission.RISK_ASSESSMENT_WRITE,
             Permission.RISK_ASSESSMENT_APPROVE,
+            Permission.INTELLIGENCE_DECISION_WRITE,
         }
     ),
     OrganizationRole.HSE_ANALYST: frozenset(
@@ -152,6 +165,7 @@ ROLE_PERMISSIONS: dict[OrganizationRole, frozenset[Permission]] = {
             Permission.GOVERNANCE_READ,
             Permission.RISK_ASSESSMENT_READ,
             Permission.RISK_ASSESSMENT_WRITE,
+            Permission.INTELLIGENCE_DECISION_WRITE,
         }
     ),
     OrganizationRole.HSE_USER: frozenset(

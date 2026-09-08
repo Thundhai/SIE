@@ -149,6 +149,12 @@ class AuditAction:
     RISK_ASSESSMENT_CONTROL_EFFECTIVENESS_ASSESSED = "RISK_ASSESSMENT_CONTROL_EFFECTIVENESS_ASSESSED"
     RISK_ASSESSMENT_CONTROL_EVIDENCE_LINKED = "RISK_ASSESSMENT_CONTROL_EVIDENCE_LINKED"
     RISK_ASSESSMENT_CONTROL_EVIDENCE_UNLINKED = "RISK_ASSESSMENT_CONTROL_EVIDENCE_UNLINKED"
+    # SIE Milestone 34: Human Decision & Intervention Trace --
+    # app/services/intelligence_decision_service.py is the one write
+    # path (called from app/api/v1/intelligence_decisions.py). The
+    # first durable write in the SIE intelligence workflow (M30-M33
+    # were architecture/read-only).
+    INTELLIGENCE_DECISION_RECORDED = "INTELLIGENCE_DECISION_RECORDED"
 
 
 class AuditService:

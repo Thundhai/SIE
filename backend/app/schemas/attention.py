@@ -37,6 +37,12 @@ class AttentionItemRead(BaseModel):
     window_days: int
     evidence: AttentionEvidenceRead
     limitation: str | None
+    reference: str = (
+        "Stable, deterministic reference for this item (SIE Milestone 34) -- reconstructed "
+        "from category/scope/site/as_of/window_days/evidence/title, never a random opaque id. "
+        "Echo this back verbatim as attention_reference when recording a human decision "
+        "(POST /intelligence/decisions) about this item."
+    )
 
 
 class AttentionCategoryStatusRead(BaseModel):
