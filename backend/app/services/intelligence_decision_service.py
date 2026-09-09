@@ -38,6 +38,7 @@ from datetime import datetime
 from typing import Iterator
 
 from fastapi import HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.intelligence.attention import AttentionItem, compose_attention
@@ -92,6 +93,30 @@ def resolve_attention_item(
     )
 
 
+def resolve_decision_reference(
+    db: Session, *, organization_id: uuid.UUID, decision_id: uuid.UUID
+) -> IntelligenceDecision:
+    """SIE Milestone 37 — the identical "does this id belong to this
+    organization" shape as
+    `app.services.risk_assessment_service.resolve_action_reference()`,
+    applied to `IntelligenceDecision`: the one place
+    `app/services/intelligence_outcome_service.py::record_outcome()`
+    validates a caller-supplied `decision_id` before writing an
+    `IntelligenceOutcome` row that references it. A decision from a
+    different organization (or a nonexistent id) is a 404, never a
+    silent cross-tenant read."""
+    decision = db.execute(
+        select(IntelligenceDecision).where(
+            IntelligenceDecision.id == decision_id, IntelligenceDecision.organization_id == organization_id
+        )
+    ).scalar_one_or_none()
+    if decision is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="decision_id not found in this organization."
+        )
+    return decision
+
+
 def record_decision(
     db: Session,
     *,
@@ -137,4 +162,9 @@ def record_decision(
     return record
 
 
-__all__ = ["decision_mutation_transaction", "resolve_attention_item", "record_decision"]
+__all__ = [
+    "decision_mutation_transaction",
+    "resolve_attention_item",
+    "resolve_decision_reference",
+    "record_decision",
+]

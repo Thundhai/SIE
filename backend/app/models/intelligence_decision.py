@@ -76,7 +76,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import JSON as GenericJSON
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, Uuid
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, Uuid
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -94,6 +94,11 @@ class IntelligenceDecision(UUIDPrimaryKeyMixin, OrganizationScopedMixin, Timesta
         Index("ix_intelligence_decisions_org_site", "organization_id", "site_id"),
         Index("ix_intelligence_decisions_org_decided_at", "organization_id", "decided_at"),
         Index("ix_intelligence_decisions_org_linked_action", "organization_id", "linked_action_id"),
+        # SIE Milestone 37 -- enables a genuine, DB-enforced composite
+        # foreign key from IntelligenceOutcome.decision_id, mirroring
+        # sites'/projects' own identical SIE Milestone 35A constraint.
+        # See app/models/intelligence_outcome.py's own docstring.
+        UniqueConstraint("id", "organization_id", name="uq_intelligence_decisions_id_organization_id"),
     )
 
     # --- Scope -----------------------------------------------------------------------------

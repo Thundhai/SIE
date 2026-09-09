@@ -10,6 +10,7 @@ from app.api.v1 import (
     ingestion,
     intelligence,
     intelligence_decisions,
+    intelligence_outcomes,
     knowledge,
     memberships,
     model_governance,
@@ -35,6 +36,7 @@ api_router.include_router(retrieval.router)
 api_router.include_router(rag.router)
 api_router.include_router(intelligence.router)
 api_router.include_router(intelligence_decisions.router)
+api_router.include_router(intelligence_outcomes.router)
 api_router.include_router(events.router)
 api_router.include_router(actions.router)
 api_router.include_router(predictions.router)

@@ -162,6 +162,12 @@ class AuditAction:
     # SIE Milestone 35A: Canonical Project Attribution Correction.
     SAFETY_EVENT_PROJECT_ATTRIBUTED = "SAFETY_EVENT_PROJECT_ATTRIBUTED"
     SAFETY_EVENT_PROJECT_ATTRIBUTION_CLEARED = "SAFETY_EVENT_PROJECT_ATTRIBUTION_CLEARED"
+    # SIE Milestone 37: Field Outcome Foundation --
+    # app/services/intelligence_outcome_service.py is the one write path
+    # (called from app/api/v1/intelligence_outcomes.py). Ground-truth
+    # capture of what happened after a human decision/intervention; not
+    # a second decision-recording mechanism.
+    INTELLIGENCE_OUTCOME_RECORDED = "INTELLIGENCE_OUTCOME_RECORDED"
 
 
 class AuditService:

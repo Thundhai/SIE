@@ -142,6 +142,18 @@ OPENAPI_TAGS = [
             "(`intelligence:decision_write` to create, `intelligence:read` to read)."
         ),
     },
+    {
+        "name": "intelligence-outcomes",
+        "description": (
+            "Ground-truth field outcome capture for a human decision/intervention — SIE Milestone 37. "
+            "Records what actually happened afterward (EFFECTIVE/PARTIALLY_EFFECTIVE/INEFFECTIVE/"
+            "NO_OUTCOME_RECORDED) against an existing `IntelligenceDecision`, with an optional reference "
+            "to a `SafetyAction` intervention — never inferred automatically from action closure or "
+            "event absence. Append-only: no update endpoint, a correction is a new row. A ground-truth "
+            "capture layer, not the SIE learning engine "
+            "(`intelligence:decision_write` to create, `intelligence:read` to read)."
+        ),
+    },
 ]
 
 _MACHINE_BEARER_DESCRIPTION = (
