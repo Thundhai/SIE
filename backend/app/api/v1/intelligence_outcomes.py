@@ -1,37 +1,51 @@
-"""Field Outcome Foundation API — SIE Milestone 37.
+"""Field Outcome Foundation API — SIE Milestone 37, extended by SIE
+Milestone 38 (Outcome Verification & Evidence).
 
     POST /intelligence/decisions (M34, unchanged) -> human decision/intervention
-    POST /intelligence/outcomes  -> a durable IntelligenceOutcome row (this router)
+    POST /intelligence/outcomes  -> a durable IntelligenceOutcome row (M37)
     GET  /intelligence/outcomes
     GET  /intelligence/outcomes/{outcome_id}
+    POST /intelligence/outcomes/{outcome_id}/verifications      -> IntelligenceOutcomeVerification (M38)
+    GET  /intelligence/outcomes/{outcome_id}/verifications
+    GET  /intelligence/outcomes/{outcome_id}/verification-state -> resolved governance state (M38)
 
 **A ground-truth capture layer, not the SIE learning engine.** See
 `app/models/intelligence_outcome.py`'s own docstring and
-`docs/FIELD_OUTCOME_FOUNDATION_V0_1.md` for the full design rationale.
-No `PUT`/`PATCH`/`DELETE` route exists or is planned — a correction is a
-new row referencing the same `decision_id` (§6).
+`docs/FIELD_OUTCOME_FOUNDATION_V0_1.md` for the full M37 design
+rationale. No `PUT`/`PATCH`/`DELETE` route exists or is planned for
+either `IntelligenceOutcome` or `IntelligenceOutcomeVerification` — a
+correction is a new row referencing the same `decision_id`/`outcome_id`
+respectively (M37 §6; M38 spec §4).
 
 **Authorization — reuses M34's decision-governance permission, not a
-new role (§10).** Recording an outcome is the same trusted-authority
-tier as recording the decision it reports on, within one continuous
-DECIDE -> INTERVENE -> OUTCOME human-governance capability — so
-`Permission.INTELLIGENCE_DECISION_WRITE` gates the write here too
-(granted to the same `HSE_MANAGER`/`HSE_ANALYST` roles), rather than
-inventing a new `INTELLIGENCE_OUTCOME_WRITE` permission for what is not
-a genuinely new capability tier. The two reads reuse
-`Permission.INTELLIGENCE_READ`, identical to every other intelligence
-read route in this codebase.
+new role (§10, M38 spec §12).** Recording an outcome or a verification
+of one is the same trusted-authority tier as recording the decision that
+started the chain, within one continuous DECIDE -> INTERVENE -> OUTCOME
+-> VERIFY human-governance capability — so `Permission.
+INTELLIGENCE_DECISION_WRITE` gates every write in this router (granted
+to the same `HSE_MANAGER`/`HSE_ANALYST` roles), rather than inventing a
+new permission for what is not a genuinely new capability tier. Every
+read reuses `Permission.INTELLIGENCE_READ`, identical to every other
+intelligence read route in this codebase.
 
-**Point-in-time reads (§14).** `GET /intelligence/outcomes` accepts an
-optional `as_of`; when supplied, only rows with both `outcome_at <=
-as_of` and `created_at <= as_of` are returned — see
+**Point-in-time reads (§14, M38 spec §15).** `GET /intelligence/outcomes`
+accepts an optional `as_of`; when supplied, only rows with both
+`outcome_at <= as_of` and `created_at <= as_of` are returned — see
 `app/models/intelligence_outcome.py`'s own "outcome_at vs. created_at"
-section for why both timestamps are checked. No new
-`app/intelligence/temporal.py` helper is needed for this: unlike
-M35B/M36's history-reconstruction problem, `IntelligenceOutcome` rows
-are already immutable/append-only, so the correct point-in-time
-semantics reduce to a direct two-column filter applied straight in this
-list query.
+section for why both timestamps are checked. The M38 verification
+endpoints accept the identical `as_of` parameter, applied consistently:
+a verification recorded after `as_of` never appears
+(`created_at <= as_of` — see
+`app/services/intelligence_outcome_verification_service.py::
+resolve_current_verification()`), and an outcome not yet visible as of
+`as_of` is excluded from eligibility the same way the M37 list read
+already excludes it (`evaluate_learning_eligibility()`'s own
+`as_of`-aware check) — one interpretation of `as_of`, never two. No new
+`app/intelligence/temporal.py` helper is needed for any of this: unlike
+M35B/M36's history-reconstruction problem, both `IntelligenceOutcome`
+and `IntelligenceOutcomeVerification` rows are already
+immutable/append-only, so the correct point-in-time semantics reduce to
+direct column filters applied straight in these queries.
 """
 
 from __future__ import annotations
@@ -51,6 +65,8 @@ from app.core.request_id import get_request_id
 from app.models.intelligence_decision import IntelligenceDecision
 from app.models.intelligence_outcome import IntelligenceOutcome
 from app.models.intelligence_outcome_enums import IntelligenceOutcomeClassification
+from app.models.intelligence_outcome_verification import IntelligenceOutcomeVerification
+from app.models.intelligence_outcome_verification_enums import IntelligenceOutcomeVerificationStatus
 from app.models.safety_action import SafetyAction
 from app.models.site import Site
 from app.schemas.intelligence_outcome import (
@@ -60,12 +76,30 @@ from app.schemas.intelligence_outcome import (
     IntelligenceOutcomeListRead,
     IntelligenceOutcomeRead,
 )
+from app.schemas.intelligence_outcome_verification import (
+    EvidenceEvaluationRead,
+    IntelligenceOutcomeVerificationCreate,
+    IntelligenceOutcomeVerificationListRead,
+    IntelligenceOutcomeVerificationRead,
+    IntelligenceOutcomeVerificationStateRead,
+    LearningEligibilityRead,
+)
 from app.services.audit_service import AuditAction, audit_service
 from app.services.intelligence_outcome_service import (
     outcome_mutation_transaction,
     record_outcome,
     reject_future_outcome_at,
     resolve_decision_reference,
+)
+from app.services.intelligence_outcome_verification_service import (
+    EvidenceEvaluation,
+    evaluate_learning_eligibility,
+    evaluate_outcome_evidence,
+    record_verification,
+    reject_future_verified_at,
+    resolve_current_verification,
+    resolve_outcome_reference,
+    verification_mutation_transaction,
 )
 from app.services.permissions import Permission
 from app.services.risk_assessment_service import resolve_action_reference
@@ -74,6 +108,7 @@ from app.services.safety_action_service import validate_site_reference, validate
 router = APIRouter(prefix="/intelligence", tags=["intelligence-outcomes"])
 
 _ENDPOINT_CREATE = "POST /intelligence/outcomes"
+_ENDPOINT_CREATE_VERIFICATION = "POST /intelligence/outcomes/{outcome_id}/verifications"
 
 
 def _to_read(db: Session, record: IntelligenceOutcome) -> IntelligenceOutcomeRead:
@@ -302,6 +337,232 @@ def get_intelligence_outcome(
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Outcome not found in this organization.")
     return _to_read(db, record)
+
+
+# ==================================================================================================
+# SIE Milestone 38: Outcome Verification & Evidence
+# ==================================================================================================
+
+
+def _verification_to_read(record: IntelligenceOutcomeVerification) -> IntelligenceOutcomeVerificationRead:
+    return IntelligenceOutcomeVerificationRead(
+        id=record.id,
+        organization_id=record.organization_id,
+        outcome_id=record.outcome_id,
+        status=record.status,
+        rationale=record.rationale,
+        verified_at=record.verified_at,
+        verified_by_user_id=record.verified_by_user_id,
+        verified_by_api_client_id=record.verified_by_api_client_id,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+    )
+
+
+def _evidence_evaluation_to_read(evaluation: EvidenceEvaluation) -> EvidenceEvaluationRead:
+    return EvidenceEvaluationRead(
+        evidence_count=evaluation.evidence_count,
+        valid_evidence_count=evaluation.valid_evidence_count,
+        invalid_evidence_count=evaluation.invalid_evidence_count,
+        future_evidence_count=evaluation.future_evidence_count,
+        evidence_status=evaluation.evidence_status,
+        evidence_eligible_for_verification=evaluation.evidence_eligible_for_verification,
+        reasons=evaluation.reasons,
+    )
+
+
+@router.post(
+    "/outcomes/{outcome_id}/verifications",
+    response_model=IntelligenceOutcomeVerificationRead,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_rate_limit(RateLimitClass.WRITE))],
+)
+def create_outcome_verification(
+    outcome_id: uuid.UUID,
+    body: IntelligenceOutcomeVerificationCreate,
+    organization_id: uuid.UUID = Query(...),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    context: RequestContext = Depends(require_context_permission(Permission.INTELLIGENCE_DECISION_WRITE)),
+    request_id: str | None = Depends(get_request_id),
+    db: Session = Depends(get_db),
+) -> IntelligenceOutcomeVerificationRead:
+    """Records one governance judgment about one existing
+    `IntelligenceOutcome`'s trustworthiness. Never mutates the outcome
+    itself, or any other domain row — the one write this route performs
+    is the new `IntelligenceOutcomeVerification` row.
+
+    **"VALID EVIDENCE ≠ VERIFIED OUTCOME" enforced here (M38 spec §8-9).**
+    `status=VERIFIED` is rejected (422) unless the outcome's own evidence
+    deterministically evaluates as fully valid
+    (`evaluate_outcome_evidence()`) — a *necessary* condition this route
+    enforces, never a *sufficient* one: valid evidence alone never
+    creates a `VERIFIED` row automatically, only an explicit human
+    request with that status does. `INSUFFICIENT_EVIDENCE`/`DISPUTED`
+    carry no such requirement — a human may record either regardless of
+    what the evidence evaluation says, since both are legitimate human
+    judgments the evidence check does not gate."""
+    outcome = resolve_outcome_reference(db, organization_id=organization_id, outcome_id=outcome_id)
+    reject_future_verified_at(body.verified_at)
+
+    if body.status == IntelligenceOutcomeVerificationStatus.VERIFIED:
+        evaluation = evaluate_outcome_evidence(db, outcome)
+        if not evaluation.evidence_eligible_for_verification:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"Cannot record VERIFIED: outcome evidence_status is {evaluation.evidence_status.value}, "
+                    "not VALID_EVIDENCE. " + " ".join(evaluation.reasons)
+                ).strip(),
+            )
+
+    request_hash = compute_request_hash(f"{outcome_id}:{body.model_dump_json()}".encode("utf-8"))
+    lookup = check_and_replay(
+        db,
+        endpoint=_ENDPOINT_CREATE_VERIFICATION,
+        idempotency_key=idempotency_key,
+        request_hash=request_hash,
+        organization_id=organization_id,
+        api_client_id=context.api_client_id,
+        user_id=context.user_id,
+    )
+    if lookup.is_replay:
+        return IntelligenceOutcomeVerificationRead.model_validate(lookup.response_body)
+
+    # Everything from here on -- the IntelligenceOutcomeVerification row,
+    # its AuditLog entry, and the IdempotencyKey response -- is one
+    # transaction: all of it commits together, once, or none of it
+    # persists. Mirrors outcome_mutation_transaction()/
+    # decision_mutation_transaction()'s own shape exactly.
+    with verification_mutation_transaction(db):
+        record = record_verification(
+            db,
+            organization_id=organization_id,
+            outcome_id=outcome_id,
+            status=body.status,
+            rationale=body.rationale,
+            verified_at=body.verified_at,
+            verified_by_user_id=context.user_id,
+            verified_by_api_client_id=context.api_client_id,
+            request_id=request_id,
+        )
+        audit_service.log(
+            db,
+            action=AuditAction.INTELLIGENCE_OUTCOME_VERIFICATION_RECORDED,
+            resource_type="IntelligenceOutcomeVerification",
+            resource_id=record.id,
+            organization_id=organization_id,
+            user_id=context.user_id,
+            metadata={
+                "outcome_id": str(outcome_id),
+                "status": record.status.value,
+                "caller_kind": context.kind,
+            },
+            request_id=request_id,
+            commit=False,
+        )
+        result = _verification_to_read(record)
+        store_response(
+            db,
+            endpoint=_ENDPOINT_CREATE_VERIFICATION,
+            idempotency_key=idempotency_key,
+            request_hash=request_hash,
+            response_status_code=status.HTTP_201_CREATED,
+            response_body=result.model_dump(mode="json"),
+            organization_id=organization_id,
+            api_client_id=context.api_client_id,
+            user_id=context.user_id,
+            commit=False,
+        )
+    return result
+
+
+@router.get(
+    "/outcomes/{outcome_id}/verifications",
+    response_model=IntelligenceOutcomeVerificationListRead,
+    dependencies=[Depends(require_rate_limit(RateLimitClass.READ))],
+)
+def list_outcome_verifications(
+    outcome_id: uuid.UUID,
+    organization_id: uuid.UUID = Query(...),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=200),
+    as_of: datetime | None = Query(
+        default=None, description="Point-in-time cutoff: only verifications with created_at <= as_of are returned."
+    ),
+    context: RequestContext = Depends(require_context_permission(Permission.INTELLIGENCE_READ)),
+    db: Session = Depends(get_db),
+) -> IntelligenceOutcomeVerificationListRead:
+    """No verification is ever mutated after creation (M38 spec §4) --
+    this list, ordered newest-first, *is* the correction/audit history
+    for this outcome's verification. 404s (rather than an empty list) if
+    `outcome_id` itself does not belong to this organization, mirroring
+    every other nested-resource read in this codebase."""
+    resolve_outcome_reference(db, organization_id=organization_id, outcome_id=outcome_id)
+
+    conditions = [
+        IntelligenceOutcomeVerification.organization_id == organization_id,
+        IntelligenceOutcomeVerification.outcome_id == outcome_id,
+    ]
+    if as_of is not None:
+        conditions.append(IntelligenceOutcomeVerification.created_at <= as_of)
+
+    total = db.execute(select(func.count()).select_from(IntelligenceOutcomeVerification).where(*conditions)).scalar_one()
+    rows = (
+        db.execute(
+            select(IntelligenceOutcomeVerification)
+            .where(*conditions)
+            .order_by(IntelligenceOutcomeVerification.created_at.desc(), IntelligenceOutcomeVerification.id.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        )
+        .scalars()
+        .all()
+    )
+    return IntelligenceOutcomeVerificationListRead(
+        items=[_verification_to_read(r) for r in rows], total=total, page=page, page_size=page_size
+    )
+
+
+@router.get(
+    "/outcomes/{outcome_id}/verification-state",
+    response_model=IntelligenceOutcomeVerificationStateRead,
+    dependencies=[Depends(require_rate_limit(RateLimitClass.READ))],
+)
+def get_outcome_verification_state(
+    outcome_id: uuid.UUID,
+    organization_id: uuid.UUID = Query(...),
+    as_of: datetime | None = Query(
+        default=None,
+        description=(
+            "Point-in-time cutoff applied consistently to the resolved verification, the evidence "
+            "evaluation, and the learning-eligibility gate. Omit for the current, unfiltered view."
+        ),
+    ),
+    context: RequestContext = Depends(require_context_permission(Permission.INTELLIGENCE_READ)),
+    db: Session = Depends(get_db),
+) -> IntelligenceOutcomeVerificationStateRead:
+    """The one read this milestone's spec asks for "if useful, but do
+    not create redundant APIs" (§11) — combines the resolved current
+    verification (newest row by `created_at`, or `None` if none has ever
+    been recorded), the live deterministic evidence evaluation, and the
+    learning-eligibility gate into a single response, rather than
+    requiring three separate round trips to reconstruct one governance
+    picture. Nothing here is persisted; every field is recomputed live
+    on each call (M38 spec §17's own "a reviewer should be able to
+    reconstruct OUTCOME -> EVIDENCE -> EVIDENCE VALIDATION ->
+    VERIFICATION -> LEARNING ELIGIBILITY without guessing")."""
+    outcome = resolve_outcome_reference(db, organization_id=organization_id, outcome_id=outcome_id)
+
+    current = resolve_current_verification(db, organization_id=organization_id, outcome_id=outcome_id, as_of=as_of)
+    evaluation = evaluate_outcome_evidence(db, outcome)
+    eligibility = evaluate_learning_eligibility(db, outcome=outcome, as_of=as_of)
+
+    return IntelligenceOutcomeVerificationStateRead(
+        outcome_id=outcome_id,
+        current_verification=_verification_to_read(current) if current is not None else None,
+        evidence_evaluation=_evidence_evaluation_to_read(evaluation),
+        learning_eligibility=LearningEligibilityRead(eligible=eligibility.eligible, reasons=eligibility.reasons),
+    )
 
 
 __all__ = ["router"]

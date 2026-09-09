@@ -168,6 +168,13 @@ class AuditAction:
     # capture of what happened after a human decision/intervention; not
     # a second decision-recording mechanism.
     INTELLIGENCE_OUTCOME_RECORDED = "INTELLIGENCE_OUTCOME_RECORDED"
+    # SIE Milestone 38: Outcome Verification & Evidence --
+    # app/services/intelligence_outcome_verification_service.py is the
+    # one write path (called from app/api/v1/intelligence_outcomes.py).
+    # A governance judgment about whether a recorded outcome is
+    # trustworthy; not a second outcome-recording mechanism, and not
+    # learning.
+    INTELLIGENCE_OUTCOME_VERIFICATION_RECORDED = "INTELLIGENCE_OUTCOME_VERIFICATION_RECORDED"
 
 
 class AuditService:

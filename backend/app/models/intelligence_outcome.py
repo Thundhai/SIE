@@ -150,7 +150,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import JSON as GenericJSON
-from sqlalchemy import DateTime, ForeignKey, ForeignKeyConstraint, Index, String, Text, Uuid
+from sqlalchemy import DateTime, ForeignKey, ForeignKeyConstraint, Index, String, Text, UniqueConstraint, Uuid
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -168,6 +168,13 @@ class IntelligenceOutcome(UUIDPrimaryKeyMixin, OrganizationScopedMixin, Timestam
         Index("ix_intelligence_outcomes_org_action", "organization_id", "linked_action_id"),
         Index("ix_intelligence_outcomes_org_site", "organization_id", "site_id"),
         Index("ix_intelligence_outcomes_org_outcome_at", "organization_id", "outcome_at"),
+        # SIE Milestone 38 -- enables a genuine, DB-enforced composite
+        # foreign key from IntelligenceOutcomeVerification.outcome_id,
+        # mirroring intelligence_decisions' own identical SIE Milestone
+        # 37 constraint. See
+        # app/models/intelligence_outcome_verification.py's own
+        # docstring.
+        UniqueConstraint("id", "organization_id", name="uq_intelligence_outcomes_id_organization_id"),
         # SIE Milestone 37 -- see module docstring's "Decision
         # relationship" section: mirrors project_sites'/
         # project_site_history's own composite-FK hardening (safe here:

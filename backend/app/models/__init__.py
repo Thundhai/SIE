@@ -21,6 +21,7 @@ from app.models.ingested_file import IngestedFile
 from app.models.ingestion_job import IngestionJob
 from app.models.intelligence_decision import IntelligenceDecision
 from app.models.intelligence_outcome import IntelligenceOutcome
+from app.models.intelligence_outcome_verification import IntelligenceOutcomeVerification
 from app.models.knowledge_chunk import KnowledgeChunk
 from app.models.knowledge_document import KnowledgeDocument
 from app.models.knowledge_document_version import KnowledgeDocumentVersion
@@ -69,6 +70,7 @@ __all__ = [
     "IngestionJob",
     "IntelligenceDecision",
     "IntelligenceOutcome",
+    "IntelligenceOutcomeVerification",
     "KnowledgeChunk",
     "KnowledgeChunkEmbedding",
     "KnowledgeDocument",

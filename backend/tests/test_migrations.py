@@ -3166,3 +3166,218 @@ def test_intelligence_outcomes_composite_foreign_key_rejects_cross_tenant_rows_a
             conn.rollback()
     finally:
         engine.dispose()
+
+
+@requires_postgres
+def test_outcome_verification_migration_downgrade_then_reupgrade_round_trips_cleanly(monkeypatch):
+    """SIE Milestone 38: Outcome Verification & Evidence (migration
+    0027). Downgrading to 0026 must drop
+    `intelligence_outcome_verifications` entirely, along with its own
+    native `intelligence_outcome_verification_status` enum type and the
+    `uq_intelligence_outcomes_id_organization_id` constraint added to
+    `intelligence_outcomes`, while leaving every 0026-and-earlier
+    table/type/enum/constraint untouched. Re-upgrading to head must
+    recreate all three correctly."""
+    engine = _fresh_schema_engine()
+    try:
+        monkeypatch.setattr("app.core.config.settings.DATABASE_URL", PG_TEST_DATABASE_URL)
+        config = _alembic_config()
+
+        command.upgrade(config, "head")
+
+        with engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version == _current_head_revision(config)
+
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+                ).all()
+            }
+            assert "intelligence_outcome_verifications" in tables
+
+            enum_types = {row[0] for row in conn.execute(text("SELECT typname FROM pg_type WHERE typtype = 'e'")).all()}
+            assert "intelligence_outcome_verification_status" in enum_types
+
+            status_values = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT enumlabel FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid "
+                        "WHERE t.typname = 'intelligence_outcome_verification_status'"
+                    )
+                ).all()
+            }
+            assert status_values == {"VERIFIED", "INSUFFICIENT_EVIDENCE", "DISPUTED"}
+
+            constraints = {
+                row[0]
+                for row in conn.execute(
+                    text("SELECT conname FROM pg_constraint WHERE conrelid = 'intelligence_outcomes'::regclass")
+                ).all()
+            }
+            assert "uq_intelligence_outcomes_id_organization_id" in constraints
+
+        command.downgrade(config, "0026")
+
+        with engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version == "0026"
+
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+                ).all()
+            }
+            assert "intelligence_outcome_verifications" not in tables
+            # Untouched by 0027's downgrade.
+            assert "intelligence_outcomes" in tables
+            assert "intelligence_decisions" in tables
+
+            enum_types = {row[0] for row in conn.execute(text("SELECT typname FROM pg_type WHERE typtype = 'e'")).all()}
+            assert "intelligence_outcome_verification_status" not in enum_types
+            # Not dropped/redefined by this migration's downgrade.
+            assert "intelligence_outcome_classification" in enum_types
+
+            constraints = {
+                row[0]
+                for row in conn.execute(
+                    text("SELECT conname FROM pg_constraint WHERE conrelid = 'intelligence_outcomes'::regclass")
+                ).all()
+            }
+            assert "uq_intelligence_outcomes_id_organization_id" not in constraints
+
+        command.upgrade(config, "head")
+
+        with engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version == _current_head_revision(config)
+
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+                ).all()
+            }
+            assert "intelligence_outcome_verifications" in tables
+
+            verification_columns = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = 'intelligence_outcome_verifications'"
+                    )
+                ).all()
+            }
+            assert "organization_id" in verification_columns
+            assert "outcome_id" in verification_columns
+            assert "status" in verification_columns
+            assert "rationale" in verification_columns
+            assert "verified_at" in verification_columns
+            assert "verified_by_user_id" in verification_columns
+            assert "verified_by_api_client_id" in verification_columns
+            assert "created_at" in verification_columns
+
+            enum_types = {row[0] for row in conn.execute(text("SELECT typname FROM pg_type WHERE typtype = 'e'")).all()}
+            assert "intelligence_outcome_verification_status" in enum_types
+
+            constraints = {
+                row[0]
+                for row in conn.execute(
+                    text("SELECT conname FROM pg_constraint WHERE conrelid = 'intelligence_outcomes'::regclass")
+                ).all()
+            }
+            assert "uq_intelligence_outcomes_id_organization_id" in constraints
+    finally:
+        engine.dispose()
+
+
+@requires_postgres
+def test_outcome_verifications_composite_foreign_key_rejects_cross_tenant_rows_at_the_database_level(monkeypatch):
+    """SIE Milestone 38: proves the `outcome_id` tenant-integrity
+    hardening is a genuine, schema-level guarantee -- not merely
+    application-checked. Bypasses the service layer entirely (raw SQL
+    `INSERT`) and asserts PostgreSQL itself rejects an
+    `intelligence_outcome_verifications` row whose `organization_id`
+    does not match its referenced outcome's own -- identical reasoning
+    to
+    `test_intelligence_outcomes_composite_foreign_key_rejects_cross_tenant_rows_at_the_database_level`
+    (SIE Milestone 37), applied here to
+    `intelligence_outcome_verifications`."""
+    import uuid
+
+    import psycopg
+    import pytest
+    from sqlalchemy.exc import IntegrityError
+
+    engine = _fresh_schema_engine()
+    try:
+        monkeypatch.setattr("app.core.config.settings.DATABASE_URL", PG_TEST_DATABASE_URL)
+        config = _alembic_config()
+        command.upgrade(config, "head")
+
+        with engine.connect() as conn:
+            org_a = uuid.uuid4()
+            org_b = uuid.uuid4()
+            conn.execute(
+                text(
+                    "INSERT INTO organizations (id, name, status, created_at, updated_at) "
+                    "VALUES (:id, 'Org A', 'active', now(), now())"
+                ),
+                {"id": org_a},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO organizations (id, name, status, created_at, updated_at) "
+                    "VALUES (:id, 'Org B', 'active', now(), now())"
+                ),
+                {"id": org_b},
+            )
+            decision_b = uuid.uuid4()
+            conn.execute(
+                text(
+                    "INSERT INTO intelligence_decisions "
+                    "(id, organization_id, scope, attention_reference, attention_category, attention_priority, "
+                    "attention_title, attention_explanation, intelligence_as_of, intelligence_window_days, "
+                    "decision, rationale, decided_at, created_at, updated_at) "
+                    "VALUES (:id, :org_id, 'organization', 'ref-1', 'DETERIORATING_TREND', 'HIGH', 'Title', "
+                    "'Explanation', now(), 30, 'DEFER', 'Test rationale', now(), now(), now())"
+                ),
+                {"id": decision_b, "org_id": org_b},
+            )
+            outcome_b = uuid.uuid4()
+            conn.execute(
+                text(
+                    "INSERT INTO intelligence_outcomes "
+                    "(id, organization_id, decision_id, classification, summary, outcome_at, created_at, updated_at) "
+                    "VALUES (:id, :org_id, :decision_id, 'EFFECTIVE', 'test', now(), now(), now())"
+                ),
+                {"id": outcome_b, "org_id": org_b, "decision_id": decision_b},
+            )
+            conn.commit()
+
+            # The forbidden row: outcome_b (org_b) referenced by an
+            # intelligence_outcome_verifications row claiming
+            # organization_id=org_a. A plain single-column FK on
+            # outcome_id alone would happily accept this (the outcome id
+            # genuinely exists); the composite FK must not.
+            with pytest.raises((IntegrityError, psycopg.errors.ForeignKeyViolation)):
+                conn.execute(
+                    text(
+                        "INSERT INTO intelligence_outcome_verifications "
+                        "(id, organization_id, outcome_id, status, rationale, verified_at, created_at, updated_at) "
+                        "VALUES (gen_random_uuid(), :org_id, :outcome_id, 'VERIFIED', 'test', now(), now(), now())"
+                    ),
+                    {"org_id": org_a, "outcome_id": outcome_b},
+                )
+                conn.commit()
+            # The failed INSERT leaves the connection's transaction
+            # aborted (real Postgres semantics) -- roll it back
+            # explicitly rather than relying on __exit__ to do the
+            # right thing.
+            conn.rollback()
+    finally:
+        engine.dispose()
