@@ -344,6 +344,46 @@ def get_intelligence_outcome(
 # ==================================================================================================
 
 
+def _authorized_organization_id(context: RequestContext, organization_id: uuid.UUID) -> uuid.UUID:
+    """Corrective hardening for the M38 verification endpoints only
+    (the three routes below) — every organization-scoped lookup/write
+    they perform uses the value this function returns, never the raw
+    `organization_id` query parameter directly, even though
+    `require_context_permission`'s own `authorize_context()` has already
+    authorized that query value against `context` before any of these
+    handlers runs.
+
+    For a **machine** caller, the authoritative tenant is `context.
+    machine_organization_id` — resolved once, at credential
+    authentication time, from `ApiClient.organization_id`, and never
+    overridable by request content (see `app/api/deps_context.py`'s own
+    "item 36" docstring section). Returning it here directly, instead of
+    the query string, removes these three handlers' own reliance on
+    `authorize_context()`'s equality check continuing to hold correct
+    forever — pure defense in depth: the two are already guaranteed
+    equal by the time this function runs, so no currently-observable
+    behavior changes, but a future bug in that check could no longer
+    let a machine credential's own request string name a *different*
+    organization than the one its credential actually belongs to.
+
+    For a **human** caller, `RequestContext` deliberately carries no
+    organization id of its own — a human may hold membership in more
+    than one organization, and the query parameter is how every human
+    request in this codebase (M34's decisions, M37's own outcomes
+    endpoints included) already indicates which one it is acting in,
+    already authorized against that caller's own membership+permission
+    by `authorize_context()` before this function is ever reached. There
+    is no other, more-authoritative source to prefer for a human caller
+    without inventing a new tenant-selection mechanism across the whole
+    API — out of scope for this narrow M38 correction (M37's own
+    identical `organization_id=Query(...)` endpoints are deliberately
+    left unchanged, per instruction)."""
+    if context.is_machine:
+        assert context.machine_organization_id is not None, "machine RequestContext always carries its own org id"
+        return context.machine_organization_id
+    return organization_id
+
+
 def _verification_to_read(record: IntelligenceOutcomeVerification) -> IntelligenceOutcomeVerificationRead:
     return IntelligenceOutcomeVerificationRead(
         id=record.id,
@@ -401,6 +441,7 @@ def create_outcome_verification(
     carry no such requirement — a human may record either regardless of
     what the evidence evaluation says, since both are legitimate human
     judgments the evidence check does not gate."""
+    organization_id = _authorized_organization_id(context, organization_id)
     outcome = resolve_outcome_reference(db, organization_id=organization_id, outcome_id=outcome_id)
     reject_future_verified_at(body.verified_at)
 
@@ -497,6 +538,7 @@ def list_outcome_verifications(
     for this outcome's verification. 404s (rather than an empty list) if
     `outcome_id` itself does not belong to this organization, mirroring
     every other nested-resource read in this codebase."""
+    organization_id = _authorized_organization_id(context, organization_id)
     resolve_outcome_reference(db, organization_id=organization_id, outcome_id=outcome_id)
 
     conditions = [
@@ -551,6 +593,7 @@ def get_outcome_verification_state(
     on each call (M38 spec §17's own "a reviewer should be able to
     reconstruct OUTCOME -> EVIDENCE -> EVIDENCE VALIDATION ->
     VERIFICATION -> LEARNING ELIGIBILITY without guessing")."""
+    organization_id = _authorized_organization_id(context, organization_id)
     outcome = resolve_outcome_reference(db, organization_id=organization_id, outcome_id=outcome_id)
 
     current = resolve_current_verification(db, organization_id=organization_id, outcome_id=outcome_id, as_of=as_of)
