@@ -145,13 +145,31 @@ OPENAPI_TAGS = [
     {
         "name": "intelligence-outcomes",
         "description": (
-            "Ground-truth field outcome capture for a human decision/intervention — SIE Milestone 37. "
-            "Records what actually happened afterward (EFFECTIVE/PARTIALLY_EFFECTIVE/INEFFECTIVE/"
+            "Ground-truth field outcome capture for a human decision/intervention — SIE Milestone 37 — "
+            "plus the outcome-verification/evidence-evaluation layer built on top of it in SIE Milestone "
+            "38. Records what actually happened afterward (EFFECTIVE/PARTIALLY_EFFECTIVE/INEFFECTIVE/"
             "NO_OUTCOME_RECORDED) against an existing `IntelligenceDecision`, with an optional reference "
             "to a `SafetyAction` intervention — never inferred automatically from action closure or "
-            "event absence. Append-only: no update endpoint, a correction is a new row. A ground-truth "
-            "capture layer, not the SIE learning engine "
+            "event absence — and a subsequent human judgment (VERIFIED/INSUFFICIENT_EVIDENCE/DISPUTED) "
+            "of whether that recorded outcome is trustworthy, gated by a deterministic evidence-validity "
+            "check. Both layers are append-only: no update endpoint, a correction is a new row. A "
+            "ground-truth capture and verification layer, not the SIE learning engine "
             "(`intelligence:decision_write` to create, `intelligence:read` to read)."
+        ),
+    },
+    {
+        "name": "intelligence-learning-candidates",
+        "description": (
+            "The governed entry boundary into `LEARN` — SIE Milestone 39. Creates a durable "
+            "`IntelligenceLearningCandidate` from an outcome whose resolved current verification is "
+            "`VERIFIED` with independently valid evidence (reuses SIE Milestone 38's own eligibility "
+            "gate verbatim), and records separate, later human governance decisions "
+            "(ACCEPTED/REJECTED) about whether a candidate is actually admitted into future learning. "
+            "Eligibility (a deterministic system check) and acceptance (a human governance judgment) "
+            "are never conflated. Append-only on both tables: no update endpoint, a correction is a new "
+            "governance-decision row. Still not the SIE learning engine — nothing here trains, retrains, "
+            "or adjusts a model, threshold, risk score, or intelligence rule "
+            "(`intelligence:decision_write` to create/govern, `intelligence:read` to read)."
         ),
     },
 ]

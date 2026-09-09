@@ -123,26 +123,27 @@ _VERIFICATIONS_URL = "/api/v1/intelligence/outcomes/{outcome_id}/verifications"
 _STATE_URL = "/api/v1/intelligence/outcomes/{outcome_id}/verification-state"
 
 
-# --- _authorized_organization_id: server-derived tenant for the M38 surface --------------------
+# --- resolve_authorized_organization_id: server-derived tenant for the M38 surface --------------
 #
 # Corrective hardening: the three M38 verification endpoints resolve
-# their operative organization_id through this helper rather than using
-# the raw query parameter directly. For a machine caller, the
-# credential-bound app.api.deps_context.RequestContext.
-# machine_organization_id always wins, even over a (hypothetically
-# mismatched) query value -- defense in depth beyond what
-# require_context_permission()'s own authorize_context() already
-# guarantees before any of these three handlers is ever reached. For a
-# human caller, RequestContext carries no organization id of its own (a
-# human may hold membership in more than one organization), so the
+# their operative organization_id through this shared
+# app.api.deps_context helper (moved there in SIE Milestone 39 so it has
+# exactly one implementation, reused verbatim by the M39 learning-
+# candidate endpoints too) rather than using the raw query parameter
+# directly. For a machine caller, the credential-bound
+# RequestContext.machine_organization_id always wins, even over a
+# (hypothetically mismatched) query value -- defense in depth beyond
+# what require_context_permission()'s own authorize_context() already
+# guarantees before any of these handlers is ever reached. For a human
+# caller, RequestContext carries no organization id of its own (a human
+# may hold membership in more than one organization), so the
 # already-authorized query parameter remains the only available source
 # -- identical to every other endpoint in this codebase, M37's own
 # outcomes/decisions endpoints included, deliberately left unchanged.
 
 
 def test_authorized_organization_id_prefers_machine_context_over_the_query_value(db_session):
-    from app.api.deps_context import RequestContext
-    from app.api.v1.intelligence_outcomes import _authorized_organization_id
+    from app.api.deps_context import RequestContext, resolve_authorized_organization_id
 
     machine_org = uuid.uuid4()
     mismatched_query_org = uuid.uuid4()
@@ -152,18 +153,17 @@ def test_authorized_organization_id_prefers_machine_context_over_the_query_value
 
     # Even a query value that does not match the credential's own
     # organization never wins for a machine caller.
-    assert _authorized_organization_id(context, mismatched_query_org) == machine_org
-    assert _authorized_organization_id(context, machine_org) == machine_org
+    assert resolve_authorized_organization_id(context, mismatched_query_org) == machine_org
+    assert resolve_authorized_organization_id(context, machine_org) == machine_org
 
 
 def test_authorized_organization_id_uses_the_query_value_for_human_callers(db_session):
-    from app.api.deps_context import RequestContext
-    from app.api.v1.intelligence_outcomes import _authorized_organization_id
+    from app.api.deps_context import RequestContext, resolve_authorized_organization_id
 
     org_id = uuid.uuid4()
     context = RequestContext(kind="human", user_id=uuid.uuid4())
 
-    assert _authorized_organization_id(context, org_id) == org_id
+    assert resolve_authorized_organization_id(context, org_id) == org_id
 
 
 # --- Authorization ---------------------------------------------------------------------------

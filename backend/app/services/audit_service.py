@@ -175,6 +175,16 @@ class AuditAction:
     # trustworthy; not a second outcome-recording mechanism, and not
     # learning.
     INTELLIGENCE_OUTCOME_VERIFICATION_RECORDED = "INTELLIGENCE_OUTCOME_VERIFICATION_RECORDED"
+    # SIE Milestone 39: Learning Candidate Foundation --
+    # app/services/intelligence_learning_candidate_service.py is the one
+    # write path (called from
+    # app/api/v1/intelligence_learning_candidates.py). Establishes the
+    # governed bridge from a verified outcome into a future learning
+    # pipeline; this milestone never learns anything itself.
+    INTELLIGENCE_LEARNING_CANDIDATE_CREATED = "INTELLIGENCE_LEARNING_CANDIDATE_CREATED"
+    INTELLIGENCE_LEARNING_CANDIDATE_GOVERNANCE_DECISION_RECORDED = (
+        "INTELLIGENCE_LEARNING_CANDIDATE_GOVERNANCE_DECISION_RECORDED"
+    )
 
 
 class AuditService:

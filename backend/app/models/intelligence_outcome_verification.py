@@ -118,7 +118,7 @@ constraint before that).
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, ForeignKeyConstraint, Index, String, Text, Uuid
+from sqlalchemy import DateTime, ForeignKey, ForeignKeyConstraint, Index, String, Text, UniqueConstraint, Uuid
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -131,6 +131,15 @@ class IntelligenceOutcomeVerification(UUIDPrimaryKeyMixin, OrganizationScopedMix
     __table_args__ = (
         Index("ix_intelligence_outcome_verifications_org_outcome", "organization_id", "outcome_id"),
         Index("ix_intelligence_outcome_verifications_org_verified_at", "organization_id", "verified_at"),
+        # SIE Milestone 39 -- enables a genuine, DB-enforced composite
+        # foreign key from IntelligenceLearningCandidate.verification_id,
+        # mirroring intelligence_outcomes' own identical SIE Milestone
+        # 38 constraint (and intelligence_decisions' own SIE Milestone
+        # 37 constraint before that). See
+        # app/models/intelligence_learning_candidate.py's own docstring.
+        UniqueConstraint(
+            "id", "organization_id", name="uq_intelligence_outcome_verifications_id_organization_id"
+        ),
         # SIE Milestone 38 -- see module docstring's "Outcome
         # relationship" section: mirrors intelligence_outcomes' own
         # SIE Milestone 37 composite-FK hardening of decision_id (safe

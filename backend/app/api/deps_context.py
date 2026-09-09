@@ -89,6 +89,50 @@ class RequestContext:
         return f"api_client:{self.client_id}" if self.is_machine else f"user:{self.user_id}"
 
 
+def resolve_authorized_organization_id(context: "RequestContext", organization_id: uuid.UUID) -> uuid.UUID:
+    """SIE Milestone 38 corrective hardening (originally added only to
+    `app/api/v1/intelligence_outcomes.py`'s three verification
+    endpoints, moved here in SIE Milestone 39 so it has exactly one
+    implementation instead of two — reused verbatim, never forked, by
+    `app/api/v1/intelligence_learning_candidates.py` too, per that
+    milestone's own "tenant resolution must follow the existing M38
+    architecture... do not redesign tenant selection" instruction).
+
+    Every organization-scoped lookup/write a caller performs after
+    `require_context_permission()` has already run should resolve its
+    operative `organization_id` through this function, never the raw
+    query parameter directly — even though `authorize_context()` above
+    has already authorized that query value against `context` before
+    any handler runs.
+
+    For a **machine** caller, the authoritative tenant is `context.
+    machine_organization_id` — resolved once, at credential
+    authentication time, from `ApiClient.organization_id`, and never
+    overridable by request content (see this module's own "item 36"
+    docstring section). Returning it here directly, instead of the query
+    string, removes each call site's own reliance on `authorize_
+    context()`'s equality check continuing to hold correct forever —
+    pure defense in depth: the two are already guaranteed equal by the
+    time this function runs, so no currently-observable behavior
+    changes, but a future bug in that check could no longer let a
+    machine credential's own request string name a *different*
+    organization than the one its credential actually belongs to.
+
+    For a **human** caller, `RequestContext` deliberately carries no
+    organization id of its own — a human may hold membership in more
+    than one organization, and the query parameter is how every human
+    request in this codebase already indicates which one it is acting
+    in, already authorized against that caller's own membership+
+    permission by `authorize_context()` before this function is ever
+    reached. There is no other, more-authoritative source to prefer for
+    a human caller without inventing a new tenant-selection mechanism
+    across the whole API."""
+    if context.is_machine:
+        assert context.machine_organization_id is not None, "machine RequestContext always carries its own org id"
+        return context.machine_organization_id
+    return organization_id
+
+
 def get_request_context(
     request: Request,
     authorization: str | None = Header(default=None),
