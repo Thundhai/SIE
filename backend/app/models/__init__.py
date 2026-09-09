@@ -36,6 +36,7 @@ from app.models.model_review_flag import ModelReviewFlag
 from app.models.ontology_concept import OntologyConcept
 from app.models.organization import Organization
 from app.models.organization_membership import OrganizationMembership
+from app.models.organizational_memory import OrganizationalMemory, OrganizationalMemoryGovernanceDecision
 from app.models.prediction import Prediction
 from app.models.prediction_outcome import PredictionOutcome
 from app.models.project import Project
@@ -88,6 +89,8 @@ __all__ = [
     "OntologyConcept",
     "Organization",
     "OrganizationMembership",
+    "OrganizationalMemory",
+    "OrganizationalMemoryGovernanceDecision",
     "Prediction",
     "PredictionOutcome",
     "Project",

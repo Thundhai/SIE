@@ -3645,3 +3645,280 @@ def test_learning_candidates_composite_foreign_key_rejects_cross_tenant_rows_at_
             conn.rollback()
     finally:
         engine.dispose()
+
+
+@requires_postgres
+def test_organizational_memory_migration_downgrade_then_reupgrade_round_trips_cleanly(monkeypatch):
+    """SIE Milestone 40: Organizational Memory Architecture (migration
+    0029). Downgrading to 0028 must drop
+    `organizational_memory_governance_decisions` and
+    `organizational_memories` entirely, along with their two native
+    enum types (`organizational_memory_type`,
+    `organizational_memory_governance_status`), while leaving every
+    0028-and-earlier table/type/enum/constraint untouched. Re-upgrading
+    to head must recreate all four correctly. No new constraint is added
+    to `intelligence_learning_candidates` itself in this migration -- its
+    own `UNIQUE(id, organization_id)` already exists from migration
+    0028."""
+    engine = _fresh_schema_engine()
+    try:
+        monkeypatch.setattr("app.core.config.settings.DATABASE_URL", PG_TEST_DATABASE_URL)
+        config = _alembic_config()
+
+        command.upgrade(config, "head")
+
+        with engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version == _current_head_revision(config)
+
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+                ).all()
+            }
+            assert "organizational_memories" in tables
+            assert "organizational_memory_governance_decisions" in tables
+
+            enum_types = {row[0] for row in conn.execute(text("SELECT typname FROM pg_type WHERE typtype = 'e'")).all()}
+            assert "organizational_memory_type" in enum_types
+            assert "organizational_memory_governance_status" in enum_types
+
+            memory_type_values = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT enumlabel FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid "
+                        "WHERE t.typname = 'organizational_memory_type'"
+                    )
+                ).all()
+            }
+            assert memory_type_values == {
+                "LESSON_LEARNED", "EFFECTIVE_PRACTICE", "FAILED_APPROACH",
+                "EARLY_WARNING_PATTERN", "CONTROL_INSIGHT",
+            }
+
+            governance_status_values = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT enumlabel FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid "
+                        "WHERE t.typname = 'organizational_memory_governance_status'"
+                    )
+                ).all()
+            }
+            assert governance_status_values == {"ACTIVE", "RETRACTED"}
+
+        command.downgrade(config, "0028")
+
+        with engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version == "0028"
+
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+                ).all()
+            }
+            assert "organizational_memories" not in tables
+            assert "organizational_memory_governance_decisions" not in tables
+            # Untouched by 0029's downgrade.
+            assert "intelligence_learning_candidates" in tables
+            assert "intelligence_learning_candidate_governance_decisions" in tables
+
+            enum_types = {row[0] for row in conn.execute(text("SELECT typname FROM pg_type WHERE typtype = 'e'")).all()}
+            assert "organizational_memory_type" not in enum_types
+            assert "organizational_memory_governance_status" not in enum_types
+            # Not dropped/redefined by this migration's downgrade.
+            assert "intelligence_learning_candidate_governance_status" in enum_types
+
+            candidate_constraints = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT conname FROM pg_constraint WHERE conrelid = "
+                        "'intelligence_learning_candidates'::regclass"
+                    )
+                ).all()
+            }
+            assert "uq_intelligence_learning_candidates_id_organization_id" in candidate_constraints
+
+        command.upgrade(config, "head")
+
+        with engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version == _current_head_revision(config)
+
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+                ).all()
+            }
+            assert "organizational_memories" in tables
+            assert "organizational_memory_governance_decisions" in tables
+
+            memory_columns = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = 'organizational_memories'"
+                    )
+                ).all()
+            }
+            assert "organization_id" in memory_columns
+            assert "learning_candidate_id" in memory_columns
+            assert "memory_type" in memory_columns
+            assert "title" in memory_columns
+            assert "memory_content" in memory_columns
+            assert "rationale" in memory_columns
+            assert "created_by_user_id" in memory_columns
+            assert "created_by_api_client_id" in memory_columns
+
+            gov_columns = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' "
+                        "AND table_name = 'organizational_memory_governance_decisions'"
+                    )
+                ).all()
+            }
+            assert "memory_id" in gov_columns
+            assert "status" in gov_columns
+            assert "rationale" in gov_columns
+            assert "decided_at" in gov_columns
+
+            enum_types = {row[0] for row in conn.execute(text("SELECT typname FROM pg_type WHERE typtype = 'e'")).all()}
+            assert "organizational_memory_type" in enum_types
+            assert "organizational_memory_governance_status" in enum_types
+    finally:
+        engine.dispose()
+
+
+@requires_postgres
+def test_organizational_memory_composite_foreign_key_rejects_cross_tenant_rows_at_the_database_level(monkeypatch):
+    """SIE Milestone 40: proves the `learning_candidate_id`
+    tenant-integrity hardening on `organizational_memories`, and the
+    `memory_id` hardening on
+    `organizational_memory_governance_decisions`, are genuine,
+    schema-level guarantees -- not merely application-checked. Bypasses
+    the service layer entirely (raw SQL `INSERT`) and asserts PostgreSQL
+    itself rejects a row whose `organization_id` does not match its
+    referenced parent row's own -- identical reasoning to
+    `test_learning_candidates_composite_foreign_key_rejects_cross_tenant_rows_at_the_database_level`
+    (SIE Milestone 39), applied here to both new M40 tables."""
+    import uuid
+
+    import psycopg
+    import pytest
+    from sqlalchemy.exc import IntegrityError
+
+    engine = _fresh_schema_engine()
+    try:
+        monkeypatch.setattr("app.core.config.settings.DATABASE_URL", PG_TEST_DATABASE_URL)
+        config = _alembic_config()
+        command.upgrade(config, "head")
+
+        with engine.connect() as conn:
+            org_a = uuid.uuid4()
+            org_b = uuid.uuid4()
+            for org_id, name in ((org_a, "Org A"), (org_b, "Org B")):
+                conn.execute(
+                    text(
+                        "INSERT INTO organizations (id, name, status, created_at, updated_at) "
+                        "VALUES (:id, :name, 'active', now(), now())"
+                    ),
+                    {"id": org_id, "name": name},
+                )
+            decision_b = uuid.uuid4()
+            conn.execute(
+                text(
+                    "INSERT INTO intelligence_decisions "
+                    "(id, organization_id, scope, attention_reference, attention_category, attention_priority, "
+                    "attention_title, attention_explanation, intelligence_as_of, intelligence_window_days, "
+                    "decision, rationale, decided_at, created_at, updated_at) "
+                    "VALUES (:id, :org_id, 'organization', 'ref-1', 'DETERIORATING_TREND', 'HIGH', 'Title', "
+                    "'Explanation', now(), 30, 'DEFER', 'Test rationale', now(), now(), now())"
+                ),
+                {"id": decision_b, "org_id": org_b},
+            )
+            outcome_b = uuid.uuid4()
+            conn.execute(
+                text(
+                    "INSERT INTO intelligence_outcomes "
+                    "(id, organization_id, decision_id, classification, summary, outcome_at, created_at, updated_at) "
+                    "VALUES (:id, :org_id, :decision_id, 'EFFECTIVE', 'test', now(), now(), now())"
+                ),
+                {"id": outcome_b, "org_id": org_b, "decision_id": decision_b},
+            )
+            verification_b = uuid.uuid4()
+            conn.execute(
+                text(
+                    "INSERT INTO intelligence_outcome_verifications "
+                    "(id, organization_id, outcome_id, status, rationale, verified_at, created_at, updated_at) "
+                    "VALUES (:id, :org_id, :outcome_id, 'VERIFIED', 'test', now(), now(), now())"
+                ),
+                {"id": verification_b, "org_id": org_b, "outcome_id": outcome_b},
+            )
+            candidate_b = uuid.uuid4()
+            conn.execute(
+                text(
+                    "INSERT INTO intelligence_learning_candidates "
+                    "(id, organization_id, outcome_id, verification_id, created_at, updated_at) "
+                    "VALUES (:id, :org_id, :outcome_id, :verification_id, now(), now())"
+                ),
+                {"id": candidate_b, "org_id": org_b, "outcome_id": outcome_b, "verification_id": verification_b},
+            )
+            conn.commit()
+
+            # Forbidden row 1: candidate_b (org_b) referenced by a
+            # memory row claiming organization_id=org_a. A plain
+            # single-column FK on learning_candidate_id alone would
+            # happily accept this; the composite FK must not.
+            with pytest.raises((IntegrityError, psycopg.errors.ForeignKeyViolation)):
+                conn.execute(
+                    text(
+                        "INSERT INTO organizational_memories "
+                        "(id, organization_id, learning_candidate_id, memory_type, title, memory_content, "
+                        "rationale, created_at, updated_at) "
+                        "VALUES (gen_random_uuid(), :org_id, :candidate_id, 'LESSON_LEARNED', 'Title', "
+                        "'Content', 'Rationale', now(), now())"
+                    ),
+                    {"org_id": org_a, "candidate_id": candidate_b},
+                )
+                conn.commit()
+            conn.rollback()
+
+            # A legitimate, same-tenant memory row, so the second
+            # forbidden-row check below has a real memory_b to target.
+            memory_b = uuid.uuid4()
+            conn.execute(
+                text(
+                    "INSERT INTO organizational_memories "
+                    "(id, organization_id, learning_candidate_id, memory_type, title, memory_content, "
+                    "rationale, created_at, updated_at) "
+                    "VALUES (:id, :org_id, :candidate_id, 'LESSON_LEARNED', 'Title', 'Content', 'Rationale', "
+                    "now(), now())"
+                ),
+                {"id": memory_b, "org_id": org_b, "candidate_id": candidate_b},
+            )
+            conn.commit()
+
+            # Forbidden row 2: memory_b (org_b) referenced by a
+            # governance-decision row claiming organization_id=org_a.
+            with pytest.raises((IntegrityError, psycopg.errors.ForeignKeyViolation)):
+                conn.execute(
+                    text(
+                        "INSERT INTO organizational_memory_governance_decisions "
+                        "(id, organization_id, memory_id, status, rationale, decided_at, created_at, updated_at) "
+                        "VALUES (gen_random_uuid(), :org_id, :memory_id, 'RETRACTED', 'test', now(), now(), now())"
+                    ),
+                    {"org_id": org_a, "memory_id": memory_b},
+                )
+                conn.commit()
+            conn.rollback()
+    finally:
+        engine.dispose()

@@ -186,6 +186,14 @@ class AuditAction:
         "INTELLIGENCE_LEARNING_CANDIDATE_GOVERNANCE_DECISION_RECORDED"
     )
 
+    # SIE Milestone 40: Organizational Memory Architecture -- the
+    # durable, governed knowledge write path (called from
+    # app/api/v1/organizational_memory.py). Establishes what the
+    # organization remembers from an ACCEPTED learning candidate; this
+    # milestone never determines how SIE uses that memory (M41).
+    ORGANIZATIONAL_MEMORY_CREATED = "ORGANIZATIONAL_MEMORY_CREATED"
+    ORGANIZATIONAL_MEMORY_GOVERNANCE_DECISION_RECORDED = "ORGANIZATIONAL_MEMORY_GOVERNANCE_DECISION_RECORDED"
+
 
 class AuditService:
     def log(

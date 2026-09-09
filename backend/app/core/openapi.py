@@ -172,6 +172,22 @@ OPENAPI_TAGS = [
             "(`intelligence:decision_write` to create/govern, `intelligence:read` to read)."
         ),
     },
+    {
+        "name": "organizational-memory",
+        "description": (
+            "Durable, governed organizational knowledge — SIE Milestone 40. Creates an "
+            "`OrganizationalMemory` from an `IntelligenceLearningCandidate` whose resolved current "
+            "governance decision is `ACCEPTED` (reuses SIE Milestone 39's own governance-resolution "
+            "function verbatim) — a pending or `REJECTED` candidate can never become memory. The "
+            "knowledge statement itself is always explicitly authored by an authorized actor, never "
+            "LLM-generated or inferred automatically from an outcome. Supports a separate, later human "
+            "governance decision (ACTIVE/RETRACTED) about whether a memory remains current, without ever "
+            "editing the original statement. Append-only on both tables: no update endpoint, a correction "
+            "is a new governance-decision row. Still not the mechanism that changes SIE's intelligence — "
+            "nothing here trains, retrains, or adjusts a model, threshold, risk score, or intelligence "
+            "rule (`intelligence:decision_write` to create/govern, `intelligence:read` to read)."
+        ),
+    },
 ]
 
 _MACHINE_BEARER_DESCRIPTION = (

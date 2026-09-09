@@ -15,6 +15,7 @@ from app.api.v1 import (
     knowledge,
     memberships,
     model_governance,
+    organizational_memory,
     organizations,
     predictions,
     projects,
@@ -39,6 +40,7 @@ api_router.include_router(intelligence.router)
 api_router.include_router(intelligence_decisions.router)
 api_router.include_router(intelligence_outcomes.router)
 api_router.include_router(intelligence_learning_candidates.router)
+api_router.include_router(organizational_memory.router)
 api_router.include_router(events.router)
 api_router.include_router(actions.router)
 api_router.include_router(predictions.router)
