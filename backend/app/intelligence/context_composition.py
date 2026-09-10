@@ -99,6 +99,11 @@ from app.intelligence.enterprise_intelligence_service import (
     Provenance,
     compute_enterprise_intelligence,
 )
+from app.intelligence.memory_integration import (
+    MEMORY_INTEGRATION_VERSION,
+    IntegratedMemory,
+    resolve_eligible_organizational_memories,
+)
 from app.intelligence.temporal import utcnow
 from app.models.ontology_concept import OntologyConcept
 from app.models.prediction import Prediction
@@ -444,6 +449,75 @@ def _knowledge_evidence(
     return KnowledgeEvidenceContext(outcome=response.outcome.value, unavailable_reason=None, response=response)
 
 
+# --- Organizational Memory (SIE Milestone 41A) ---------------------------------------------------
+#
+# A fifth, independent category alongside the four above -- never
+# merged into Observed/Deterministic/Predictive/Knowledge. This is the
+# M41A integration seam: `resolve_eligible_organizational_memories()`
+# (SIE Milestone 41, `app/intelligence/memory_integration.py`) remains
+# the single source of truth for eligibility, governance, `as_of`,
+# applicability, and provenance -- this module calls it verbatim,
+# exactly once, and never re-implements any of that logic. See that
+# module's own docstring for the full architectural rationale, and
+# `docs/LEARNING_INTEGRATION_V0_1.md`'s own "M41A" section for why this
+# addition is purely additive and changes no existing calculation.
+
+
+class OrganizationalMemoryOutcome(str, Enum):
+    OK = "OK"
+    # The memory-resolution query itself raised -- isolated exactly like
+    # Observed's/Knowledge's own failure-isolation pattern above: never
+    # blanks any other category.
+    UNAVAILABLE = "UNAVAILABLE"
+
+
+@dataclass
+class OrganizationalMemoryContextSummary:
+    outcome: str  # OrganizationalMemoryOutcome
+    unavailable_reason: str | None
+    #: `IntegratedMemory` objects reused verbatim from
+    #: `app.intelligence.memory_integration` -- never a second,
+    #: parallel shape for the same data.
+    items: list[IntegratedMemory]
+    calculation_version: str
+
+
+def _organizational_memory_context(
+    db: Session,
+    *,
+    organization_id: uuid.UUID,
+    scope: str,
+    site_id: uuid.UUID | None,
+    project_id: uuid.UUID | None,
+    as_of: datetime,
+) -> OrganizationalMemoryContextSummary:
+    """The one call site this milestone adds:
+    `resolve_eligible_organizational_memories()`, unchanged, given the
+    exact same `organization_id`/`scope`/`site_id`/`project_id`/`as_of`
+    this Field Intelligence Context was already evaluated with -- so a
+    memory's eligibility/applicability is always judged against the
+    identical scope and instant as every other category in this same
+    response, never a second, drifted interpretation of "now"."""
+    try:
+        result = resolve_eligible_organizational_memories(
+            db, organization_id=organization_id, scope=scope, site_id=site_id, project_id=project_id, as_of=as_of
+        )
+    except Exception as exc:  # noqa: BLE001 -- deliberate: isolate this category's failure, never the whole response
+        logger.exception("Field Intelligence Context: Organizational Memory query failed")
+        return OrganizationalMemoryContextSummary(
+            outcome=OrganizationalMemoryOutcome.UNAVAILABLE.value,
+            unavailable_reason=str(exc),
+            items=[],
+            calculation_version=MEMORY_INTEGRATION_VERSION,
+        )
+    return OrganizationalMemoryContextSummary(
+        outcome=OrganizationalMemoryOutcome.OK.value,
+        unavailable_reason=None,
+        items=result.items,
+        calculation_version=result.calculation_version,
+    )
+
+
 # --- Composition -------------------------------------------------------------------------------
 
 
@@ -461,6 +535,11 @@ class FieldIntelligenceContextResult:
     deterministic: EnterpriseIntelligenceResult
     predictive: PredictiveSignalContext
     knowledge: KnowledgeEvidenceContext
+    #: SIE Milestone 41A -- a fifth, independent, explicitly-labeled
+    #: category. Purely additive: never read by, and never influences,
+    #: `deterministic`/`predictive`/`observed`/`knowledge` above (see
+    #: `_organizational_memory_context()`'s own docstring).
+    organizational_memory: OrganizationalMemoryContextSummary
     provenance: Provenance
     calculation_versions: dict[str, str] = field(default_factory=dict)
 
@@ -503,9 +582,13 @@ def compose_field_intelligence_context(
     knowledge = _knowledge_evidence(
         db, organization_id=organization_id, knowledge_query=knowledge_query, knowledge_top_k=knowledge_top_k
     )
+    organizational_memory = _organizational_memory_context(
+        db, organization_id=organization_id, scope=scope, site_id=site_id, project_id=project_id, as_of=as_of
+    )
 
     calculation_versions = dict(enterprise.provenance.calculation_versions)
     calculation_versions["context_composition"] = FIELD_INTELLIGENCE_CONTEXT_COMPOSITION_VERSION
+    calculation_versions["organizational_memory"] = organizational_memory.calculation_version
 
     return FieldIntelligenceContextResult(
         scope=scope,
@@ -520,6 +603,7 @@ def compose_field_intelligence_context(
         deterministic=enterprise,
         predictive=predictive,
         knowledge=knowledge,
+        organizational_memory=organizational_memory,
         provenance=enterprise.provenance,
         calculation_versions=calculation_versions,
     )
@@ -536,5 +620,7 @@ __all__ = [
     "PredictiveSignalContext",
     "KnowledgeEvidenceOutcome",
     "KnowledgeEvidenceContext",
+    "OrganizationalMemoryOutcome",
+    "OrganizationalMemoryContextSummary",
     "compose_field_intelligence_context",
 ]

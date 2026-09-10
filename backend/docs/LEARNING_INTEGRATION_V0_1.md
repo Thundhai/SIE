@@ -273,3 +273,154 @@ M41 establishes the governed bridge: organizational memory can now
 inform intelligence context, explicitly, traceably, and only within
 deterministic, tenant-safe, temporally correct bounds. It does not yet
 decide, on SIE's own initiative, what to do with that information.
+
+## 19. SIE Milestone 41A: Learning Integration Corrective
+
+An independent audit of M41 found it technically sound as an
+eligibility/applicability layer, but identified one architectural gap:
+M41 exposed applicable memories only through three **separate**
+memory-context endpoints (§6) — it never actually joined organizational
+memory into SIE's existing intelligence context/reasoning architecture
+(`FieldIntelligenceContextResult`/`compose_field_intelligence_context()`,
+SIE Milestone 32). A caller who wanted both had to fetch intelligence
+context and memory context separately and combine them by hand. M41A is
+the small, targeted correction for that one gap — nothing else about
+M41 changed.
+
+**(1) What the correction adds.** `FieldIntelligenceContextResult` (and
+its API twin, `FieldIntelligenceContextRead`) gains one new field,
+`organizational_memory`, populated by a new `_organizational_memory_
+context()` wrapper inside `app/intelligence/context_composition.py`.
+`compose_field_intelligence_context()` — the single function every
+consumer of intelligence context already calls (`GET /intelligence/
+context`, `GET /intelligence/sites/{id}/context`, and, internally,
+`compose_attention()`, SIE Milestone 33) — now returns applicable
+organizational memory in the *same* response, at the *same* call, as
+Observed/Deterministic/Predictive/Knowledge.
+
+**(2) Why organizational memory now belongs in existing intelligence
+context.** The audit's own framing: a human (or downstream automated
+consumer) reasoning about current field conditions should not have to
+know, as a separate integration detail, that a second endpoint exists
+carrying relevant institutional memory. Reasoning over "what does SIE
+currently observe/predict/know, and what has the organization already
+learned that's relevant here" is one coherent question — M41A makes it
+answerable in one call, matching the conceptual architecture:
+
+```
+Existing SIE intelligence
+    +-- Observed
+    +-- Deterministic
+    +-- Predictive
+    +-- Knowledge
+    +-- Organizational Memory   <-- M41 (eligibility/applicability) + M41A (this integration seam)
+    v
+Human/decision reasoning -> Decision / Intervention
+```
+
+**(3) Why it remains a separate context category.** `organizational_
+memory` is a fifth, independent field — never merged into `observed`,
+`deterministic`, `predictive`, or `knowledge`. It carries its own
+`outcome` (`OK`/`UNAVAILABLE`), its own `calculation_version`
+(`MEMORY_INTEGRATION_VERSION`, unchanged from M41), and its own list of
+`IntegratedMemoryRead` items — the identical shape `GET /intelligence/
+memory-context` already returns (`app/schemas/memory_integration.py`,
+reused verbatim, never redefined a second time). A memory is always
+identifiable as organizational memory, never conflated with an
+observed fact, a deterministic indicator, a predictive signal, or a
+retrieved knowledge passage.
+
+**(4) Why existing intelligence calculations remain unchanged.**
+`_organizational_memory_context()` is purely additive: it is called
+once, after `observed`/`deterministic`/`predictive`/`knowledge` are
+already fully computed, and its own result is never read by, and never
+feeds into, any of the four existing categories' own computation.
+Concretely: `compute_enterprise_intelligence()` (indicators, trend,
+anomalies, concentration, recurrence, risk score), the observed-fact
+query, the predictive-signal lookup, and the knowledge-evidence query
+are byte-for-byte the same functions, called with the same arguments,
+as before this milestone — none of them accepts or reads an
+organizational-memory parameter. `tests/test_context_composition_
+organizational_memory.py` proves this empirically, not just by
+inspection: it composes the identical context twice — once before an
+organizational memory exists, once after one is created (and, in a
+second test, once before and once after a memory is retracted) — and
+asserts `observed`/`deterministic`/`predictive`/`knowledge` (indicators,
+trend, anomalies, risk score included) are unchanged, while only
+`organizational_memory` differs. The existing M32/M33/M41 test suites
+(112 tests) also continue to pass unmodified.
+
+**(5) How temporal/governance resolution works.** Unchanged from M41,
+reused verbatim: `_organizational_memory_context()`'s entire body is a
+single call to `resolve_eligible_organizational_memories()` (`app/
+intelligence/memory_integration.py`), passed the exact same
+`organization_id`/`scope`/`site_id`/`project_id`/`as_of` this Field
+Intelligence Context was already being evaluated with. M41's own
+`as_of` hard requirement therefore applies unmodified: only memories
+with `created_at <= as_of` are eligible, and governance
+(`ACTIVE`/`RETRACTED`) is resolved *as of that same `as_of`*, never
+today's current governance. See §9 above for the worked example — M41A
+does not restate or reimplement it, only calls through to it.
+
+**(6) How applicability works.** Unchanged from M41, reused verbatim:
+`ORGANIZATION_WIDE`/`SITE_MATCH`/`PROJECT_SITE_MATCH`/`ORGANIZATION_
+SCOPE_ROLLUP`, exactly as §7 above describes. M41A introduces no second
+applicability rule, and does not touch `is_project_site_associated_
+as_of()` (SIE Milestone 35B/36) or `IntelligenceOutcome.site_id`.
+
+**(7) How provenance works.** Unchanged from M41: every item under
+`organizational_memory.items` still carries `memory_id`, `learning_
+candidate_id`, `outcome_id`, `verification_id`, `applicability_basis`,
+and `governance_status`/`governance_is_explicit`/`governance_decided_
+at` — the full `IntelligenceDecision -> IntelligenceOutcome ->
+IntelligenceOutcomeVerification -> IntelligenceLearningCandidate ->
+OrganizationalMemory` chain (§2-5 above) remains discoverable from a
+single Field Intelligence Context response, not only from the
+standalone memory-context endpoints. The pre-existing decision
+memory-context endpoint (`GET /intelligence/decisions/{id}/memory-
+context`, §13) is untouched — M41A did not need to, and did not,
+redesign `IntelligenceDecision` or that endpoint.
+
+**(8) Why no migration is required.** `organizational_memory` is
+computed live, inside `compose_field_intelligence_context()`, from
+rows M37-M40 already made immutable — exactly the same reasoning §17
+above already gives for M41 itself. Adding a field to an in-memory
+composition result and its Pydantic response schema requires no new
+table and no new column; persisting a duplicate copy of memory
+applicability inside a "Field Intelligence Context" table would be
+exactly the duplicate source of truth §17 above already warns against.
+The migration head remains `0029`.
+
+**(9) Why this is not RAG.** No vector store, embedding, similarity
+search, or LLM call was introduced by this correction — `_organizational_
+memory_context()`'s only substantive line of logic is a call to M41's
+own deterministic, structural `resolve_eligible_organizational_
+memories()`. Static tests (`test_organizational_memory_context_never_
+calls_db_add_flush_or_commit`, `test_context_composition_module_has_no_
+ml_llm_or_vector_import`) guard against this regressing.
+
+**(10) Why this is not autonomous learning.** `_organizational_memory_
+context()` and the wider `context_composition.py` module never
+reference `create_organizational_memory()`, `record_memory_governance_
+decision()`, `create_learning_candidate()`, `record_governance_
+decision()`, ontology mutation, terminology mutation, or model
+training/mutation (`test_context_composition_module_never_references_
+memory_mutation_or_ontology_terminology_mutation`) — this correction is
+strictly a read/composition integration, exactly as M41 itself was.
+Composing a Field Intelligence Context performs no database write
+(`test_composing_context_with_organizational_memory_never_writes_to_
+the_database`), confirmed for the whole composition call, not only for
+the memory sub-query M41 already proved this for.
+
+**(11) What remains deferred.** Everything §18 above already deferred
+for M41 remains deferred here too — M41A does not narrow or extend that
+list. Additionally: `compose_attention()` (SIE Milestone 33) itself
+still only surfaces `FieldIntelligenceContextResult`'s pre-existing four
+categories in its own `AttentionItem` output; M41A did not extend
+`AttentionItem` to carry `organizational_memory` (attention triage
+remains exactly as it was), since the spec's own scope-control
+instruction named `compose_field_intelligence_context()`/`FieldIntelligenceContext`
+specifically, not the downstream attention layer. A future milestone
+may decide whether attention triage should itself surface applicable
+memory; that decision was left to the (as yet unconducted) SIE audit,
+not made unilaterally here.

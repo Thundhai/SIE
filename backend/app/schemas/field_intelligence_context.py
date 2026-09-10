@@ -54,6 +54,7 @@ from app.schemas.enterprise_intelligence import (
     EnterpriseIntelligenceRead,
     PredictiveContextRead,
 )
+from app.schemas.memory_integration import IntegratedMemoryRead
 from app.schemas.retrieval import RetrievalResultRead
 
 
@@ -101,6 +102,21 @@ class KnowledgeEvidenceRead(BaseModel):
     query: str | None
     results: list[RetrievalResultRead]
     result_count: int
+
+
+class OrganizationalMemoryContextRead(BaseModel):
+    """SIE Milestone 41A: a fifth, independent, explicitly-labeled
+    category alongside `observed`/`deterministic`/`predictive`/
+    `knowledge` above -- never merged into any of them. `items` reuses
+    `IntegratedMemoryRead` verbatim from SIE Milestone 41's own schema
+    module (`app/schemas/memory_integration.py`) -- the identical shape
+    `GET /intelligence/memory-context` already returns, never a second,
+    parallel definition of the same data."""
+
+    outcome: str = "OK | UNAVAILABLE"
+    unavailable_reason: str | None
+    items: list[IntegratedMemoryRead]
+    calculation_version: str
 
 
 class OperationalScopeSiteRead(BaseModel):
@@ -158,6 +174,7 @@ class FieldIntelligenceContextRead(BaseModel):
     deterministic: EnterpriseIntelligenceRead
     predictive: PredictiveSignalRead
     knowledge: KnowledgeEvidenceRead
+    organizational_memory: OrganizationalMemoryContextRead
     calculation_versions: dict[str, str]
     operational_scope: OperationalScopeRead | None = None
 
@@ -168,6 +185,7 @@ __all__ = [
     "ObservedFactRead",
     "PredictiveSignalRead",
     "KnowledgeEvidenceRead",
+    "OrganizationalMemoryContextRead",
     "OperationalScopeSiteRead",
     "OperationalScopeProjectRead",
     "OperationalScopeRead",

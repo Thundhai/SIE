@@ -99,6 +99,7 @@ from app.schemas.field_intelligence_context import (
     OperationalScopeProjectRead,
     OperationalScopeRead,
     OperationalScopeSiteRead,
+    OrganizationalMemoryContextRead,
     PredictiveSignalRead,
 )
 from app.schemas.intelligence import (
@@ -625,6 +626,12 @@ def _to_field_intelligence_context_read(
                 [_to_retrieval_result_read(r) for r in knowledge_response.results] if knowledge_response else []
             ),
             result_count=(knowledge_response.result_count if knowledge_response else 0),
+        ),
+        organizational_memory=OrganizationalMemoryContextRead(
+            outcome=result.organizational_memory.outcome,
+            unavailable_reason=result.organizational_memory.unavailable_reason,
+            items=[IntegratedMemoryRead(**vars(item)) for item in result.organizational_memory.items],
+            calculation_version=result.organizational_memory.calculation_version,
         ),
         calculation_versions=result.calculation_versions,
         operational_scope=operational_scope,
