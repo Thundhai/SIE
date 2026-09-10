@@ -44,6 +44,7 @@ from app.api.deps_rate_limit import RateLimitClass, require_rate_limit
 from app.core.config import settings
 from app.core.idempotency import check_and_replay, compute_request_hash, store_response
 from app.core.request_id import get_request_id
+from app.intelligence.memory_integration import resolve_eligible_organizational_memories
 from app.models.intelligence_decision import IntelligenceDecision
 from app.models.intelligence_decision_enums import IntelligenceDecisionType
 from app.models.safety_action import SafetyAction
@@ -54,11 +55,13 @@ from app.schemas.intelligence_decision import (
     IntelligenceDecisionListRead,
     IntelligenceDecisionRead,
 )
+from app.schemas.memory_integration import DecisionMemoryIntegrationContextRead, IntegratedMemoryRead
 from app.services.audit_service import AuditAction, audit_service
 from app.services.intelligence_decision_service import (
     decision_mutation_transaction,
     record_decision,
     resolve_attention_item,
+    resolve_decision_reference,
 )
 from app.services.permissions import Permission
 from app.services.risk_assessment_service import resolve_action_reference
@@ -324,6 +327,66 @@ def get_intelligence_decision(
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Decision not found in this organization.")
     return _to_read(db, record)
+
+
+# --- Decision traceability into Learning Integration (SIE Milestone 41) -----------------------
+
+
+@router.get(
+    "/decisions/{decision_id}/memory-context",
+    response_model=DecisionMemoryIntegrationContextRead,
+    dependencies=[Depends(require_rate_limit(RateLimitClass.READ))],
+)
+def get_intelligence_decision_memory_context(
+    decision_id: uuid.UUID,
+    organization_id: uuid.UUID = Query(...),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=200),
+    context: RequestContext = Depends(require_context_permission(Permission.INTELLIGENCE_READ)),
+    db: Session = Depends(get_db),
+) -> DecisionMemoryIntegrationContextRead:
+    """SIE Milestone 41 decision traceability (spec §10/§20): reconstructs
+    which organizational memories were eligible and applicable to the
+    exact intelligence context this decision was made against, using
+    only fields this decision already stored at `POST /intelligence/
+    decisions` time (`scope`, `site_id`, `intelligence_as_of`) -- never
+    a new persisted link, never a redesign of `IntelligenceDecision`
+    itself. `project_id` is not part of this reconstruction:
+    `IntelligenceDecision` carries no `project_id` of its own, so a
+    decision made against a project-filtered context cannot be
+    reconstructed with that same narrowing -- an honest, documented
+    limitation (`docs/LEARNING_INTEGRATION_V0_1.md`) rather than a
+    fabricated one.
+
+    A decision from a different organization (or a nonexistent id) is a
+    404, never a 403, mirroring `get_intelligence_decision()` exactly."""
+    decision = resolve_decision_reference(db, organization_id=organization_id, decision_id=decision_id)
+    result = resolve_eligible_organizational_memories(
+        db,
+        organization_id=organization_id,
+        scope=decision.scope,
+        site_id=decision.site_id,
+        as_of=decision.intelligence_as_of,
+    )
+    total = len(result.items)
+    page_items = result.items[(page - 1) * page_size : (page - 1) * page_size + page_size]
+    return DecisionMemoryIntegrationContextRead(
+        scope=result.scope,
+        organization_id=result.organization_id,
+        entity_id=result.entity_id,
+        project_id=result.project_id,
+        as_of=result.as_of,
+        generated_at=result.generated_at,
+        items=[IntegratedMemoryRead(**vars(item)) for item in page_items],
+        total=total,
+        page=page,
+        page_size=page_size,
+        calculation_version=result.calculation_version,
+        decision_id=decision.id,
+        decision_scope=decision.scope,
+        decision_site_id=decision.site_id,
+        decision_intelligence_as_of=decision.intelligence_as_of,
+    )
 
 
 __all__ = ["router"]

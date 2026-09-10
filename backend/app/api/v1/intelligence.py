@@ -62,6 +62,7 @@ from app.intelligence.enterprise_intelligence_service import (
 )
 from app.intelligence.features import feature_engineering_service
 from app.intelligence.ingestion_service import safety_event_ingestion_service
+from app.intelligence.memory_integration import MemoryIntegrationContext, resolve_eligible_organizational_memories
 from app.intelligence.schemas import RawSafetyEventPayload
 from app.intelligence.signals import risk_signal_service
 from app.intelligence.temporal import is_project_site_associated_as_of, project_site_ids_as_of
@@ -115,6 +116,7 @@ from app.schemas.intelligence import (
     TrendPeriodRead,
     TrendResultRead,
 )
+from app.schemas.memory_integration import IntegratedMemoryRead, MemoryIntegrationContextRead
 from app.schemas.retrieval import RetrievalResultRead
 from app.services.permissions import Permission
 from app.services.project_service import resolve_project_reference
@@ -720,6 +722,100 @@ def site_field_intelligence_context(
     )
     _audit_analytics_query(db, context=context, organization_id=organization_id, endpoint="sites_context")
     return _to_field_intelligence_context_read(result, operational_scope=operational_scope)
+
+
+# --- Learning Integration (SIE Milestone 41, human OR machine, tenant-authorized) --------------
+#
+# A fifth, independent category alongside M32's own Observed/
+# Deterministic/Predictive/Knowledge -- never merged into any of them,
+# exposed as its own endpoints rather than a new field on
+# `FieldIntelligenceContextRead` so this milestone's read-only
+# composition (`app/intelligence/memory_integration.py`) stays fully
+# decoupled from M32's own, separately-tested response contract. See
+# that module's own docstring for the full "why no persisted
+# integration table" and applicability/temporal rationale.
+
+
+def _to_memory_integration_context_read(
+    result: MemoryIntegrationContext, *, page: int, page_size: int
+) -> MemoryIntegrationContextRead:
+    total = len(result.items)
+    page_items = result.items[(page - 1) * page_size : (page - 1) * page_size + page_size]
+    return MemoryIntegrationContextRead(
+        scope=result.scope,
+        organization_id=result.organization_id,
+        entity_id=result.entity_id,
+        project_id=result.project_id,
+        as_of=result.as_of,
+        generated_at=result.generated_at,
+        items=[IntegratedMemoryRead(**vars(item)) for item in page_items],
+        total=total,
+        page=page,
+        page_size=page_size,
+        calculation_version=result.calculation_version,
+    )
+
+
+@router.get(
+    "/memory-context",
+    response_model=MemoryIntegrationContextRead,
+    dependencies=[Depends(require_rate_limit(RateLimitClass.READ))],
+)
+def organization_memory_context(
+    organization_id: uuid.UUID = Query(...),
+    as_of: datetime | None = Query(
+        default=None, description="Point-in-time cutoff. A memory created after as_of is never included, and "
+        "governance is resolved as of this same instant -- see docs/LEARNING_INTEGRATION_V0_1.md."
+    ),
+    project_id: uuid.UUID | None = Query(
+        default=None,
+        description="Narrows applicability to memories whose originating outcome's site is associated with this "
+        "project as of as_of, plus organization-wide memories. Omit for the full organization-scope rollup.",
+    ),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=200),
+    context: RequestContext = Depends(require_context_permission(Permission.INTELLIGENCE_READ)),
+    db: Session = Depends(get_db),
+) -> MemoryIntegrationContextRead:
+    """Organization-scope: which currently-ACTIVE (or ACTIVE as of
+    `as_of`) organizational memories are applicable to this
+    organization's intelligence context right now (SIE Milestone 41).
+    Read-only, deterministic -- never trains, retrains, or mutates any
+    model, threshold, rule, ontology, or terminology."""
+    result = resolve_eligible_organizational_memories(
+        db, organization_id=organization_id, scope="organization", project_id=project_id, as_of=as_of
+    )
+    return _to_memory_integration_context_read(result, page=page, page_size=page_size)
+
+
+@router.get(
+    "/sites/{site_id}/memory-context",
+    response_model=MemoryIntegrationContextRead,
+    dependencies=[Depends(require_rate_limit(RateLimitClass.READ))],
+)
+def site_memory_context(
+    site_id: uuid.UUID,
+    organization_id: uuid.UUID = Query(...),
+    as_of: datetime | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=200),
+    context: RequestContext = Depends(require_context_permission(Permission.INTELLIGENCE_READ)),
+    db: Session = Depends(get_db),
+) -> MemoryIntegrationContextRead:
+    """Site-scope: organization-wide memories plus memories whose own
+    originating outcome belongs to this exact site. The site must
+    belong to `organization_id` — a site from a different organization
+    (or a nonexistent id) is a 404, never a 403, mirroring
+    `site_field_intelligence_context()` exactly. `project_id` is not
+    accepted here: a site scope is already a single, fixed site, so a
+    project filter would add no further narrowing (mirrors
+    `compute_enterprise_intelligence()`'s own identical site-scope
+    behavior)."""
+    _require_owned_site(db, organization_id=organization_id, site_id=site_id)
+    result = resolve_eligible_organizational_memories(
+        db, organization_id=organization_id, scope="site", site_id=site_id, as_of=as_of
+    )
+    return _to_memory_integration_context_read(result, page=page, page_size=page_size)
 
 
 # --- Attention & Delivery (SIE Milestone 33, human OR machine, tenant-authorized) ---
