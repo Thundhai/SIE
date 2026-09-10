@@ -1,7 +1,11 @@
 import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
-import App from './App.tsx';
-import { ErrorBoundary } from './components/ErrorBoundary';
+// SIE Frontend Foundation & Core UX Implementation v0.1: the live
+// application entry point now mounts the NEW SIE app (src/app/App.tsx),
+// not the legacy prototype (src/App.tsx). The legacy file is left
+// completely untouched — see docs/FRONTEND_ARCHITECTURE.md.
+import App from './app/App.tsx';
+import { AppErrorBoundary } from './app/AppErrorBoundary';
 import './index.css';
 
 // Safely suppress non-application noise from browser extensions (e.g. MetaMask / web3 injection in iframes)
@@ -39,9 +43,9 @@ if (typeof window !== 'undefined') {
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <ErrorBoundary>
+    <AppErrorBoundary>
       <App />
-    </ErrorBoundary>
+    </AppErrorBoundary>
   </StrictMode>,
 );
 

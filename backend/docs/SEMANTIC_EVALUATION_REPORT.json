@@ -1,0 +1,392 @@
+{
+  "results": [
+    {
+      "query_set_name": "existing_paraphrase_queries",
+      "hashing": {
+        "ks": [
+          1,
+          3,
+          5
+        ],
+        "recall_at_k": {
+          "1": 0.8333333333333334,
+          "3": 1.0,
+          "5": 1.0
+        },
+        "per_query": [
+          {
+            "query": "What controls are required for working at height?",
+            "expected_topic": "working_at_height",
+            "first_hit_rank": 1,
+            "top_result_similarity": 0.242536
+          },
+          {
+            "query": "What fall protection equipment must workers wear above 1.8 metres?",
+            "expected_topic": "working_at_height",
+            "first_hit_rank": 1,
+            "top_result_similarity": 0.613572
+          },
+          {
+            "query": "What checks should be completed before a lifting operation?",
+            "expected_topic": "lifting_operations",
+            "first_hit_rank": 1,
+            "top_result_similarity": 0.336816
+          },
+          {
+            "query": "Who is allowed to operate a crane during a lift?",
+            "expected_topic": "lifting_operations",
+            "first_hit_rank": 1,
+            "top_result_similarity": 0.271127
+          },
+          {
+            "query": "When is a permit to work needed?",
+            "expected_topic": "permit_to_work",
+            "first_hit_rank": 1,
+            "top_result_similarity": 0.492892
+          },
+          {
+            "query": "What happens when a permit to work is finished?",
+            "expected_topic": "permit_to_work",
+            "first_hit_rank": 1,
+            "top_result_similarity": 0.381792
+          },
+          {
+            "query": "What personal protective equipment is required on site?",
+            "expected_topic": "ppe",
+            "first_hit_rank": 1,
+            "top_result_similarity": 0.317405
+          },
+          {
+            "query": "What respiratory protection is needed for airborne contaminants?",
+            "expected_topic": "ppe",
+            "first_hit_rank": 2,
+            "top_result_similarity": 0.235702
+          },
+          {
+            "query": "What is required before entering a confined space?",
+            "expected_topic": "confined_spaces",
+            "first_hit_rank": 1,
+            "top_result_similarity": 0.196116
+          },
+          {
+            "query": "Who needs to stay outside while someone works in a confined space?",
+            "expected_topic": "confined_spaces",
+            "first_hit_rank": 1,
+            "top_result_similarity": 0.266276
+          },
+          {
+            "query": "What should I do if there is a fire alarm?",
+            "expected_topic": "emergency_response",
+            "first_hit_rank": 1,
+            "top_result_similarity": 0.25
+          },
+          {
+            "query": "How is a chemical spill handled in an emergency?",
+            "expected_topic": "emergency_response",
+            "first_hit_rank": 2,
+            "top_result_similarity": 0.29443
+          }
+        ],
+        "label": "Prototype retrieval evaluation result on synthetic fixture dataset \u2014 not a production benchmark."
+      },
+      "real": {
+        "ks": [
+          1,
+          3,
+          5
+        ],
+        "recall_at_k": {
+          "1": 0.6666666666666666,
+          "3": 0.8333333333333334,
+          "5": 0.9166666666666666
+        },
+        "per_query": [
+          {
+            "query": "What controls are required for working at height?",
+            "expected_topic": "working_at_height",
+            "first_hit_rank": 1,
+            "top_result_similarity": 0.529086
+          },
+          {
+            "query": "What fall protection equipment must workers wear above 1.8 metres?",
+            "expected_topic": "working_at_height",
+            "first_hit_rank": 1,
+            "top_result_similarity": 0.587863
+          },
+          {
+            "query": "What checks should be completed before a lifting operation?",
+            "expected_topic": "lifting_operations",
+            "first_hit_rank": 1,
+            "top_result_similarity": 0.43154
+          },
+          {
+            "query": "Who is allowed to operate a crane during a lift?",
+            "expected_topic": "lifting_operations",
+            "first_hit_rank": 3,
+            "top_result_similarity": 0.616091
+          },
+          {
+            "query": "When is a permit to work needed?",
+            "expected_topic": "permit_to_work",
+            "first_hit_rank": 1,
+            "top_result_similarity": 0.444263
+          },
+          {
+            "query": "What happens when a permit to work is finished?",
+            "expected_topic": "permit_to_work",
+            "first_hit_rank": 1,
+            "top_result_similarity": 0.461474
+          },
+          {
+            "query": "What personal protective equipment is required on site?",
+            "expected_topic": "ppe",
+            "first_hit_rank": 1,
+            "top_result_similarity": 0.502583
+          },
+          {
+            "query": "What respiratory protection is needed for airborne contaminants?",
+            "expected_topic": "ppe",
+            "first_hit_rank": 1,
+            "top_result_similarity": 0.669101
+          },
+          {
+            "query": "What is required before entering a confined space?",
+            "expected_topic": "confined_spaces",
+            "first_hit_rank": 3,
+            "top_result_similarity": 0.534644
+          },
+          {
+            "query": "Who needs to stay outside while someone works in a confined space?",
+            "expected_topic": "confined_spaces",
+            "first_hit_rank": null,
+            "top_result_similarity": 0.517827
+          },
+          {
+            "query": "What should I do if there is a fire alarm?",
+            "expected_topic": "emergency_response",
+            "first_hit_rank": 1,
+            "top_result_similarity": 0.549369
+          },
+          {
+            "query": "How is a chemical spill handled in an emergency?",
+            "expected_topic": "emergency_response",
+            "first_hit_rank": 5,
+            "top_result_similarity": 0.437588
+          }
+        ],
+        "label": "Prototype retrieval evaluation result on synthetic fixture dataset \u2014 not a production benchmark."
+      },
+      "real_label": "Real semantic embedding performance \u2014 a small, genuinely backprop-trained local sentence-embedding model (scripts/train_local_semantic_model.py), evaluated because this environment cannot download the recommended production pretrained model. NOT a claim about that production model's quality \u2014 see docs/SEMANTIC_EMBEDDING.md.",
+      "hashing_label": "Prototype deterministic baseline (HashingEmbeddingProvider) \u2014 feature hashing / bag-of-words, not a trained semantic model."
+    },
+    {
+      "query_set_name": "hard_keyword_disjoint_paraphrase_queries",
+      "hashing": {
+        "ks": [
+          1,
+          3,
+          5
+        ],
+        "recall_at_k": {
+          "1": 0.3333333333333333,
+          "3": 0.75,
+          "5": 0.75
+        },
+        "per_query": [
+          {
+            "query": "What stops someone from hitting the ground if they slip off a ladder or scaffold?",
+            "expected_topic": "working_at_height",
+            "first_hit_rank": 1,
+            "top_result_similarity": 0.095346
+          },
+          {
+            "query": "Should people keep working up on a platform if it's storming outside?",
+            "expected_topic": "working_at_height",
+            "first_hit_rank": 3,
+            "top_result_similarity": 0.183391
+          },
+          {
+            "query": "Why shouldn't anyone walk underneath something a crane is moving?",
+            "expected_topic": "lifting_operations",
+            "first_hit_rank": null,
+            "top_result_similarity": 0.086066
+          },
+          {
+            "query": "What paperwork needs to exist before a heavy object gets hoisted with machinery?",
+            "expected_topic": "lifting_operations",
+            "first_hit_rank": 1,
+            "top_result_similarity": 0.225369
+          },
+          {
+            "query": "Does someone need sign-off before starting a dangerous task like welding?",
+            "expected_topic": "permit_to_work",
+            "first_hit_rank": 2,
+            "top_result_similarity": 0.100504
+          },
+          {
+            "query": "What happens to the paperwork once a risky job is finished?",
+            "expected_topic": "permit_to_work",
+            "first_hit_rank": null,
+            "top_result_similarity": 0.101015
+          },
+          {
+            "query": "What breathing gear do I need if the air quality on site is bad?",
+            "expected_topic": "ppe",
+            "first_hit_rank": 3,
+            "top_result_similarity": 0.137969
+          },
+          {
+            "query": "What should I put on my feet and head before walking into an active work zone?",
+            "expected_topic": "ppe",
+            "first_hit_rank": 2,
+            "top_result_similarity": 0.158776
+          },
+          {
+            "query": "Does someone need to watch the entrance while a colleague is inside a tank?",
+            "expected_topic": "confined_spaces",
+            "first_hit_rank": 1,
+            "top_result_similarity": 0.19518
+          },
+          {
+            "query": "What needs to happen to the air quality before someone climbs into an enclosed tank?",
+            "expected_topic": "confined_spaces",
+            "first_hit_rank": null,
+            "top_result_similarity": 0.225369
+          },
+          {
+            "query": "What should I do if I don't know what liquid leaked out of a drum?",
+            "expected_topic": "emergency_response",
+            "first_hit_rank": 3,
+            "top_result_similarity": 0.119118
+          },
+          {
+            "query": "How does a site make sure nobody got left behind after everyone runs outside?",
+            "expected_topic": "emergency_response",
+            "first_hit_rank": 1,
+            "top_result_similarity": 0.186946
+          }
+        ],
+        "label": "Prototype retrieval evaluation result on synthetic fixture dataset \u2014 not a production benchmark."
+      },
+      "real": {
+        "ks": [
+          1,
+          3,
+          5
+        ],
+        "recall_at_k": {
+          "1": 0.3333333333333333,
+          "3": 0.8333333333333334,
+          "5": 0.9166666666666666
+        },
+        "per_query": [
+          {
+            "query": "What stops someone from hitting the ground if they slip off a ladder or scaffold?",
+            "expected_topic": "working_at_height",
+            "first_hit_rank": 3,
+            "top_result_similarity": 0.447092
+          },
+          {
+            "query": "Should people keep working up on a platform if it's storming outside?",
+            "expected_topic": "working_at_height",
+            "first_hit_rank": 2,
+            "top_result_similarity": 0.393958
+          },
+          {
+            "query": "Why shouldn't anyone walk underneath something a crane is moving?",
+            "expected_topic": "lifting_operations",
+            "first_hit_rank": 1,
+            "top_result_similarity": 0.533832
+          },
+          {
+            "query": "What paperwork needs to exist before a heavy object gets hoisted with machinery?",
+            "expected_topic": "lifting_operations",
+            "first_hit_rank": 2,
+            "top_result_similarity": 0.571669
+          },
+          {
+            "query": "Does someone need sign-off before starting a dangerous task like welding?",
+            "expected_topic": "permit_to_work",
+            "first_hit_rank": 1,
+            "top_result_similarity": 0.579712
+          },
+          {
+            "query": "What happens to the paperwork once a risky job is finished?",
+            "expected_topic": "permit_to_work",
+            "first_hit_rank": 2,
+            "top_result_similarity": 0.540497
+          },
+          {
+            "query": "What breathing gear do I need if the air quality on site is bad?",
+            "expected_topic": "ppe",
+            "first_hit_rank": 3,
+            "top_result_similarity": 0.676524
+          },
+          {
+            "query": "What should I put on my feet and head before walking into an active work zone?",
+            "expected_topic": "ppe",
+            "first_hit_rank": 3,
+            "top_result_similarity": 0.595324
+          },
+          {
+            "query": "Does someone need to watch the entrance while a colleague is inside a tank?",
+            "expected_topic": "confined_spaces",
+            "first_hit_rank": 1,
+            "top_result_similarity": 0.692401
+          },
+          {
+            "query": "What needs to happen to the air quality before someone climbs into an enclosed tank?",
+            "expected_topic": "confined_spaces",
+            "first_hit_rank": null,
+            "top_result_similarity": 0.443182
+          },
+          {
+            "query": "What should I do if I don't know what liquid leaked out of a drum?",
+            "expected_topic": "emergency_response",
+            "first_hit_rank": 1,
+            "top_result_similarity": 0.548501
+          },
+          {
+            "query": "How does a site make sure nobody got left behind after everyone runs outside?",
+            "expected_topic": "emergency_response",
+            "first_hit_rank": 4,
+            "top_result_similarity": 0.468148
+          }
+        ],
+        "label": "Prototype retrieval evaluation result on synthetic fixture dataset \u2014 not a production benchmark."
+      },
+      "real_label": "Real semantic embedding performance \u2014 a small, genuinely backprop-trained local sentence-embedding model (scripts/train_local_semantic_model.py), evaluated because this environment cannot download the recommended production pretrained model. NOT a claim about that production model's quality \u2014 see docs/SEMANTIC_EMBEDDING.md.",
+      "hashing_label": "Prototype deterministic baseline (HashingEmbeddingProvider) \u2014 feature hashing / bag-of-words, not a trained semantic model."
+    }
+  ],
+  "real_provider_available": true,
+  "real_provider_model_name": "/home/user/SIE/backend/var/local_semantic_model",
+  "real_provider_dimensions": 256,
+  "hashing_seed_seconds": 0.234,
+  "real_seed_seconds": 0.336,
+  "benchmarks": [
+    {
+      "provider_name": "hashing",
+      "model_name": "sie-hashing-embedder",
+      "num_texts": 28,
+      "batch_size": 28,
+      "dimensions": 256,
+      "total_seconds": 0.0011,
+      "avg_latency_ms": 0.038,
+      "throughput_texts_per_second": 26176.15
+    },
+    {
+      "provider_name": "sentence_transformers",
+      "model_name": "/home/user/SIE/backend/var/local_semantic_model",
+      "num_texts": 28,
+      "batch_size": 32,
+      "dimensions": 256,
+      "total_seconds": 0.0115,
+      "avg_latency_ms": 0.412,
+      "throughput_texts_per_second": 2429.74
+    }
+  ],
+  "generated_at": "2026-09-03T15:25:09.975669+00:00",
+  "hashing_label": "Prototype deterministic baseline (HashingEmbeddingProvider) \u2014 feature hashing / bag-of-words, not a trained semantic model.",
+  "real_label": "Real semantic embedding performance \u2014 a small, genuinely backprop-trained local sentence-embedding model (scripts/train_local_semantic_model.py), evaluated because this environment cannot download the recommended production pretrained model. NOT a claim about that production model's quality \u2014 see docs/SEMANTIC_EMBEDDING.md."
+}

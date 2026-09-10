@@ -1,0 +1,1335 @@
+{
+  "report_type": "SIE_REAL_ENTERPRISE_DATASET_EVALUATION_V0_1",
+  "generated_at": "2026-09-02T08:48:09.592207+00:00",
+  "milestone": "SIE Real Enterprise Dataset Evaluation v0.1",
+  "is_synthetic": false,
+  "label": "Real, HSE observation/incident dataset supplied for SIE Real Enterprise Dataset Evaluation v0.1 (workbook: 'Observation & Incident Records Jan - July 2026.xlsx', cross-checked against 'Incident vS Observation.xlsx'). Personal names and other identifying details from the source narratives are never reproduced in this report; counts and structural findings only. Evaluated 2026-09-02.",
+  "scope_note": "This is an evaluation milestone, not an intelligence redesign. No predictive ML, autonomous agents, LLM classification, automated recommendations, new thresholds, or new intelligence algorithms were added. The referenced \"Real Enterprise Dataset Evaluation Specification\" (fixed intelligence questions) was not supplied to this session -- this report describes what the existing, unmodified SIE pipeline actually produced against real data instead.",
+  "pii_policy": "Raw PII (personal names in free-text narrative fields) is preserved on ingested SafetyEvent rows in the application database only -- never in source control, never in this report. Verified never read by feature engineering or predictive readiness. See REAL_ENTERPRISE_DATASET_EVALUATION_REPORT.md section 11.",
+  "components_exercised": {
+    "1_load_workbook": "DONE",
+    "2_validate_structure": "DONE",
+    "3_map_observations": "DONE",
+    "4_map_incidents": "DONE",
+    "5_preserve_provenance": "DONE",
+    "6_terminology_review": "DONE",
+    "7_data_quality_evaluation": "DONE",
+    "8_temporal_integrity": "DONE",
+    "9_provenance_validation": "DONE",
+    "10_descriptive_intelligence": "DONE",
+    "11_observation_incident_temporal_analysis": "DONE",
+    "12_predictive_readiness": "DONE_INSUFFICIENT_DATA",
+    "13_machine_readable_report": "THIS_FILE",
+    "14_human_readable_report": "REAL_ENTERPRISE_DATASET_EVALUATION_REPORT.md",
+    "15_hse_expert_review_candidates": "DONE"
+  },
+  "record_classification": {
+    "OBSERVED_total_records": 1045,
+    "MAPPED_valid": 595,
+    "MAPPED_partial": 0,
+    "QUARANTINED": 450,
+    "REJECTED": 0,
+    "UNKNOWN_terminology_terms": 18,
+    "AMBIGUOUS_terminology_terms": 0,
+    "INSUFFICIENT_DATA_predictive_labels": 13
+  },
+  "evaluation": {
+    "label": "Real, HSE observation/incident dataset supplied for SIE Real Enterprise Dataset Evaluation v0.1 (workbook: 'Observation & Incident Records Jan - July 2026.xlsx', cross-checked against 'Incident vS Observation.xlsx'). Personal names and other identifying details from the source narratives are never reproduced in this report; counts and structural findings only. Evaluated 2026-09-02.",
+    "organization_id": "6fa1da6e-cd80-473c-b8b5-4280a51e5101",
+    "generated_at": "2026-09-02T08:45:34.482775+00:00",
+    "workbook_structure_issues": [],
+    "row_level_skips": [],
+    "incident_sheet_row_count": 45,
+    "observation_sheet_row_count": 1000,
+    "project_to_site_id": {
+      "AGBASO WATER": "6590b2e3-c318-42f9-ba5b-ba6dd9f54cea",
+      "ARTEE AGRO WAREHOUSE": "759dd415-164a-48dc-893c-7b5d69fbdb1c",
+      "ATLANTIS PERIWINKLE": "65a9dd3b-97c6-4c70-a407-1aa2906a3862",
+      "AYLOR": "4228cdb9-e7d7-4faf-bdb1-68029b7c1174",
+      "BANANA VILLA-1": "d0c36056-80f5-4b4a-a93f-d99622cbbe9e",
+      "BLUE SQUARE": "372a3e8f-7428-483c-86d5-a25a8a34bf95",
+      "KADARS GATE": "8e5b6654-c930-4f98-9e5b-984f091f3332",
+      "LEKKI FREE-ZONE": "eb3b609c-05e0-424d-8f5c-6496bf599b6b",
+      "MISSOURI": "d60ed4b8-c946-4d8f-9cb7-22c1a7ad071a",
+      "PADAH LNG": "9181d612-ec71-4c8f-8747-fa349c8cb99f",
+      "PARK-AVENUE": "d878143d-0a86-4cd4-9032-8944e9f95968",
+      "SECRETARIAT": "d7ab218f-8064-4e49-b809-5237139f8c76",
+      "ZILCO": "9e2049d3-6639-4857-94a5-cad64a04d8bf"
+    },
+    "validation": {
+      "label": "Real, HSE observation/incident dataset supplied for SIE Real Enterprise Dataset Evaluation v0.1 (workbook: 'Observation & Incident Records Jan - July 2026.xlsx', cross-checked against 'Incident vS Observation.xlsx'). Personal names and other identifying details from the source narratives are never reproduced in this report; counts and structural findings only. Evaluated 2026-09-02.",
+      "organization_id": "6fa1da6e-cd80-473c-b8b5-4280a51e5101",
+      "batch_id": "7c42fbcd-b723-43ea-8eb2-316f6803c4b3",
+      "generated_at": "2026-09-02 08:45:31.534506+00:00",
+      "observed": {
+        "total_records": 1045,
+        "distinct_source_systems": [
+          "alm-hse-xlsx"
+        ],
+        "distinct_event_type_terms": 9,
+        "earliest_event_time": "2025-05-02 00:00:00+00:00",
+        "latest_event_time": "2026-08-17 00:00:00+00:00"
+      },
+      "ingestion": {
+        "total_records": 1045,
+        "successfully_processed": 1045,
+        "valid": 595,
+        "partial": 0,
+        "quarantined": 450,
+        "rejected": 0,
+        "duplicates": 0,
+        "stale_records": 0,
+        "version_conflicts": 0
+      },
+      "data_quality": {
+        "missing_identifiers": 0,
+        "missing_timestamps": 0,
+        "invalid_timestamps": 0,
+        "future_timestamps": 0,
+        "invalid_classifications": 450,
+        "incomplete_records": 0,
+        "inconsistent_values": 0,
+        "duplicate_records": 0,
+        "malformed_records": 0
+      },
+      "terminology_entries": [
+        {
+          "domain": "event_subtype",
+          "context": "OBSERVATION",
+          "source_term": "Working At Height",
+          "proposed_canonical_term": null,
+          "status": "UNKNOWN",
+          "reason": "No alias match found for this term in the existing mapping table.",
+          "occurrence_count": 128,
+          "example_source_record_ids": [
+            "ALM-HSE-OB-1059",
+            "ALM-HSE-OB-1061",
+            "ALM-HSE-OB-1107",
+            "ALM-HSE-OB-1119",
+            "ALM-HSE-OB-1129"
+          ]
+        },
+        {
+          "domain": "event_subtype",
+          "context": "OBSERVATION",
+          "source_term": "PPE Compliance",
+          "proposed_canonical_term": null,
+          "status": "UNKNOWN",
+          "reason": "No alias match found for this term in the existing mapping table.",
+          "occurrence_count": 117,
+          "example_source_record_ids": [
+            "ALM-HSE-OB-1023",
+            "ALM-HSE-OB-1027",
+            "ALM-HSE-OB-1037",
+            "ALM-HSE-OB-1039",
+            "ALM-HSE-OB-1050"
+          ]
+        },
+        {
+          "domain": "event_subtype",
+          "context": "OBSERVATION",
+          "source_term": "Electrical Safety",
+          "proposed_canonical_term": null,
+          "status": "UNKNOWN",
+          "reason": "No alias match found for this term in the existing mapping table.",
+          "occurrence_count": 47,
+          "example_source_record_ids": [
+            "ALM-HSE-OB-1001",
+            "ALM-HSE-OB-1002",
+            "ALM-HSE-OB-1003",
+            "ALM-HSE-OB-1004",
+            "ALM-HSE-OB-1005"
+          ]
+        },
+        {
+          "domain": "event_subtype",
+          "context": "OBSERVATION",
+          "source_term": "Environmental",
+          "proposed_canonical_term": null,
+          "status": "UNKNOWN",
+          "reason": "No alias match found for this term in the existing mapping table.",
+          "occurrence_count": 32,
+          "example_source_record_ids": [
+            "ALM-HSE-OB-1046",
+            "ALM-HSE-OB-1101",
+            "ALM-HSE-OB-1142",
+            "ALM-HSE-OB-1158",
+            "ALM-HSE-OB-1208"
+          ]
+        },
+        {
+          "domain": "event_subtype",
+          "context": "OBSERVATION",
+          "source_term": "Lifting Operations",
+          "proposed_canonical_term": null,
+          "status": "UNKNOWN",
+          "reason": "No alias match found for this term in the existing mapping table.",
+          "occurrence_count": 31,
+          "example_source_record_ids": [
+            "ALM-HSE-OB-1098",
+            "ALM-HSE-OB-1131",
+            "ALM-HSE-OB-1157",
+            "ALM-HSE-OB-1160",
+            "ALM-HSE-OB-1165"
+          ]
+        },
+        {
+          "domain": "event_subtype",
+          "context": "OBSERVATION",
+          "source_term": "Procedure Violation",
+          "proposed_canonical_term": null,
+          "status": "UNKNOWN",
+          "reason": "No alias match found for this term in the existing mapping table.",
+          "occurrence_count": 29,
+          "example_source_record_ids": [
+            "ALM-HSE-OB-1018",
+            "ALM-HSE-OB-1026",
+            "ALM-HSE-OB-1057",
+            "ALM-HSE-OB-1120",
+            "ALM-HSE-OB-1121"
+          ]
+        },
+        {
+          "domain": "event_subtype",
+          "context": "OBSERVATION",
+          "source_term": "Equipment Safety",
+          "proposed_canonical_term": null,
+          "status": "UNKNOWN",
+          "reason": "No alias match found for this term in the existing mapping table.",
+          "occurrence_count": 13,
+          "example_source_record_ids": [
+            "ALM-HSE-OB-1106",
+            "ALM-HSE-OB-1136",
+            "ALM-HSE-OB-1230",
+            "ALM-HSE-OB-1295",
+            "ALM-HSE-OB-1439"
+          ]
+        },
+        {
+          "domain": "event_subtype",
+          "context": "OBSERVATION",
+          "source_term": "Others",
+          "proposed_canonical_term": null,
+          "status": "UNKNOWN",
+          "reason": "No alias match found for this term in the existing mapping table.",
+          "occurrence_count": 13,
+          "example_source_record_ids": [
+            "ALM-HSE-OB-1021",
+            "ALM-HSE-OB-1475",
+            "ALM-HSE-OB-1479",
+            "ALM-HSE-OB-1510",
+            "ALM-HSE-OB-1511"
+          ]
+        },
+        {
+          "domain": "event_subtype",
+          "context": "OBSERVATION",
+          "source_term": "Documentation",
+          "proposed_canonical_term": null,
+          "status": "UNKNOWN",
+          "reason": "No alias match found for this term in the existing mapping table.",
+          "occurrence_count": 11,
+          "example_source_record_ids": [
+            "ALM-HSE-OB-1016",
+            "ALM-HSE-OB-1056",
+            "ALM-HSE-OB-1239",
+            "ALM-HSE-OB-1404",
+            "ALM-HSE-OB-1410"
+          ]
+        },
+        {
+          "domain": "event_type",
+          "context": null,
+          "source_term": "NearMiss",
+          "proposed_canonical_term": null,
+          "status": "UNKNOWN",
+          "reason": "No alias match found for this term in the existing mapping table.",
+          "occurrence_count": 6,
+          "example_source_record_ids": [
+            "ALM-HSE-IC-16",
+            "ALM-HSE-IC-18",
+            "ALM-HSE-IC-34",
+            "ALM-HSE-IC-36",
+            "ALM-HSE-IC-49"
+          ]
+        },
+        {
+          "domain": "event_type",
+          "context": null,
+          "source_term": "PropertyDamage",
+          "proposed_canonical_term": null,
+          "status": "UNKNOWN",
+          "reason": "No alias match found for this term in the existing mapping table.",
+          "occurrence_count": 5,
+          "example_source_record_ids": [
+            "ALM-HSE-IC-14",
+            "ALM-HSE-IC-35",
+            "ALM-HSE-IC-39",
+            "ALM-HSE-IC-40",
+            "ALM-HSE-IC-9"
+          ]
+        },
+        {
+          "domain": "event_subtype",
+          "context": "OBSERVATION",
+          "source_term": "Fire Safety",
+          "proposed_canonical_term": null,
+          "status": "UNKNOWN",
+          "reason": "No alias match found for this term in the existing mapping table.",
+          "occurrence_count": 4,
+          "example_source_record_ids": [
+            "ALM-HSE-OB-1169",
+            "ALM-HSE-OB-1426",
+            "ALM-HSE-OB-565",
+            "ALM-HSE-OB-890"
+          ]
+        },
+        {
+          "domain": "event_type",
+          "context": null,
+          "source_term": "FireIncident",
+          "proposed_canonical_term": null,
+          "status": "UNKNOWN",
+          "reason": "No alias match found for this term in the existing mapping table.",
+          "occurrence_count": 4,
+          "example_source_record_ids": [
+            "ALM-HSE-IC-10",
+            "ALM-HSE-IC-2",
+            "ALM-HSE-IC-38",
+            "ALM-HSE-IC-50"
+          ]
+        },
+        {
+          "domain": "event_type",
+          "context": null,
+          "source_term": "Others",
+          "proposed_canonical_term": null,
+          "status": "UNKNOWN",
+          "reason": "No alias match found for this term in the existing mapping table.",
+          "occurrence_count": 3,
+          "example_source_record_ids": [
+            "ALM-HSE-IC-37",
+            "ALM-HSE-IC-42",
+            "ALM-HSE-IC-43"
+          ]
+        },
+        {
+          "domain": "event_subtype",
+          "context": "OBSERVATION",
+          "source_term": "Emergency Preparedness",
+          "proposed_canonical_term": null,
+          "status": "UNKNOWN",
+          "reason": "No alias match found for this term in the existing mapping table.",
+          "occurrence_count": 2,
+          "example_source_record_ids": [
+            "ALM-HSE-OB-1645",
+            "ALM-HSE-OB-925"
+          ]
+        },
+        {
+          "domain": "event_type",
+          "context": null,
+          "source_term": "SecurityBreach",
+          "proposed_canonical_term": null,
+          "status": "UNKNOWN",
+          "reason": "No alias match found for this term in the existing mapping table.",
+          "occurrence_count": 2,
+          "example_source_record_ids": [
+            "ALM-HSE-IC-15",
+            "ALM-HSE-IC-21"
+          ]
+        },
+        {
+          "domain": "event_type",
+          "context": null,
+          "source_term": "VehicleAccident",
+          "proposed_canonical_term": null,
+          "status": "UNKNOWN",
+          "reason": "No alias match found for this term in the existing mapping table.",
+          "occurrence_count": 2,
+          "example_source_record_ids": [
+            "ALM-HSE-IC-11",
+            "ALM-HSE-IC-17"
+          ]
+        },
+        {
+          "domain": "event_type",
+          "context": null,
+          "source_term": "HazardObservation",
+          "proposed_canonical_term": null,
+          "status": "UNKNOWN",
+          "reason": "No alias match found for this term in the existing mapping table.",
+          "occurrence_count": 1,
+          "example_source_record_ids": [
+            "ALM-HSE-IC-13"
+          ]
+        },
+        {
+          "domain": "event_type",
+          "context": null,
+          "source_term": "OBSERVATION",
+          "proposed_canonical_term": "OBSERVATION",
+          "status": "MAPPED",
+          "reason": "Matched alias 'observation' -> OBSERVATION.",
+          "occurrence_count": 1000,
+          "example_source_record_ids": [
+            "ALM-HSE-OB-1000",
+            "ALM-HSE-OB-1001",
+            "ALM-HSE-OB-1002",
+            "ALM-HSE-OB-1003",
+            "ALM-HSE-OB-1004"
+          ]
+        },
+        {
+          "domain": "event_subtype",
+          "context": "OBSERVATION",
+          "source_term": "Unsafe Condition",
+          "proposed_canonical_term": "UNSAFE_CONDITION",
+          "status": "MAPPED",
+          "reason": "Matched alias 'unsafe condition' -> UNSAFE_CONDITION.",
+          "occurrence_count": 210,
+          "example_source_record_ids": [
+            "ALM-HSE-OB-1006",
+            "ALM-HSE-OB-1007",
+            "ALM-HSE-OB-1008",
+            "ALM-HSE-OB-1011",
+            "ALM-HSE-OB-1012"
+          ]
+        },
+        {
+          "domain": "event_subtype",
+          "context": "OBSERVATION",
+          "source_term": "Housekeeping",
+          "proposed_canonical_term": "HOUSEKEEPING_DEFICIENCY",
+          "status": "MAPPED",
+          "reason": "Matched alias 'housekeeping' -> HOUSEKEEPING_DEFICIENCY.",
+          "occurrence_count": 190,
+          "example_source_record_ids": [
+            "ALM-HSE-OB-1032",
+            "ALM-HSE-OB-1036",
+            "ALM-HSE-OB-1038",
+            "ALM-HSE-OB-1041",
+            "ALM-HSE-OB-1060"
+          ]
+        },
+        {
+          "domain": "event_subtype",
+          "context": "OBSERVATION",
+          "source_term": "Unsafe Act",
+          "proposed_canonical_term": "UNSAFE_ACT",
+          "status": "MAPPED",
+          "reason": "Matched alias 'unsafe act' -> UNSAFE_ACT.",
+          "occurrence_count": 97,
+          "example_source_record_ids": [
+            "ALM-HSE-OB-1000",
+            "ALM-HSE-OB-1013",
+            "ALM-HSE-OB-1042",
+            "ALM-HSE-OB-1045",
+            "ALM-HSE-OB-1058"
+          ]
+        },
+        {
+          "domain": "event_subtype",
+          "context": "OBSERVATION",
+          "source_term": "Positive Observation",
+          "proposed_canonical_term": "POSITIVE_OBSERVATION",
+          "status": "MAPPED",
+          "reason": "Matched alias 'positive observation' -> POSITIVE_OBSERVATION.",
+          "occurrence_count": 76,
+          "example_source_record_ids": [
+            "ALM-HSE-OB-1028",
+            "ALM-HSE-OB-1031",
+            "ALM-HSE-OB-1034",
+            "ALM-HSE-OB-1094",
+            "ALM-HSE-OB-1114"
+          ]
+        },
+        {
+          "domain": "event_type",
+          "context": null,
+          "source_term": "Injury",
+          "proposed_canonical_term": "INCIDENT",
+          "status": "MAPPED",
+          "reason": "Matched alias 'injury' -> INCIDENT.",
+          "occurrence_count": 22,
+          "example_source_record_ids": [
+            "ALM-HSE-IC-19",
+            "ALM-HSE-IC-20",
+            "ALM-HSE-IC-23",
+            "ALM-HSE-IC-24",
+            "ALM-HSE-IC-25"
+          ]
+        }
+      ],
+      "terminology_summary": {
+        "mapped_by_domain": {
+          "event_type": 2,
+          "event_subtype": 4
+        },
+        "unknown_by_domain": {
+          "event_subtype": 11,
+          "event_type": 7
+        },
+        "ambiguous_by_domain": {},
+        "review_required_total": 18,
+        "unique_terms_total": 24
+      },
+      "temporal": {
+        "out_of_order_arrival_detected": true,
+        "duplicate_timestamp_groups": 181,
+        "future_timestamp_records": 0,
+        "corrections_applied": 0,
+        "stale_versions_skipped": 0,
+        "version_conflicts_detected": 0,
+        "late_arriving_records": 1045,
+        "as_of_leakage_check_passed": true,
+        "retrospective_vs_point_in_time_note": "Two distinct questions, never conflated: RETROSPECTIVE analysis ('what actually happened historically?') can query every accepted canonical event regardless of when it was ingested. POINT-IN-TIME intelligence ('what was knowable as of a particular moment?') uses events_as_of()'s strict ingestion_time <= as_of filter (app/intelligence/temporal.py, UNCHANGED) and will, correctly, exclude backfilled history from any as_of before it was actually ingested -- see docs/CALIBRATION_METHODOLOGY.md's own 'bulk backfill' finding (Milestone 2), reconfirmed, not re-litigated, here. This harness never weakens that filter to make a backfilled dataset look more complete.",
+        "notes": []
+      },
+      "provenance": {
+        "checked_count": 1045,
+        "all_chains_intact": true,
+        "failures": [],
+        "feature_stage_reachable": true,
+        "predictive_stage_reachable": true,
+        "notes": []
+      },
+      "intelligence_readiness": {
+        "data_sufficiency": "SUFFICIENT_DATA",
+        "event_count": 587,
+        "trend_readiness": {
+          "incident_count": "STABLE",
+          "near_miss_count": "STABLE",
+          "observation_count": "INCREASING",
+          "audit_count": "STABLE",
+          "inspection_count": "STABLE",
+          "overdue_action_count": "STABLE",
+          "equipment_failure_count": "STABLE",
+          "unsafe_observation_count": "INCREASING"
+        },
+        "signals_detected": [
+          "UNSAFE_OBSERVATION_SURGE"
+        ],
+        "anomaly_status": "NORMAL",
+        "feature_availability": {
+          "incident_count": true,
+          "near_miss_count": true,
+          "observation_count": true,
+          "audit_count": true,
+          "inspection_count": true,
+          "avg_severity": false,
+          "high_potential_event_count": true,
+          "severe_event_count": true,
+          "open_action_count": true,
+          "overdue_action_count": true,
+          "action_closure_rate": false,
+          "recurring_action_count": true,
+          "expired_certification_count": true,
+          "training_completion_rate": false,
+          "competency_gap_count": true,
+          "overdue_equipment_inspection_count": true,
+          "equipment_failure_count": true,
+          "maintenance_overdue_count": true,
+          "contractor_activity_count": true,
+          "activity_diversity": true,
+          "location_concentration": false,
+          "exposure_hours": false,
+          "incidents_per_100000_hours": false
+        },
+        "notes": []
+      },
+      "predictive_readiness": {
+        "eligible_sites": 13,
+        "excluded_sites": 0,
+        "exclusion_reasons": {},
+        "historical_time_coverage_days": {
+          "6590b2e3-c318-42f9-ba5b-ba6dd9f54cea": 86.4,
+          "759dd415-164a-48dc-893c-7b5d69fbdb1c": 65.4,
+          "65a9dd3b-97c6-4c70-a407-1aa2906a3862": 226.4,
+          "4228cdb9-e7d7-4faf-bdb1-68029b7c1174": 226.4,
+          "d0c36056-80f5-4b4a-a93f-d99622cbbe9e": 88.4,
+          "372a3e8f-7428-483c-86d5-a25a8a34bf95": 105.4,
+          "8e5b6654-c930-4f98-9e5b-984f091f3332": 63.4,
+          "eb3b609c-05e0-424d-8f5c-6496bf599b6b": 74.4,
+          "d60ed4b8-c946-4d8f-9cb7-22c1a7ad071a": 455.4,
+          "9181d612-ec71-4c8f-8747-fa349c8cb99f": 186.4,
+          "d878143d-0a86-4cd4-9032-8944e9f95968": 226.4,
+          "d7ab218f-8064-4e49-b809-5237139f8c76": 209.4,
+          "9e2049d3-6639-4857-94a5-cad64a04d8bf": 438.4
+        },
+        "qualifying_incidents": 22,
+        "positive_labels": 0,
+        "negative_labels": 0,
+        "unavailable_labels": 13,
+        "missing_features": 65,
+        "incomplete_feature_windows": 13,
+        "class_distribution": null,
+        "notes": [
+          "13 site(s) have a label that cannot yet be confirmed (the 30-day prediction horizon has not fully elapsed as of real \"now\") -- reported as UNAVAILABLE, never coerced into a negative label."
+        ]
+      }
+    },
+    "observation_incident_temporal": {
+      "as_of": "2026-09-02 08:45:31.538338+00:00",
+      "period_days": 30,
+      "num_periods": 8,
+      "per_site": [
+        {
+          "site_id": "6590b2e3-c318-42f9-ba5b-ba6dd9f54cea",
+          "project_name": "AGBASO WATER",
+          "buckets": [
+            {
+              "period_start": "2026-01-05 08:45:31.538338+00:00",
+              "period_end": "2026-02-04 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-02-04 08:45:31.538338+00:00",
+              "period_end": "2026-03-06 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-03-06 08:45:31.538338+00:00",
+              "period_end": "2026-04-05 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-04-05 08:45:31.538338+00:00",
+              "period_end": "2026-05-05 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-05-05 08:45:31.538338+00:00",
+              "period_end": "2026-06-04 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-06-04 08:45:31.538338+00:00",
+              "period_end": "2026-07-04 08:45:31.538338+00:00",
+              "observation_count": 4,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-07-04 08:45:31.538338+00:00",
+              "period_end": "2026-08-03 08:45:31.538338+00:00",
+              "observation_count": 8,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-08-03 08:45:31.538338+00:00",
+              "period_end": "2026-09-02 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            }
+          ],
+          "total_observations": 12,
+          "total_incidents": 0
+        },
+        {
+          "site_id": "759dd415-164a-48dc-893c-7b5d69fbdb1c",
+          "project_name": "ARTEE AGRO WAREHOUSE",
+          "buckets": [
+            {
+              "period_start": "2026-01-05 08:45:31.538338+00:00",
+              "period_end": "2026-02-04 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-02-04 08:45:31.538338+00:00",
+              "period_end": "2026-03-06 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-03-06 08:45:31.538338+00:00",
+              "period_end": "2026-04-05 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-04-05 08:45:31.538338+00:00",
+              "period_end": "2026-05-05 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-05-05 08:45:31.538338+00:00",
+              "period_end": "2026-06-04 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-06-04 08:45:31.538338+00:00",
+              "period_end": "2026-07-04 08:45:31.538338+00:00",
+              "observation_count": 9,
+              "incident_count": 1
+            },
+            {
+              "period_start": "2026-07-04 08:45:31.538338+00:00",
+              "period_end": "2026-08-03 08:45:31.538338+00:00",
+              "observation_count": 25,
+              "incident_count": 1
+            },
+            {
+              "period_start": "2026-08-03 08:45:31.538338+00:00",
+              "period_end": "2026-09-02 08:45:31.538338+00:00",
+              "observation_count": 15,
+              "incident_count": 0
+            }
+          ],
+          "total_observations": 49,
+          "total_incidents": 2
+        },
+        {
+          "site_id": "65a9dd3b-97c6-4c70-a407-1aa2906a3862",
+          "project_name": "ATLANTIS PERIWINKLE",
+          "buckets": [
+            {
+              "period_start": "2026-01-05 08:45:31.538338+00:00",
+              "period_end": "2026-02-04 08:45:31.538338+00:00",
+              "observation_count": 33,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-02-04 08:45:31.538338+00:00",
+              "period_end": "2026-03-06 08:45:31.538338+00:00",
+              "observation_count": 62,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-03-06 08:45:31.538338+00:00",
+              "period_end": "2026-04-05 08:45:31.538338+00:00",
+              "observation_count": 29,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-04-05 08:45:31.538338+00:00",
+              "period_end": "2026-05-05 08:45:31.538338+00:00",
+              "observation_count": 8,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-05-05 08:45:31.538338+00:00",
+              "period_end": "2026-06-04 08:45:31.538338+00:00",
+              "observation_count": 16,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-06-04 08:45:31.538338+00:00",
+              "period_end": "2026-07-04 08:45:31.538338+00:00",
+              "observation_count": 14,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-07-04 08:45:31.538338+00:00",
+              "period_end": "2026-08-03 08:45:31.538338+00:00",
+              "observation_count": 13,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-08-03 08:45:31.538338+00:00",
+              "period_end": "2026-09-02 08:45:31.538338+00:00",
+              "observation_count": 9,
+              "incident_count": 0
+            }
+          ],
+          "total_observations": 184,
+          "total_incidents": 0
+        },
+        {
+          "site_id": "4228cdb9-e7d7-4faf-bdb1-68029b7c1174",
+          "project_name": "AYLOR",
+          "buckets": [
+            {
+              "period_start": "2026-01-05 08:45:31.538338+00:00",
+              "period_end": "2026-02-04 08:45:31.538338+00:00",
+              "observation_count": 7,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-02-04 08:45:31.538338+00:00",
+              "period_end": "2026-03-06 08:45:31.538338+00:00",
+              "observation_count": 8,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-03-06 08:45:31.538338+00:00",
+              "period_end": "2026-04-05 08:45:31.538338+00:00",
+              "observation_count": 4,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-04-05 08:45:31.538338+00:00",
+              "period_end": "2026-05-05 08:45:31.538338+00:00",
+              "observation_count": 4,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-05-05 08:45:31.538338+00:00",
+              "period_end": "2026-06-04 08:45:31.538338+00:00",
+              "observation_count": 3,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-06-04 08:45:31.538338+00:00",
+              "period_end": "2026-07-04 08:45:31.538338+00:00",
+              "observation_count": 1,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-07-04 08:45:31.538338+00:00",
+              "period_end": "2026-08-03 08:45:31.538338+00:00",
+              "observation_count": 1,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-08-03 08:45:31.538338+00:00",
+              "period_end": "2026-09-02 08:45:31.538338+00:00",
+              "observation_count": 2,
+              "incident_count": 0
+            }
+          ],
+          "total_observations": 30,
+          "total_incidents": 0
+        },
+        {
+          "site_id": "d0c36056-80f5-4b4a-a93f-d99622cbbe9e",
+          "project_name": "BANANA VILLA-1",
+          "buckets": [
+            {
+              "period_start": "2026-01-05 08:45:31.538338+00:00",
+              "period_end": "2026-02-04 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-02-04 08:45:31.538338+00:00",
+              "period_end": "2026-03-06 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-03-06 08:45:31.538338+00:00",
+              "period_end": "2026-04-05 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-04-05 08:45:31.538338+00:00",
+              "period_end": "2026-05-05 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-05-05 08:45:31.538338+00:00",
+              "period_end": "2026-06-04 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-06-04 08:45:31.538338+00:00",
+              "period_end": "2026-07-04 08:45:31.538338+00:00",
+              "observation_count": 5,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-07-04 08:45:31.538338+00:00",
+              "period_end": "2026-08-03 08:45:31.538338+00:00",
+              "observation_count": 2,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-08-03 08:45:31.538338+00:00",
+              "period_end": "2026-09-02 08:45:31.538338+00:00",
+              "observation_count": 2,
+              "incident_count": 0
+            }
+          ],
+          "total_observations": 9,
+          "total_incidents": 0
+        },
+        {
+          "site_id": "372a3e8f-7428-483c-86d5-a25a8a34bf95",
+          "project_name": "BLUE SQUARE",
+          "buckets": [
+            {
+              "period_start": "2026-01-05 08:45:31.538338+00:00",
+              "period_end": "2026-02-04 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-02-04 08:45:31.538338+00:00",
+              "period_end": "2026-03-06 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-03-06 08:45:31.538338+00:00",
+              "period_end": "2026-04-05 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-04-05 08:45:31.538338+00:00",
+              "period_end": "2026-05-05 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-05-05 08:45:31.538338+00:00",
+              "period_end": "2026-06-04 08:45:31.538338+00:00",
+              "observation_count": 1,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-06-04 08:45:31.538338+00:00",
+              "period_end": "2026-07-04 08:45:31.538338+00:00",
+              "observation_count": 1,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-07-04 08:45:31.538338+00:00",
+              "period_end": "2026-08-03 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-08-03 08:45:31.538338+00:00",
+              "period_end": "2026-09-02 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            }
+          ],
+          "total_observations": 2,
+          "total_incidents": 0
+        },
+        {
+          "site_id": "8e5b6654-c930-4f98-9e5b-984f091f3332",
+          "project_name": "KADARS GATE",
+          "buckets": [
+            {
+              "period_start": "2026-01-05 08:45:31.538338+00:00",
+              "period_end": "2026-02-04 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-02-04 08:45:31.538338+00:00",
+              "period_end": "2026-03-06 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-03-06 08:45:31.538338+00:00",
+              "period_end": "2026-04-05 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-04-05 08:45:31.538338+00:00",
+              "period_end": "2026-05-05 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-05-05 08:45:31.538338+00:00",
+              "period_end": "2026-06-04 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-06-04 08:45:31.538338+00:00",
+              "period_end": "2026-07-04 08:45:31.538338+00:00",
+              "observation_count": 3,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-07-04 08:45:31.538338+00:00",
+              "period_end": "2026-08-03 08:45:31.538338+00:00",
+              "observation_count": 21,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-08-03 08:45:31.538338+00:00",
+              "period_end": "2026-09-02 08:45:31.538338+00:00",
+              "observation_count": 4,
+              "incident_count": 0
+            }
+          ],
+          "total_observations": 28,
+          "total_incidents": 0
+        },
+        {
+          "site_id": "eb3b609c-05e0-424d-8f5c-6496bf599b6b",
+          "project_name": "LEKKI FREE-ZONE",
+          "buckets": [
+            {
+              "period_start": "2026-01-05 08:45:31.538338+00:00",
+              "period_end": "2026-02-04 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-02-04 08:45:31.538338+00:00",
+              "period_end": "2026-03-06 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-03-06 08:45:31.538338+00:00",
+              "period_end": "2026-04-05 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-04-05 08:45:31.538338+00:00",
+              "period_end": "2026-05-05 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-05-05 08:45:31.538338+00:00",
+              "period_end": "2026-06-04 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-06-04 08:45:31.538338+00:00",
+              "period_end": "2026-07-04 08:45:31.538338+00:00",
+              "observation_count": 5,
+              "incident_count": 1
+            },
+            {
+              "period_start": "2026-07-04 08:45:31.538338+00:00",
+              "period_end": "2026-08-03 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-08-03 08:45:31.538338+00:00",
+              "period_end": "2026-09-02 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            }
+          ],
+          "total_observations": 5,
+          "total_incidents": 1
+        },
+        {
+          "site_id": "d60ed4b8-c946-4d8f-9cb7-22c1a7ad071a",
+          "project_name": "MISSOURI",
+          "buckets": [
+            {
+              "period_start": "2026-01-05 08:45:31.538338+00:00",
+              "period_end": "2026-02-04 08:45:31.538338+00:00",
+              "observation_count": 8,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-02-04 08:45:31.538338+00:00",
+              "period_end": "2026-03-06 08:45:31.538338+00:00",
+              "observation_count": 11,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-03-06 08:45:31.538338+00:00",
+              "period_end": "2026-04-05 08:45:31.538338+00:00",
+              "observation_count": 5,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-04-05 08:45:31.538338+00:00",
+              "period_end": "2026-05-05 08:45:31.538338+00:00",
+              "observation_count": 8,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-05-05 08:45:31.538338+00:00",
+              "period_end": "2026-06-04 08:45:31.538338+00:00",
+              "observation_count": 1,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-06-04 08:45:31.538338+00:00",
+              "period_end": "2026-07-04 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-07-04 08:45:31.538338+00:00",
+              "period_end": "2026-08-03 08:45:31.538338+00:00",
+              "observation_count": 3,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-08-03 08:45:31.538338+00:00",
+              "period_end": "2026-09-02 08:45:31.538338+00:00",
+              "observation_count": 2,
+              "incident_count": 0
+            }
+          ],
+          "total_observations": 38,
+          "total_incidents": 0
+        },
+        {
+          "site_id": "9181d612-ec71-4c8f-8747-fa349c8cb99f",
+          "project_name": "PADAH LNG",
+          "buckets": [
+            {
+              "period_start": "2026-01-05 08:45:31.538338+00:00",
+              "period_end": "2026-02-04 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-02-04 08:45:31.538338+00:00",
+              "period_end": "2026-03-06 08:45:31.538338+00:00",
+              "observation_count": 7,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-03-06 08:45:31.538338+00:00",
+              "period_end": "2026-04-05 08:45:31.538338+00:00",
+              "observation_count": 4,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-04-05 08:45:31.538338+00:00",
+              "period_end": "2026-05-05 08:45:31.538338+00:00",
+              "observation_count": 8,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-05-05 08:45:31.538338+00:00",
+              "period_end": "2026-06-04 08:45:31.538338+00:00",
+              "observation_count": 11,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-06-04 08:45:31.538338+00:00",
+              "period_end": "2026-07-04 08:45:31.538338+00:00",
+              "observation_count": 2,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-07-04 08:45:31.538338+00:00",
+              "period_end": "2026-08-03 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-08-03 08:45:31.538338+00:00",
+              "period_end": "2026-09-02 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            }
+          ],
+          "total_observations": 32,
+          "total_incidents": 0
+        },
+        {
+          "site_id": "d878143d-0a86-4cd4-9032-8944e9f95968",
+          "project_name": "PARK-AVENUE",
+          "buckets": [
+            {
+              "period_start": "2026-01-05 08:45:31.538338+00:00",
+              "period_end": "2026-02-04 08:45:31.538338+00:00",
+              "observation_count": 2,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-02-04 08:45:31.538338+00:00",
+              "period_end": "2026-03-06 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-03-06 08:45:31.538338+00:00",
+              "period_end": "2026-04-05 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-04-05 08:45:31.538338+00:00",
+              "period_end": "2026-05-05 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-05-05 08:45:31.538338+00:00",
+              "period_end": "2026-06-04 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-06-04 08:45:31.538338+00:00",
+              "period_end": "2026-07-04 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-07-04 08:45:31.538338+00:00",
+              "period_end": "2026-08-03 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-08-03 08:45:31.538338+00:00",
+              "period_end": "2026-09-02 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            }
+          ],
+          "total_observations": 2,
+          "total_incidents": 0
+        },
+        {
+          "site_id": "d7ab218f-8064-4e49-b809-5237139f8c76",
+          "project_name": "SECRETARIAT",
+          "buckets": [
+            {
+              "period_start": "2026-01-05 08:45:31.538338+00:00",
+              "period_end": "2026-02-04 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-02-04 08:45:31.538338+00:00",
+              "period_end": "2026-03-06 08:45:31.538338+00:00",
+              "observation_count": 15,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-03-06 08:45:31.538338+00:00",
+              "period_end": "2026-04-05 08:45:31.538338+00:00",
+              "observation_count": 11,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-04-05 08:45:31.538338+00:00",
+              "period_end": "2026-05-05 08:45:31.538338+00:00",
+              "observation_count": 10,
+              "incident_count": 1
+            },
+            {
+              "period_start": "2026-05-05 08:45:31.538338+00:00",
+              "period_end": "2026-06-04 08:45:31.538338+00:00",
+              "observation_count": 38,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-06-04 08:45:31.538338+00:00",
+              "period_end": "2026-07-04 08:45:31.538338+00:00",
+              "observation_count": 24,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-07-04 08:45:31.538338+00:00",
+              "period_end": "2026-08-03 08:45:31.538338+00:00",
+              "observation_count": 9,
+              "incident_count": 3
+            },
+            {
+              "period_start": "2026-08-03 08:45:31.538338+00:00",
+              "period_end": "2026-09-02 08:45:31.538338+00:00",
+              "observation_count": 0,
+              "incident_count": 0
+            }
+          ],
+          "total_observations": 107,
+          "total_incidents": 4
+        },
+        {
+          "site_id": "9e2049d3-6639-4857-94a5-cad64a04d8bf",
+          "project_name": "ZILCO",
+          "buckets": [
+            {
+              "period_start": "2026-01-05 08:45:31.538338+00:00",
+              "period_end": "2026-02-04 08:45:31.538338+00:00",
+              "observation_count": 16,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-02-04 08:45:31.538338+00:00",
+              "period_end": "2026-03-06 08:45:31.538338+00:00",
+              "observation_count": 12,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-03-06 08:45:31.538338+00:00",
+              "period_end": "2026-04-05 08:45:31.538338+00:00",
+              "observation_count": 12,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-04-05 08:45:31.538338+00:00",
+              "period_end": "2026-05-05 08:45:31.538338+00:00",
+              "observation_count": 6,
+              "incident_count": 2
+            },
+            {
+              "period_start": "2026-05-05 08:45:31.538338+00:00",
+              "period_end": "2026-06-04 08:45:31.538338+00:00",
+              "observation_count": 7,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-06-04 08:45:31.538338+00:00",
+              "period_end": "2026-07-04 08:45:31.538338+00:00",
+              "observation_count": 6,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-07-04 08:45:31.538338+00:00",
+              "period_end": "2026-08-03 08:45:31.538338+00:00",
+              "observation_count": 7,
+              "incident_count": 0
+            },
+            {
+              "period_start": "2026-08-03 08:45:31.538338+00:00",
+              "period_end": "2026-09-02 08:45:31.538338+00:00",
+              "observation_count": 9,
+              "incident_count": 0
+            }
+          ],
+          "total_observations": 75,
+          "total_incidents": 2
+        }
+      ],
+      "methodology_note": "Descriptive co-occurrence only. Each bucket below reports how many OBSERVATION events and how many incident-sheet events (any raw Incident Type) fell in the same site/time window, computed from the exact same events_as_of() query builder (app/intelligence/temporal.py, UNCHANGED) every other trend calculation in this codebase uses. This is NOT a correlation coefficient, NOT a statistical test, and NOT a causal claim -- a project with observations and incidents in the same period is not thereby shown to have one cause the other. See the task's own explicit instruction: 'same-project observation + incident = causal relationship' must not be assumed. Deliberately RETROSPECTIVE, not point-in-time: it queries every accepted canonical event by event_time alone (events_as_of(..., strict_point_in_time=False)), not gated by ingestion_time -- the 'what did this dataset's own history actually contain' question TemporalIntegrityReport's own retrospective-vs-point-in-time note already distinguishes from a live feature computation. A strict point-in-time reading (ingestion_time <= as_of) of a real dataset that was bulk-ingested just now would, correctly, show ~zero events in every bucket except the most recent -- the same 'bulk backfill collapses into the most recent bucket' behavior already documented from Milestone 2, reconfirmed against this real dataset, not a bug in this analysis. Using it here would answer a different question than the one item 11 asks."
+    },
+    "queued_review_candidate_count": 469
+  },
+  "supported_conclusions": [
+    "Observation reporting volume (all categories, and specifically unsafe-observation reporting) increased over the analysis window, triggering the existing UNSAFE_OBSERVATION_SURGE signal.",
+    "Most projects with substantial observation volume in the analysis window recorded zero incidents (e.g. ATLANTIS PERIWINKLE: 184 observations / 0 incidents).",
+    "Every provenance chain checked (1045/1045) is intact end to end.",
+    "The dataset's second Status column is empirically a data-quality/review flag (Closed<->REVIEW REQUIRED 959/959, Open<->OK 41/41), not a restatement of the business open/closed lifecycle -- confirmed independently by the reconciliation workbook."
+  ],
+  "unsupported_conclusions_explicitly_not_claimed": [
+    "That increased observation volume reflects a change in underlying site safety.",
+    "That any project with zero recorded incidents is thereby shown to be safe.",
+    "That same-project observation and incident co-occurrence is a causal relationship.",
+    "Any predictive accuracy, PR-AUC, ROC-AUC, precision, recall, or calibration performance -- no model was trained."
+  ],
+  "architecture_limitations_discovered": [
+    "A live as_of=now evaluation of bulk-backfilled historical data cannot produce a single confirmed predictive label for any site, because the prediction horizon is inherently unelapsed relative to real now.",
+    "bucketed_counts() does not expose events_as_of()'s own strict_point_in_time parameter, so the observation-vs-incident temporal analysis (item 11) had to reimplement its bucketing loop locally to run it in retrospective mode.",
+    "The existing terminology alias table (built from synthetic scenarios) resolves only 49% of this dataset's Incident Type vocabulary and 57% of its Category vocabulary.",
+    "The Real Enterprise Dataset Evaluation Specification referenced by this task was not supplied to this session."
+  ],
+  "recommendations_for_next_milestone": [
+    "Human-reviewed terminology alias additions for NearMiss, PropertyDamage, FireIncident, VehicleAccident, SecurityBreach, and the 11 unmapped Category terms -- proposed, not applied.",
+    "Re-run predictive readiness with an explicit historical as_of (30+ days before the dataset's own latest date) to get a genuine positive/negative label reading.",
+    "Obtain and evaluate against the Real Enterprise Dataset Evaluation Specification, if one exists.",
+    "Extend bucketed_counts() with an optional strict_point_in_time passthrough.",
+    "Do not proceed to advanced ML, autonomous agents, automated interventions/retraining, external web intelligence, production deployment, or new intelligence algorithms without a separate, explicit approval."
+  ]
+}

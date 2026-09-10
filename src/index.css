@@ -1,1 +1,17 @@
 @import "tailwindcss";
+@import "./styles/tokens.css";
+
+/* Base document treatment for the new SIE application. Scoped to
+   `[data-sie-app]` (set on the new app root, src/app/App.tsx) so it never
+   changes the legacy prototype's own dark styling (src/App.tsx), which is
+   left completely untouched — see docs/FRONTEND_ARCHITECTURE.md. */
+[data-sie-app] {
+  background-color: var(--color-background);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+}
+
+[data-sie-app] :is(button, [role='button'], a, input, select, textarea):focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}

@@ -1,0 +1,1498 @@
+"""Tests for the Real Enterprise Terminology & Ontology Calibration v0.1
+pipeline: `app/models/terminology_mapping_decision.py`,
+`app/services/terminology_calibration_service.py`,
+`app/intelligence/terminology_calibration_adapter.py`, and
+`app/services/terminology_reprocessing_service.py`.
+
+Every fixture here is synthetic (fabricated project names, terminology
+terms, and narrative strings — none derived from any real workbook); no
+real enterprise data, PII, or workbook content is referenced anywhere in
+this file. Requires real PostgreSQL (`@requires_postgres`, `pg_session`)
+— datetime/`ingestion_time` comparisons throughout (versioning,
+reprocessing's own fresh-timestamp guarantee, point-in-time checks)
+follow the same rationale `tests/test_enterprise_dataset_validation.py`
+already documents for why SQLite is unreliable here.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from app.intelligence.enterprise_ingestion import enterprise_ingestion_service
+from app.intelligence.schemas import RawSafetyEventPayload
+from app.intelligence.terminology_calibration_adapter import (
+    CalibratedTerminologyMappingAdapter,
+)
+from app.intelligence.terminology_review import (
+    TerminologyReviewEntry,
+    TerminologyReviewStatus,
+    build_terminology_review,
+)
+from app.models.audit_log import AuditLog
+from app.models.safety_event import SafetyEvent
+from app.models.terminology_mapping_decision import TerminologyMappingDecision
+from app.services import terminology_calibration_service as svc
+from app.services import terminology_reprocessing_service as reproc
+from app.services.authorization_service import AuthorizationError
+from app.services.terminology_calibration_service import (
+    InvalidCanonicalTermError,
+    TerminologyMappingDecisionNotFoundError,
+    TerminologyMappingDecisionStateError,
+)
+from tests.intelligence_test_helpers import make_org, make_org_member
+from tests.postgres_support import requires_postgres
+
+_PII_MARKER = "Synthetic Fixture Person"  # a fabricated name, used only to prove it never leaks
+
+# --- Shared synthetic fixtures ------------------------------------------------------------------
+
+
+def _unknown_candidate_entry(source_term: str = "NearMiss", occurrence_count: int = 6) -> TerminologyReviewEntry:
+    return TerminologyReviewEntry(
+        domain="event_type", context=None, source_term=source_term, proposed_canonical_term=None,
+        status=TerminologyReviewStatus.UNKNOWN, reason="No alias match found.", occurrence_count=occurrence_count,
+        example_source_record_ids=("SYN-0001", "SYN-0002"),
+    )
+
+
+def _mapped_entry() -> TerminologyReviewEntry:
+    return TerminologyReviewEntry(
+        domain="event_type", context=None, source_term="Injury", proposed_canonical_term="INCIDENT",
+        status=TerminologyReviewStatus.MAPPED, reason="Matched alias.", occurrence_count=10,
+    )
+
+
+def _create_candidate(db, *, organization_id, source_system="synthetic-hse-xlsx", source_term="NearMiss"):
+    entries = [_unknown_candidate_entry(source_term=source_term), _mapped_entry()]
+    created = svc.create_review_candidates(db, organization_id=organization_id, source_system=source_system, entries=entries)
+    assert len(created) == 1  # the MAPPED entry never becomes a candidate
+    return created[0]
+
+
+# --- Lifecycle: UNKNOWN -> REVIEW_CANDIDATE -> PROPOSED -> APPROVED/REJECTED --------------------
+
+
+@requires_postgres
+def test_unknown_term_becomes_a_review_candidate_never_a_guess(pg_session):
+    org = make_org(pg_session, "Calibration - Lifecycle Candidate")
+    candidate = _create_candidate(pg_session, organization_id=org.id)
+    assert candidate.status == "REVIEW_CANDIDATE"
+    assert candidate.proposed_canonical_term is None
+    assert candidate.mapping_version == 1
+    assert candidate.hse_expert_review_id is not None  # queued in the existing HSE review queue too
+
+
+@requires_postgres
+def test_mapped_entries_never_produce_a_candidate(pg_session):
+    org = make_org(pg_session, "Calibration - No Candidate For Mapped")
+    created = svc.create_review_candidates(
+        pg_session, organization_id=org.id, source_system="synthetic-hse-xlsx", entries=[_mapped_entry()]
+    )
+    assert created == []
+
+
+@requires_postgres
+def test_a_genuinely_ambiguous_term_also_becomes_a_review_candidate_requiring_human_clarification(pg_session):
+    """Item 12: a term with multiple plausible canonical classifications
+    -- `"finding"`, a real ambiguous entry in the existing, unmodified
+    alias table (`AUDIT` or `INSPECTION`) -- must surface for human
+    review exactly like an UNKNOWN term, and `suggest_candidates()` must
+    show every plausible candidate rather than silently picking one."""
+    org = make_org(pg_session, "Calibration - Ambiguous Candidate")
+    ambiguous_entry = TerminologyReviewEntry(
+        domain="event_type", context=None, source_term="finding", proposed_canonical_term=None,
+        status=TerminologyReviewStatus.AMBIGUOUS,
+        reason="Term matches multiple plausible candidates (AUDIT, INSPECTION); not resolved automatically.",
+        occurrence_count=4, example_source_record_ids=("SYN-0003",),
+    )
+    created = svc.create_review_candidates(pg_session, organization_id=org.id, source_system="synthetic-hse-xlsx", entries=[ambiguous_entry])
+    assert len(created) == 1
+    candidate = created[0]
+    assert candidate.status == "REVIEW_CANDIDATE"
+    assert candidate.source_term == "finding"
+
+    suggestion = svc.suggest_candidates(candidate.domain, candidate.context, candidate.source_term)
+    assert suggestion.outcome.value == "AMBIGUOUS"
+    assert set(suggestion.candidates) == {"AUDIT", "INSPECTION"}
+    # Never auto-selected -- a human still has to explicitly propose one.
+    assert candidate.proposed_canonical_term is None
+
+
+@requires_postgres
+def test_creating_candidates_twice_never_duplicates_or_mutates_an_existing_row(pg_session):
+    org = make_org(pg_session, "Calibration - No Duplicate Candidates")
+    first = _create_candidate(pg_session, organization_id=org.id)
+    admin = make_org_member(pg_session, org.id)
+    svc.propose_mapping(
+        pg_session, organization_id=org.id, decision_id=first.id, proposed_canonical_term="NEAR_MISS",
+        rationale="Matches near-miss domain semantics.", acting_user_id=admin.id,
+    )
+    # Re-running candidate creation over the same batch must never touch the in-flight PROPOSED row.
+    entries = [_unknown_candidate_entry(), _mapped_entry()]
+    second = svc.create_review_candidates(pg_session, organization_id=org.id, source_system="synthetic-hse-xlsx", entries=entries)
+    assert second == []
+    pg_session.refresh(first)
+    assert first.status == "PROPOSED"
+
+
+@requires_postgres
+def test_pending_to_approved_lifecycle(pg_session):
+    org = make_org(pg_session, "Calibration - Approve Lifecycle")
+    admin = make_org_member(pg_session, org.id)
+    candidate = _create_candidate(pg_session, organization_id=org.id)
+
+    proposed = svc.propose_mapping(
+        pg_session, organization_id=org.id, decision_id=candidate.id, proposed_canonical_term="NEAR_MISS",
+        rationale="Matches near-miss domain semantics.", acting_user_id=admin.id,
+    )
+    assert proposed.status == "PROPOSED"
+    assert proposed.proposed_by_user_id == admin.id
+    assert proposed.proposed_at is not None
+
+    approved = svc.approve_mapping(pg_session, organization_id=org.id, decision_id=proposed.id, acting_user_id=admin.id)
+    assert approved.status == "APPROVED"
+    assert approved.reviewer_user_id == admin.id
+    assert approved.decided_at is not None
+    assert approved.is_eligible_for_canonical_classification is True
+
+
+@requires_postgres
+def test_pending_to_rejected_lifecycle(pg_session):
+    org = make_org(pg_session, "Calibration - Reject Lifecycle")
+    admin = make_org_member(pg_session, org.id)
+    candidate = _create_candidate(pg_session, organization_id=org.id)
+
+    rejected = svc.reject_mapping(
+        pg_session, organization_id=org.id, decision_id=candidate.id, acting_user_id=admin.id,
+        reason="Term is too ambiguous across this source's own projects to resolve.",
+    )
+    assert rejected.status == "REJECTED"
+    assert rejected.is_eligible_for_canonical_classification is False
+    assert "REJECTED" in rejected.rationale
+
+
+@requires_postgres
+def test_approving_without_a_proposed_term_is_refused(pg_session):
+    org = make_org(pg_session, "Calibration - Refuse Empty Approval")
+    admin = make_org_member(pg_session, org.id)
+    candidate = _create_candidate(pg_session, organization_id=org.id)
+    proposed = svc.propose_mapping(
+        pg_session, organization_id=org.id, decision_id=candidate.id, proposed_canonical_term=None,
+        rationale="Insufficient confidence to propose anything -- preferable to guessing.", acting_user_id=admin.id,
+    )
+    with pytest.raises(TerminologyMappingDecisionStateError):
+        svc.approve_mapping(pg_session, organization_id=org.id, decision_id=proposed.id, acting_user_id=admin.id)
+
+
+@requires_postgres
+def test_a_review_candidate_can_be_approved_only_after_being_proposed(pg_session):
+    org = make_org(pg_session, "Calibration - Cannot Approve Raw Candidate")
+    admin = make_org_member(pg_session, org.id)
+    candidate = _create_candidate(pg_session, organization_id=org.id)
+    with pytest.raises(TerminologyMappingDecisionStateError):
+        svc.approve_mapping(pg_session, organization_id=org.id, decision_id=candidate.id, acting_user_id=admin.id)
+
+
+@requires_postgres
+def test_a_terminal_decision_is_frozen_forever(pg_session):
+    org = make_org(pg_session, "Calibration - Terminal Frozen")
+    admin = make_org_member(pg_session, org.id)
+    candidate = _create_candidate(pg_session, organization_id=org.id)
+    proposed = svc.propose_mapping(
+        pg_session, organization_id=org.id, decision_id=candidate.id, proposed_canonical_term="NEAR_MISS",
+        rationale="r", acting_user_id=admin.id,
+    )
+    approved = svc.approve_mapping(pg_session, organization_id=org.id, decision_id=proposed.id, acting_user_id=admin.id)
+
+    with pytest.raises(TerminologyMappingDecisionStateError):
+        svc.propose_mapping(
+            pg_session, organization_id=org.id, decision_id=approved.id, proposed_canonical_term="SOMETHING_ELSE",
+            rationale="r", acting_user_id=admin.id,
+        )
+    with pytest.raises(TerminologyMappingDecisionStateError):
+        svc.reject_mapping(pg_session, organization_id=org.id, decision_id=approved.id, acting_user_id=admin.id, reason="r")
+
+
+# --- Versioning (item 8) -------------------------------------------------------------------------
+
+
+@requires_postgres
+def test_changing_an_approved_mapping_opens_a_new_version_never_overwrites_the_old_one(pg_session):
+    org = make_org(pg_session, "Calibration - Versioning")
+    admin = make_org_member(pg_session, org.id)
+    candidate = _create_candidate(pg_session, organization_id=org.id)
+    proposed = svc.propose_mapping(
+        pg_session, organization_id=org.id, decision_id=candidate.id, proposed_canonical_term="NEAR_MISS",
+        rationale="v1 rationale", acting_user_id=admin.id,
+    )
+    approved_v1 = svc.approve_mapping(pg_session, organization_id=org.id, decision_id=proposed.id, acting_user_id=admin.id)
+    assert approved_v1.mapping_version == 1
+
+    v2_candidate = svc.open_new_version(pg_session, organization_id=org.id, prior_decision_id=approved_v1.id, acting_user_id=admin.id)
+    assert v2_candidate.mapping_version == 2
+    assert v2_candidate.status == "REVIEW_CANDIDATE"
+
+    # get_active_mapping still resolves to v1 until v2 is itself approved.
+    still_active = svc.get_active_mapping(
+        pg_session, organization_id=org.id, source_system="synthetic-hse-xlsx", domain="event_type", context=None,
+        source_term="NearMiss",
+    )
+    assert still_active.mapping_version == 1
+
+    # A genuinely different, but still-valid, canonical term -- corrected
+    # domain judgment on reflection, not the same value re-approved.
+    proposed_v2 = svc.propose_mapping(
+        pg_session, organization_id=org.id, decision_id=v2_candidate.id, proposed_canonical_term="OBSERVATION",
+        rationale="v2 rationale", acting_user_id=admin.id,
+    )
+    svc.approve_mapping(pg_session, organization_id=org.id, decision_id=proposed_v2.id, acting_user_id=admin.id)
+
+    now_active = svc.get_active_mapping(
+        pg_session, organization_id=org.id, source_system="synthetic-hse-xlsx", domain="event_type", context=None,
+        source_term="NearMiss",
+    )
+    assert now_active.mapping_version == 2
+    assert now_active.proposed_canonical_term == "OBSERVATION"
+
+    # The v1 row is completely untouched -- full history preserved.
+    pg_session.refresh(approved_v1)
+    assert approved_v1.status == "APPROVED"
+    assert approved_v1.proposed_canonical_term == "NEAR_MISS"
+    assert approved_v1.rationale == "v1 rationale"
+
+
+@requires_postgres
+def test_a_new_version_can_only_be_opened_from_a_terminal_decision(pg_session):
+    org = make_org(pg_session, "Calibration - New Version Requires Terminal")
+    admin = make_org_member(pg_session, org.id)
+    candidate = _create_candidate(pg_session, organization_id=org.id)
+    with pytest.raises(TerminologyMappingDecisionStateError):
+        svc.open_new_version(pg_session, organization_id=org.id, prior_decision_id=candidate.id, acting_user_id=admin.id)
+
+
+# --- Tenant / source isolation (item 7) -----------------------------------------------------------
+
+
+@requires_postgres
+def test_an_approved_mapping_in_one_organization_never_affects_another(pg_session):
+    org_a = make_org(pg_session, "Calibration - Tenant A")
+    org_b = make_org(pg_session, "Calibration - Tenant B")
+    admin_a = make_org_member(pg_session, org_a.id)
+
+    candidate_a = _create_candidate(pg_session, organization_id=org_a.id)
+    proposed_a = svc.propose_mapping(
+        pg_session, organization_id=org_a.id, decision_id=candidate_a.id, proposed_canonical_term="NEAR_MISS",
+        rationale="r", acting_user_id=admin_a.id,
+    )
+    svc.approve_mapping(pg_session, organization_id=org_a.id, decision_id=proposed_a.id, acting_user_id=admin_a.id)
+
+    active_in_b = svc.get_active_mapping(
+        pg_session, organization_id=org_b.id, source_system="synthetic-hse-xlsx", domain="event_type", context=None,
+        source_term="NearMiss",
+    )
+    assert active_in_b is None
+
+    # An organization B admin cannot even reach org A's decision by id.
+    admin_b = make_org_member(pg_session, org_b.id)
+    with pytest.raises(TerminologyMappingDecisionNotFoundError):
+        svc.approve_mapping(pg_session, organization_id=org_b.id, decision_id=proposed_a.id, acting_user_id=admin_b.id)
+
+
+@requires_postgres
+def test_an_approved_mapping_on_one_source_system_never_affects_a_different_source_system(pg_session):
+    org = make_org(pg_session, "Calibration - Source Isolation")
+    admin = make_org_member(pg_session, org.id)
+    candidate = _create_candidate(pg_session, organization_id=org.id, source_system="alm-hse-xlsx")
+    proposed = svc.propose_mapping(
+        pg_session, organization_id=org.id, decision_id=candidate.id, proposed_canonical_term="NEAR_MISS",
+        rationale="r", acting_user_id=admin.id,
+    )
+    svc.approve_mapping(pg_session, organization_id=org.id, decision_id=proposed.id, acting_user_id=admin.id)
+
+    active_on_other_source = svc.get_active_mapping(
+        pg_session, organization_id=org.id, source_system="another-system", domain="event_type", context=None,
+        source_term="NearMiss",
+    )
+    assert active_on_other_source is None
+    active_on_original_source = svc.get_active_mapping(
+        pg_session, organization_id=org.id, source_system="alm-hse-xlsx", domain="event_type", context=None,
+        source_term="NearMiss",
+    )
+    assert active_on_original_source is not None
+
+
+# --- Authorization (item 9) -----------------------------------------------------------------------
+
+
+@requires_postgres
+def test_a_viewer_cannot_propose_approve_or_reject(pg_session):
+    from app.services.permissions import OrganizationRole
+
+    org = make_org(pg_session, "Calibration - Viewer Cannot Modify")
+    viewer = make_org_member(pg_session, org.id, role=OrganizationRole.VIEWER)
+    candidate = _create_candidate(pg_session, organization_id=org.id)
+
+    with pytest.raises(AuthorizationError):
+        svc.propose_mapping(
+            pg_session, organization_id=org.id, decision_id=candidate.id, proposed_canonical_term="NEAR_MISS",
+            rationale="r", acting_user_id=viewer.id,
+        )
+
+    # Get a proposal in via an admin so approve/reject can be attempted by the viewer.
+    admin = make_org_member(pg_session, org.id)
+    proposed = svc.propose_mapping(
+        pg_session, organization_id=org.id, decision_id=candidate.id, proposed_canonical_term="NEAR_MISS",
+        rationale="r", acting_user_id=admin.id,
+    )
+    with pytest.raises(AuthorizationError):
+        svc.approve_mapping(pg_session, organization_id=org.id, decision_id=proposed.id, acting_user_id=viewer.id)
+    with pytest.raises(AuthorizationError):
+        svc.reject_mapping(pg_session, organization_id=org.id, decision_id=proposed.id, acting_user_id=viewer.id, reason="r")
+
+
+@requires_postgres
+def test_a_user_with_no_membership_in_the_organization_cannot_approve(pg_session):
+    org = make_org(pg_session, "Calibration - Unauthorized")
+    admin = make_org_member(pg_session, org.id)
+    candidate = _create_candidate(pg_session, organization_id=org.id)
+    proposed = svc.propose_mapping(
+        pg_session, organization_id=org.id, decision_id=candidate.id, proposed_canonical_term="NEAR_MISS",
+        rationale="r", acting_user_id=admin.id,
+    )
+
+    stranger_org = make_org(pg_session, "Calibration - Stranger Org")
+    stranger = make_org_member(pg_session, stranger_org.id)  # a real user, but no membership in `org`
+    with pytest.raises(AuthorizationError):
+        svc.approve_mapping(pg_session, organization_id=org.id, decision_id=proposed.id, acting_user_id=stranger.id)
+
+
+@requires_postgres
+def test_hse_analyst_and_hse_manager_also_lack_governance_manage(pg_session):
+    """`GOVERNANCE_MANAGE` is withheld from every role except ORG_ADMIN in
+    `ROLE_PERMISSIONS` -- verified directly here rather than assumed,
+    since this milestone's own approval gate depends on it."""
+    from app.services.permissions import OrganizationRole
+
+    org = make_org(pg_session, "Calibration - Non-Admin Roles")
+    candidate = _create_candidate(pg_session, organization_id=org.id)
+    admin = make_org_member(pg_session, org.id)
+    proposed = svc.propose_mapping(
+        pg_session, organization_id=org.id, decision_id=candidate.id, proposed_canonical_term="NEAR_MISS",
+        rationale="r", acting_user_id=admin.id,
+    )
+    for role in (OrganizationRole.HSE_MANAGER, OrganizationRole.HSE_ANALYST, OrganizationRole.HSE_USER):
+        member = make_org_member(pg_session, org.id, role=role, name=f"member-{role.value}")
+        with pytest.raises(AuthorizationError):
+            svc.approve_mapping(pg_session, organization_id=org.id, decision_id=proposed.id, acting_user_id=member.id)
+
+
+# --- Data quality: only APPROVED is eligible (item 11) --------------------------------------------
+
+
+@requires_postgres
+def test_unknown_ambiguous_pending_and_rejected_all_remain_quarantined_at_ingestion(pg_session):
+    org = make_org(pg_session, "Calibration - Data Quality Gate")
+    admin = make_org_member(pg_session, org.id)
+
+    # UNKNOWN -- no decision at all.
+    unknown_payload = [RawSafetyEventPayload(
+        event_type="NearMiss", event_time="2026-06-01T00:00:00Z", source_system="synthetic-hse-xlsx",
+        source_record_id="UNK-1",
+    )]
+
+    # AMBIGUOUS -- a real ambiguous term from the existing, unmodified alias table.
+    ambiguous_payload = [RawSafetyEventPayload(
+        event_type="finding", event_time="2026-06-01T00:00:00Z", source_system="synthetic-hse-xlsx",
+        source_record_id="AMB-1",
+    )]
+
+    empty_index = svc.build_active_mapping_index(pg_session, organization_id=org.id, source_system="synthetic-hse-xlsx")
+    assert empty_index == {}
+    adapter = CalibratedTerminologyMappingAdapter(active_mappings=empty_index)
+
+    result = enterprise_ingestion_service.ingest_batch(
+        pg_session, organization_id=org.id, payloads=unknown_payload + ambiguous_payload, adapter=adapter, source_id=None,
+    )
+    assert {r.quality_state for r in result.records} == {"QUARANTINED"}
+
+    # PENDING (REVIEW_CANDIDATE, then PROPOSED) -- still not eligible.
+    candidate = _create_candidate(pg_session, organization_id=org.id, source_term="NearMiss")
+    still_empty_index = svc.build_active_mapping_index(pg_session, organization_id=org.id, source_system="synthetic-hse-xlsx")
+    assert still_empty_index == {}  # a REVIEW_CANDIDATE is never in the active index
+
+    proposed = svc.propose_mapping(
+        pg_session, organization_id=org.id, decision_id=candidate.id, proposed_canonical_term="NEAR_MISS",
+        rationale="r", acting_user_id=admin.id,
+    )
+    proposed_index = svc.build_active_mapping_index(pg_session, organization_id=org.id, source_system="synthetic-hse-xlsx")
+    assert proposed_index == {}  # a PROPOSED-but-not-approved mapping is never in the active index either
+
+    result2 = enterprise_ingestion_service.ingest_batch(
+        pg_session, organization_id=org.id,
+        payloads=[RawSafetyEventPayload(
+            event_type="NearMiss", event_time="2026-06-05T00:00:00Z", source_system="synthetic-hse-xlsx",
+            source_record_id="PEND-1",
+        )],
+        adapter=CalibratedTerminologyMappingAdapter(active_mappings=proposed_index), source_id=None,
+    )
+    assert result2.records[0].quality_state == "QUARANTINED"
+
+    # REJECTED -- still not eligible, permanently for this version.
+    rejected = svc.reject_mapping(pg_session, organization_id=org.id, decision_id=proposed.id, acting_user_id=admin.id, reason="Not resolvable.")
+    rejected_index = svc.build_active_mapping_index(pg_session, organization_id=org.id, source_system="synthetic-hse-xlsx")
+    assert rejected_index == {}
+    result3 = enterprise_ingestion_service.ingest_batch(
+        pg_session, organization_id=org.id,
+        payloads=[RawSafetyEventPayload(
+            event_type="NearMiss", event_time="2026-06-06T00:00:00Z", source_system="synthetic-hse-xlsx",
+            source_record_id="REJ-1",
+        )],
+        adapter=CalibratedTerminologyMappingAdapter(active_mappings=rejected_index), source_id=None,
+    )
+    assert result3.records[0].quality_state == "QUARANTINED"
+    assert rejected.is_eligible_for_canonical_classification is False
+
+
+@requires_postgres
+def test_an_approved_mapping_makes_a_future_ingestion_eligible(pg_session):
+    org = make_org(pg_session, "Calibration - Approved Eligible")
+    admin = make_org_member(pg_session, org.id)
+    candidate = _create_candidate(pg_session, organization_id=org.id)
+    proposed = svc.propose_mapping(
+        pg_session, organization_id=org.id, decision_id=candidate.id, proposed_canonical_term="NEAR_MISS",
+        rationale="r", acting_user_id=admin.id,
+    )
+    svc.approve_mapping(pg_session, organization_id=org.id, decision_id=proposed.id, acting_user_id=admin.id)
+
+    index = svc.build_active_mapping_index(pg_session, organization_id=org.id, source_system="synthetic-hse-xlsx")
+    adapter = CalibratedTerminologyMappingAdapter(active_mappings=index)
+    result = enterprise_ingestion_service.ingest_batch(
+        pg_session, organization_id=org.id,
+        payloads=[RawSafetyEventPayload(
+            event_type="NearMiss", event_time="2026-06-10T00:00:00Z", source_system="synthetic-hse-xlsx",
+            source_record_id="OK-1",
+        )],
+        adapter=adapter, source_id=None,
+    )
+    assert result.records[0].quality_state == "VALID"
+    event = pg_session.query(SafetyEvent).filter(SafetyEvent.source_record_id == "OK-1").one()
+    assert event.event_type == "NEAR_MISS"
+    assert event.attributes["_terminology_calibration"]["event_type"]["raw_term"] == "NearMiss"
+    assert event.attributes["_terminology_calibration"]["event_type"]["canonical_term"] == "NEAR_MISS"
+
+
+# --- Explicit historical reprocessing (item 13) ----------------------------------------------------
+
+
+@requires_postgres
+def test_approval_alone_never_rewrites_already_quarantined_historical_records(pg_session):
+    org = make_org(pg_session, "Calibration - No Auto Rewrite")
+    admin = make_org_member(pg_session, org.id)
+    unknown_index = {}
+    result = enterprise_ingestion_service.ingest_batch(
+        pg_session, organization_id=org.id,
+        payloads=[RawSafetyEventPayload(
+            event_type="NearMiss", event_time="2026-06-01T00:00:00Z", source_system="synthetic-hse-xlsx",
+            source_record_id="HIST-1",
+        )],
+        adapter=CalibratedTerminologyMappingAdapter(active_mappings=unknown_index), source_id=None,
+    )
+    assert result.records[0].quality_state == "QUARANTINED"
+
+    candidate = _create_candidate(pg_session, organization_id=org.id)
+    proposed = svc.propose_mapping(
+        pg_session, organization_id=org.id, decision_id=candidate.id, proposed_canonical_term="NEAR_MISS",
+        rationale="r", acting_user_id=admin.id,
+    )
+    svc.approve_mapping(pg_session, organization_id=org.id, decision_id=proposed.id, acting_user_id=admin.id)
+
+    pg_session.expire_all()
+    still = pg_session.query(SafetyEvent).filter(SafetyEvent.source_record_id == "HIST-1").one()
+    assert still.data_quality_status == "QUARANTINED"
+    assert still.event_type != "NEAR_MISS"
+
+
+@requires_postgres
+def test_explicit_reprocessing_updates_matching_historical_records_with_a_fresh_ingestion_time(pg_session):
+    org = make_org(pg_session, "Calibration - Explicit Reprocessing")
+    admin = make_org_member(pg_session, org.id)
+    result = enterprise_ingestion_service.ingest_batch(
+        pg_session, organization_id=org.id,
+        payloads=[
+            RawSafetyEventPayload(event_type="NearMiss", event_time="2026-06-01T00:00:00Z", source_system="synthetic-hse-xlsx", source_record_id="REPRO-1"),
+            RawSafetyEventPayload(event_type="Injury", event_time="2026-06-02T00:00:00Z", source_system="synthetic-hse-xlsx", source_record_id="REPRO-2"),
+        ],
+        adapter=CalibratedTerminologyMappingAdapter(), source_id=None,
+    )
+    assert {r.quality_state for r in result.records} == {"QUARANTINED", "VALID"}
+
+    before = pg_session.query(SafetyEvent).filter(SafetyEvent.source_record_id == "REPRO-1").one()
+    ingestion_time_before = before.ingestion_time
+
+    candidate = _create_candidate(pg_session, organization_id=org.id)
+    proposed = svc.propose_mapping(
+        pg_session, organization_id=org.id, decision_id=candidate.id, proposed_canonical_term="NEAR_MISS",
+        rationale="r", acting_user_id=admin.id,
+    )
+    approved = svc.approve_mapping(pg_session, organization_id=org.id, decision_id=proposed.id, acting_user_id=admin.id)
+
+    repro_result = reproc.reprocess_quarantined_records(
+        pg_session, organization_id=org.id, decision_id=approved.id, acting_user_id=admin.id
+    )
+    assert repro_result.records_examined == 1
+    assert repro_result.records_updated == 1
+    assert repro_result.updated_event_ids == [before.id]
+
+    pg_session.expire_all()
+    after = pg_session.query(SafetyEvent).filter(SafetyEvent.source_record_id == "REPRO-1").one()
+    assert after.event_type == "NEAR_MISS"
+    assert after.data_quality_status == "VALID"
+    assert after.ingestion_time > ingestion_time_before
+    # source_value provenance is never rewritten -- the raw term as received is preserved.
+    assert after.source_value["event_type"] == "NearMiss"
+
+    # The unrelated INCIDENT record is untouched.
+    other = pg_session.query(SafetyEvent).filter(SafetyEvent.source_record_id == "REPRO-2").one()
+    assert other.event_type == "INCIDENT"
+
+
+@requires_postgres
+def test_reprocessing_requires_an_approved_decision(pg_session):
+    org = make_org(pg_session, "Calibration - Reprocessing Requires Approved")
+    admin = make_org_member(pg_session, org.id)
+    candidate = _create_candidate(pg_session, organization_id=org.id)
+    with pytest.raises(reproc.ReprocessingRequiresApprovedDecisionError):
+        reproc.reprocess_quarantined_records(pg_session, organization_id=org.id, decision_id=candidate.id, acting_user_id=admin.id)
+
+
+@requires_postgres
+def test_reprocessing_is_tenant_and_source_scoped(pg_session):
+    org_a = make_org(pg_session, "Calibration - Reprocessing Tenant A")
+    org_b = make_org(pg_session, "Calibration - Reprocessing Tenant B")
+    admin_a = make_org_member(pg_session, org_a.id)
+    admin_b = make_org_member(pg_session, org_b.id)
+
+    # Same term, same source_system name, but genuinely different organizations and different records.
+    for org in (org_a, org_b):
+        enterprise_ingestion_service.ingest_batch(
+            pg_session, organization_id=org.id,
+            payloads=[RawSafetyEventPayload(
+                event_type="NearMiss", event_time="2026-06-01T00:00:00Z", source_system="synthetic-hse-xlsx",
+                source_record_id=f"TENANT-{org.id}",
+            )],
+            adapter=CalibratedTerminologyMappingAdapter(), source_id=None,
+        )
+
+    candidate_a = _create_candidate(pg_session, organization_id=org_a.id)
+    proposed_a = svc.propose_mapping(
+        pg_session, organization_id=org_a.id, decision_id=candidate_a.id, proposed_canonical_term="NEAR_MISS",
+        rationale="r", acting_user_id=admin_a.id,
+    )
+    approved_a = svc.approve_mapping(pg_session, organization_id=org_a.id, decision_id=proposed_a.id, acting_user_id=admin_a.id)
+
+    # Org B's admin cannot use org A's decision id to reprocess org B's own data.
+    with pytest.raises(ValueError):
+        reproc.reprocess_quarantined_records(pg_session, organization_id=org_b.id, decision_id=approved_a.id, acting_user_id=admin_b.id)
+
+    repro_result = reproc.reprocess_quarantined_records(
+        pg_session, organization_id=org_a.id, decision_id=approved_a.id, acting_user_id=admin_a.id
+    )
+    assert repro_result.records_updated == 1
+
+    pg_session.expire_all()
+    org_b_event = pg_session.query(SafetyEvent).filter(SafetyEvent.source_record_id == f"TENANT-{org_b.id}").one()
+    assert org_b_event.data_quality_status == "QUARANTINED"  # never touched by org A's reprocessing
+
+
+@requires_postgres
+def test_reprocessing_an_unsupported_domain_is_refused(pg_session):
+    org = make_org(pg_session, "Calibration - Unsupported Domain")
+    admin = make_org_member(pg_session, org.id)
+    entry = TerminologyReviewEntry(
+        domain="training_status", context="TRAINING", source_term="Lapsed", proposed_canonical_term=None,
+        status=TerminologyReviewStatus.UNKNOWN, reason="No alias match.", occurrence_count=1,
+    )
+    created = svc.create_review_candidates(pg_session, organization_id=org.id, source_system="synthetic-hse-xlsx", entries=[entry])
+    proposed = svc.propose_mapping(
+        pg_session, organization_id=org.id, decision_id=created[0].id, proposed_canonical_term="OVERDUE",
+        rationale="r", acting_user_id=admin.id,
+    )
+    approved = svc.approve_mapping(pg_session, organization_id=org.id, decision_id=proposed.id, acting_user_id=admin.id)
+    with pytest.raises(reproc.ReprocessingNotSupportedError):
+        reproc.reprocess_quarantined_records(pg_session, organization_id=org.id, decision_id=approved.id, acting_user_id=admin.id)
+
+
+# --- Audit logging (item 15) -----------------------------------------------------------------------
+
+
+@requires_postgres
+def test_every_lifecycle_transition_is_audited(pg_session):
+    org = make_org(pg_session, "Calibration - Audit Logging")
+    admin = make_org_member(pg_session, org.id)
+    candidate = _create_candidate(pg_session, organization_id=org.id)
+    proposed = svc.propose_mapping(
+        pg_session, organization_id=org.id, decision_id=candidate.id, proposed_canonical_term="NEAR_MISS",
+        rationale="r", acting_user_id=admin.id,
+    )
+    approved = svc.approve_mapping(pg_session, organization_id=org.id, decision_id=proposed.id, acting_user_id=admin.id)
+    svc.open_new_version(pg_session, organization_id=org.id, prior_decision_id=approved.id, acting_user_id=admin.id)
+    reproc.reprocess_quarantined_records(pg_session, organization_id=org.id, decision_id=approved.id, acting_user_id=admin.id)
+
+    actions = {log.action for log in pg_session.query(AuditLog).filter(AuditLog.organization_id == org.id).all()}
+    assert "TERMINOLOGY_MAPPING_CANDIDATE_CREATED" in actions
+    assert "TERMINOLOGY_MAPPING_PROPOSED" in actions
+    assert "TERMINOLOGY_MAPPING_APPROVED" in actions
+    assert "TERMINOLOGY_MAPPING_NEW_VERSION_OPENED" in actions
+    assert "TERMINOLOGY_HISTORICAL_REPROCESSING_APPLIED" in actions
+
+
+# --- Provenance (item 14) -------------------------------------------------------------------------
+
+
+@requires_postgres
+def test_an_approved_mapping_is_traceable_from_the_canonical_event_back_to_its_decision(pg_session):
+    org = make_org(pg_session, "Calibration - Provenance")
+    admin = make_org_member(pg_session, org.id)
+    candidate = _create_candidate(pg_session, organization_id=org.id)
+    proposed = svc.propose_mapping(
+        pg_session, organization_id=org.id, decision_id=candidate.id, proposed_canonical_term="NEAR_MISS",
+        rationale="r", acting_user_id=admin.id,
+    )
+    approved = svc.approve_mapping(pg_session, organization_id=org.id, decision_id=proposed.id, acting_user_id=admin.id)
+
+    index = svc.build_active_mapping_index(pg_session, organization_id=org.id, source_system="synthetic-hse-xlsx")
+    enterprise_ingestion_service.ingest_batch(
+        pg_session, organization_id=org.id,
+        payloads=[RawSafetyEventPayload(
+            event_type="NearMiss", event_time="2026-06-10T00:00:00Z", source_system="synthetic-hse-xlsx",
+            source_record_id="PROV-1",
+        )],
+        adapter=CalibratedTerminologyMappingAdapter(active_mappings=index), source_id=None,
+    )
+    event = pg_session.query(SafetyEvent).filter(SafetyEvent.source_record_id == "PROV-1").one()
+
+    # Canonical event -> the *exact* decision that resolved it. Not "calibration=true",
+    # not a re-query by source_term -- the literal decision_id/mapping_version this
+    # event's own classification came from.
+    prov = event.attributes["_terminology_calibration"]["event_type"]
+    assert prov["decision_id"] == str(approved.id)
+    assert prov["mapping_version"] == approved.mapping_version
+    assert prov["organization_id"] == str(org.id)
+    assert prov["source_system"] == "synthetic-hse-xlsx"
+    assert prov["domain"] == "event_type"
+    assert prov["source_term"] == approved.source_term
+    assert prov["canonical_term"] == approved.proposed_canonical_term == event.event_type
+    assert prov["raw_term"] == "NearMiss"
+
+    # The decision_id is independently re-queryable and identical to the exact row that was approved.
+    decision = pg_session.query(TerminologyMappingDecision).filter(
+        TerminologyMappingDecision.id == prov["decision_id"],
+        TerminologyMappingDecision.organization_id == org.id,
+        TerminologyMappingDecision.status == "APPROVED",
+    ).one()
+    assert decision.id == approved.id
+    assert decision.proposed_canonical_term == event.event_type
+
+    # Feature/intelligence provenance is unaffected -- this is a normal, valid SafetyEvent from here on.
+    from app.intelligence.temporal import events_as_of
+    visible = pg_session.execute(events_as_of(organization_id=org.id, as_of=event.ingestion_time)).scalars().all()
+    assert any(e.id == event.id for e in visible)
+
+
+@requires_postgres
+def test_a_second_mapping_version_does_not_make_an_earlier_events_provenance_ambiguous(pg_session):
+    """Corrective-commit audit item 1, required test 6: opening and
+    approving v2 of a mapping must never retroactively change what an
+    already-resolved event's own recorded provenance says."""
+    org = make_org(pg_session, "Calibration - Provenance Versioning")
+    admin = make_org_member(pg_session, org.id)
+    candidate = _create_candidate(pg_session, organization_id=org.id)
+    proposed_v1 = svc.propose_mapping(
+        pg_session, organization_id=org.id, decision_id=candidate.id, proposed_canonical_term="NEAR_MISS",
+        rationale="r", acting_user_id=admin.id,
+    )
+    approved_v1 = svc.approve_mapping(pg_session, organization_id=org.id, decision_id=proposed_v1.id, acting_user_id=admin.id)
+
+    index_v1 = svc.build_active_mapping_index(pg_session, organization_id=org.id, source_system="synthetic-hse-xlsx")
+    enterprise_ingestion_service.ingest_batch(
+        pg_session, organization_id=org.id,
+        payloads=[RawSafetyEventPayload(
+            event_type="NearMiss", event_time="2026-06-10T00:00:00Z", source_system="synthetic-hse-xlsx",
+            source_record_id="VER-1",
+        )],
+        adapter=CalibratedTerminologyMappingAdapter(active_mappings=index_v1), source_id=None,
+    )
+    event_v1 = pg_session.query(SafetyEvent).filter(SafetyEvent.source_record_id == "VER-1").one()
+    assert event_v1.attributes["_terminology_calibration"]["event_type"]["decision_id"] == str(approved_v1.id)
+    assert event_v1.attributes["_terminology_calibration"]["event_type"]["mapping_version"] == 1
+
+    # Open and approve v2, with a genuinely different but still-valid canonical term.
+    v2 = svc.open_new_version(pg_session, organization_id=org.id, prior_decision_id=approved_v1.id, acting_user_id=admin.id)
+    proposed_v2 = svc.propose_mapping(
+        pg_session, organization_id=org.id, decision_id=v2.id, proposed_canonical_term="OBSERVATION",
+        rationale="Corrected domain judgment.", acting_user_id=admin.id,
+    )
+    approved_v2 = svc.approve_mapping(pg_session, organization_id=org.id, decision_id=proposed_v2.id, acting_user_id=admin.id)
+    assert approved_v2.mapping_version == 2
+
+    # The v1 event's own already-recorded provenance is untouched.
+    pg_session.expire_all()
+    event_v1_again = pg_session.query(SafetyEvent).filter(SafetyEvent.source_record_id == "VER-1").one()
+    prov = event_v1_again.attributes["_terminology_calibration"]["event_type"]
+    assert prov["decision_id"] == str(approved_v1.id)
+    assert prov["mapping_version"] == 1
+    assert prov["canonical_term"] == "NEAR_MISS"
+    assert event_v1_again.event_type == "NEAR_MISS"  # the canonical event itself is not retroactively rewritten either
+
+    # A *new* ingestion after v2 is approved resolves via the exact v2 decision.
+    index_v2 = svc.build_active_mapping_index(pg_session, organization_id=org.id, source_system="synthetic-hse-xlsx")
+    enterprise_ingestion_service.ingest_batch(
+        pg_session, organization_id=org.id,
+        payloads=[RawSafetyEventPayload(
+            event_type="NearMiss", event_time="2026-06-11T00:00:00Z", source_system="synthetic-hse-xlsx",
+            source_record_id="VER-2",
+        )],
+        adapter=CalibratedTerminologyMappingAdapter(active_mappings=index_v2), source_id=None,
+    )
+    event_v2 = pg_session.query(SafetyEvent).filter(SafetyEvent.source_record_id == "VER-2").one()
+    prov2 = event_v2.attributes["_terminology_calibration"]["event_type"]
+    assert prov2["decision_id"] == str(approved_v2.id)
+    assert prov2["mapping_version"] == 2
+    assert prov2["canonical_term"] == "OBSERVATION"
+    assert prov2["decision_id"] != prov["decision_id"]  # distinct decision identity from the v1-resolved event
+
+
+@requires_postgres
+def test_reprocessing_attaches_exact_mapping_provenance_too(pg_session):
+    """Corrective-commit audit item 1, required test 7 (downstream/
+    reprocessing path must not lose provenance): a record fixed up by
+    `reprocess_quarantined_records()` carries the same exact-identity
+    provenance shape a freshly-ingested record does, not a bare flag."""
+    org = make_org(pg_session, "Calibration - Reprocessing Provenance")
+    admin = make_org_member(pg_session, org.id)
+
+    # Ingested and quarantined *before* any mapping is approved.
+    enterprise_ingestion_service.ingest_batch(
+        pg_session, organization_id=org.id,
+        payloads=[RawSafetyEventPayload(
+            event_type="NearMiss", event_time="2026-05-01T00:00:00Z", source_system="synthetic-hse-xlsx",
+            source_record_id="REPRO-PROV-1",
+        )],
+        adapter=CalibratedTerminologyMappingAdapter(), source_id=None,
+    )
+    quarantined = pg_session.query(SafetyEvent).filter(SafetyEvent.source_record_id == "REPRO-PROV-1").one()
+    assert quarantined.data_quality_status == "QUARANTINED"
+    assert "_terminology_calibration" not in (quarantined.attributes or {})
+
+    candidate = _create_candidate(pg_session, organization_id=org.id)
+    proposed = svc.propose_mapping(
+        pg_session, organization_id=org.id, decision_id=candidate.id, proposed_canonical_term="NEAR_MISS",
+        rationale="r", acting_user_id=admin.id,
+    )
+    approved = svc.approve_mapping(pg_session, organization_id=org.id, decision_id=proposed.id, acting_user_id=admin.id)
+
+    result = reproc.reprocess_quarantined_records(pg_session, organization_id=org.id, decision_id=approved.id, acting_user_id=admin.id)
+    assert result.records_updated == 1
+
+    pg_session.expire_all()
+    reprocessed = pg_session.query(SafetyEvent).filter(SafetyEvent.source_record_id == "REPRO-PROV-1").one()
+    prov = reprocessed.attributes["_terminology_calibration"]["event_type"]
+    assert prov["decision_id"] == str(approved.id)
+    assert prov["mapping_version"] == approved.mapping_version
+    assert prov["canonical_term"] == "NEAR_MISS"
+    assert prov["raw_term"] == "NearMiss"
+
+
+# --- Corrective commit: canonical ontology validation (audit item 2) ----------------------------
+
+
+@requires_postgres
+def test_valid_canonical_term_approval_succeeds(pg_session):
+    org = make_org(pg_session, "Calibration - Valid Canonical Term")
+    admin = make_org_member(pg_session, org.id)
+    candidate = _create_candidate(pg_session, organization_id=org.id)
+    proposed = svc.propose_mapping(
+        pg_session, organization_id=org.id, decision_id=candidate.id, proposed_canonical_term="NEAR_MISS",
+        rationale="Matches the existing NEAR_MISS SafetyEventType.", acting_user_id=admin.id,
+    )
+    approved = svc.approve_mapping(pg_session, organization_id=org.id, decision_id=proposed.id, acting_user_id=admin.id)
+    assert approved.status == "APPROVED"
+    assert approved.proposed_canonical_term == "NEAR_MISS"
+
+
+@requires_postgres
+def test_invalid_arbitrary_canonical_term_approval_fails_and_leaves_decision_proposed(pg_session):
+    org = make_org(pg_session, "Calibration - Invalid Canonical Term")
+    admin = make_org_member(pg_session, org.id)
+    candidate = _create_candidate(pg_session, organization_id=org.id)
+    proposed = svc.propose_mapping(
+        pg_session, organization_id=org.id, decision_id=candidate.id, proposed_canonical_term="TOTALLY_MADE_UP_TERM",
+        rationale="r", acting_user_id=admin.id,
+    )
+    with pytest.raises(InvalidCanonicalTermError):
+        svc.approve_mapping(pg_session, organization_id=org.id, decision_id=proposed.id, acting_user_id=admin.id)
+
+    pg_session.expire_all()
+    still_proposed = pg_session.query(TerminologyMappingDecision).filter(TerminologyMappingDecision.id == proposed.id).one()
+    assert still_proposed.status == "PROPOSED"  # failed validation never mutates the decision to APPROVED
+    assert still_proposed.reviewer_user_id is None
+    assert still_proposed.decided_at is None
+
+
+@requires_postgres
+def test_wrong_domain_canonical_term_approval_fails(pg_session):
+    """A term that IS a valid SIE canonical term, but for a different
+    domain (an event_subtype value, proposed for an event_type
+    decision), must still be refused -- validation is domain/context
+    scoped, not "any known SIE term is fine anywhere"."""
+    org = make_org(pg_session, "Calibration - Wrong Domain Canonical Term")
+    admin = make_org_member(pg_session, org.id)
+    candidate = _create_candidate(pg_session, organization_id=org.id)
+    proposed = svc.propose_mapping(
+        pg_session, organization_id=org.id, decision_id=candidate.id, proposed_canonical_term="FIRST_AID_CASE",
+        rationale="r", acting_user_id=admin.id,
+    )
+    with pytest.raises(InvalidCanonicalTermError):
+        svc.approve_mapping(pg_session, organization_id=org.id, decision_id=proposed.id, acting_user_id=admin.id)
+
+    pg_session.expire_all()
+    still_proposed = pg_session.query(TerminologyMappingDecision).filter(TerminologyMappingDecision.id == proposed.id).one()
+    assert still_proposed.status == "PROPOSED"
+
+
+@requires_postgres
+def test_empty_canonical_term_approval_fails(pg_session):
+    org = make_org(pg_session, "Calibration - Empty Canonical Term")
+    admin = make_org_member(pg_session, org.id)
+    candidate = _create_candidate(pg_session, organization_id=org.id)
+    proposed = svc.propose_mapping(
+        pg_session, organization_id=org.id, decision_id=candidate.id, proposed_canonical_term="",
+        rationale="r", acting_user_id=admin.id,
+    )
+    with pytest.raises(TerminologyMappingDecisionStateError):
+        svc.approve_mapping(pg_session, organization_id=org.id, decision_id=proposed.id, acting_user_id=admin.id)
+
+    pg_session.expire_all()
+    still_proposed = pg_session.query(TerminologyMappingDecision).filter(TerminologyMappingDecision.id == proposed.id).one()
+    assert still_proposed.status == "PROPOSED"
+
+
+@requires_postgres
+def test_a_rejected_invalid_canonical_term_never_unlocks_ingestion_classification(pg_session):
+    """Corrective-commit audit item 2, required test: an invalid mapping
+    that fails approval must never become eligible for canonical
+    classification -- a subsequent ingestion of the same raw term stays
+    QUARANTINED/unresolved exactly as if no mapping had ever been
+    proposed for it."""
+    org = make_org(pg_session, "Calibration - Invalid Mapping Cannot Unlock Ingestion")
+    admin = make_org_member(pg_session, org.id)
+    candidate = _create_candidate(pg_session, organization_id=org.id)
+    proposed = svc.propose_mapping(
+        pg_session, organization_id=org.id, decision_id=candidate.id, proposed_canonical_term="TOTALLY_MADE_UP_TERM",
+        rationale="r", acting_user_id=admin.id,
+    )
+    with pytest.raises(InvalidCanonicalTermError):
+        svc.approve_mapping(pg_session, organization_id=org.id, decision_id=proposed.id, acting_user_id=admin.id)
+
+    # The mapping index reflects only genuinely APPROVED decisions -- the failed one contributes nothing.
+    index = svc.build_active_mapping_index(pg_session, organization_id=org.id, source_system="synthetic-hse-xlsx")
+    assert index == {}
+
+    result = enterprise_ingestion_service.ingest_batch(
+        pg_session, organization_id=org.id,
+        payloads=[RawSafetyEventPayload(
+            event_type="NearMiss", event_time="2026-06-10T00:00:00Z", source_system="synthetic-hse-xlsx",
+            source_record_id="UNLOCK-1",
+        )],
+        adapter=CalibratedTerminologyMappingAdapter(active_mappings=index), source_id=None,
+    )
+    event = pg_session.query(SafetyEvent).filter(SafetyEvent.source_record_id == "UNLOCK-1").one()
+    assert event.data_quality_status == "QUARANTINED"
+    assert event.event_type != "NEAR_MISS"  # never classified into the canonical term -- left unresolved
+    assert event.source_value["event_type"] == "NearMiss"  # the raw value is preserved verbatim
+    assert "_terminology_calibration" not in (event.attributes or {})
+    assert result.records[0].outcome in ("CREATED",)  # created, but quarantined -- never silently dropped
+
+
+# --- Reproducibility --------------------------------------------------------------------------------
+
+
+@requires_postgres
+def test_same_input_and_mapping_version_produce_the_same_classification(pg_session):
+    org = make_org(pg_session, "Calibration - Reproducibility")
+    admin = make_org_member(pg_session, org.id)
+    candidate = _create_candidate(pg_session, organization_id=org.id)
+    proposed = svc.propose_mapping(
+        pg_session, organization_id=org.id, decision_id=candidate.id, proposed_canonical_term="NEAR_MISS",
+        rationale="r", acting_user_id=admin.id,
+    )
+    svc.approve_mapping(pg_session, organization_id=org.id, decision_id=proposed.id, acting_user_id=admin.id)
+    index = svc.build_active_mapping_index(pg_session, organization_id=org.id, source_system="synthetic-hse-xlsx")
+
+    results = []
+    for i in range(3):
+        result = enterprise_ingestion_service.ingest_batch(
+            pg_session, organization_id=org.id,
+            payloads=[RawSafetyEventPayload(
+                event_type="NearMiss", event_time="2026-06-10T00:00:00Z", source_system="synthetic-hse-xlsx",
+                source_record_id=f"REPRO-DET-{i}",
+            )],
+            adapter=CalibratedTerminologyMappingAdapter(active_mappings=index), source_id=None,
+        )
+        results.append(result.records[0].quality_state)
+    assert results == ["VALID", "VALID", "VALID"]
+
+    events = pg_session.query(SafetyEvent).filter(SafetyEvent.source_record_id.like("REPRO-DET-%")).all()
+    assert {e.event_type for e in events} == {"NEAR_MISS"}
+
+
+# --- PII (item 21 / testing requirement) -------------------------------------------------------------
+
+
+@requires_postgres
+def test_terminology_review_never_requires_or_exposes_pii(pg_session):
+    """A terminology decision needs only the term itself, an occurrence
+    count, and internal document ids -- never a worker's name or a
+    narrative. Verified by construction: a payload carrying a fabricated
+    personal name in its narrative fields never causes that name to
+    appear anywhere on the resulting TerminologyMappingDecision."""
+    org = make_org(pg_session, "Calibration - PII Exclusion")
+    admin = make_org_member(pg_session, org.id)
+
+    payloads = [
+        RawSafetyEventPayload(
+            event_type="NearMiss", event_time="2026-06-01T00:00:00Z", source_system="synthetic-hse-xlsx",
+            source_record_id="PII-1", description=f"Synthetic narrative mentioning {_PII_MARKER}.",
+            attributes={"PeopleInvolved": _PII_MARKER},
+        ),
+    ]
+    entries = build_terminology_review(payloads)
+    created = svc.create_review_candidates(pg_session, organization_id=org.id, source_system="synthetic-hse-xlsx", entries=entries)
+    candidate = created[0]
+
+    proposed = svc.propose_mapping(
+        pg_session, organization_id=org.id, decision_id=candidate.id, proposed_canonical_term="NEAR_MISS",
+        rationale="Matches near-miss domain semantics.", acting_user_id=admin.id,
+    )
+    approved = svc.approve_mapping(pg_session, organization_id=org.id, decision_id=proposed.id, acting_user_id=admin.id, notes="Reviewed.")
+
+    import json
+
+    serialized = json.dumps(
+        {
+            "source_term": approved.source_term, "normalized_term": approved.normalized_term,
+            "proposed_canonical_term": approved.proposed_canonical_term, "rationale": approved.rationale,
+            "provenance": approved.provenance, "example_source_record_ids": approved.example_source_record_ids,
+        },
+        default=str,
+    )
+    assert _PII_MARKER not in serialized
+
+
+# --- Model-level lifecycle helper properties (no DB needed) -----------------------------------------
+
+
+def test_status_helper_properties_without_a_database():
+    from app.models.terminology_mapping_decision import (
+        TerminologyMappingDecision,
+        TerminologyMappingDecisionStatus,
+    )
+
+    candidate = TerminologyMappingDecision(status=TerminologyMappingDecisionStatus.REVIEW_CANDIDATE)
+    proposed = TerminologyMappingDecision(status=TerminologyMappingDecisionStatus.PROPOSED)
+    approved = TerminologyMappingDecision(status=TerminologyMappingDecisionStatus.APPROVED)
+    rejected = TerminologyMappingDecision(status=TerminologyMappingDecisionStatus.REJECTED)
+
+    assert candidate.is_pending and not candidate.is_terminal and not candidate.is_eligible_for_canonical_classification
+    assert proposed.is_pending and not proposed.is_terminal and not proposed.is_eligible_for_canonical_classification
+    assert approved.is_terminal and not approved.is_pending and approved.is_eligible_for_canonical_classification
+    assert rejected.is_terminal and not rejected.is_pending and not rejected.is_eligible_for_canonical_classification
+
+
+# =================================================================================================
+# Implement Approved HSE Terminology Decisions v0.1 -- all fixtures below are synthetic (fabricated
+# project names, terminology terms, and narrative strings), mirroring the *shape* of the real
+# dataset's own decisions (an event_type-domain term with no independent raw subtype value,
+# requiring a compound event_type+event_subtype target) without using any real dataset content.
+# =================================================================================================
+
+
+def _compound_candidate(db, *, organization_id, source_system="synthetic-hse-xlsx", source_term="QuasiIncident", occurrence_count=3):
+    """An event_type-domain REVIEW_CANDIDATE for a source term with no
+    independent raw subtype value -- the same shape as the real
+    dataset's own NearMiss/PropertyDamage/VehicleAccident terms (see
+    `app/validation/real_dataset_loader.py`'s own documented finding
+    that the Incident sheet has no subtype column at all)."""
+    entry = TerminologyReviewEntry(
+        domain="event_type", context=None, source_term=source_term, proposed_canonical_term=None,
+        status=TerminologyReviewStatus.UNKNOWN, reason="No alias match found.", occurrence_count=occurrence_count,
+    )
+    created = svc.create_review_candidates(db, organization_id=organization_id, source_system=source_system, entries=[entry])
+    assert len(created) == 1
+    return created[0]
+
+
+def _approve_compound(db, *, organization_id, candidate, canonical_event_type, target_event_subtype, acting_user_id):
+    """Attaches `target_event_subtype` to the candidate's own `provenance`
+    (the same JSON column `create_review_candidates()` already accepts a
+    `provenance=` kwarg for), then proposes and approves -- exactly the
+    pattern used against the real dataset's own 3 approved terms."""
+    candidate.provenance = {**(candidate.provenance or {}), "target_event_subtype": target_event_subtype}
+    db.add(candidate)
+    db.commit()
+    db.refresh(candidate)
+    proposed = svc.propose_mapping(
+        db, organization_id=organization_id, decision_id=candidate.id, proposed_canonical_term=canonical_event_type,
+        rationale="Compound event_type+subtype target -- synthetic fixture.", acting_user_id=acting_user_id,
+    )
+    return svc.approve_mapping(db, organization_id=organization_id, decision_id=proposed.id, acting_user_id=acting_user_id)
+
+
+# --- Compound event_type+event_subtype target (Implement Approved HSE Terminology Decisions v0.1) ---
+
+
+@requires_postgres
+def test_compound_target_valid_subtype_approval_succeeds(pg_session):
+    org = make_org(pg_session, "HSE Decisions - Compound Valid")
+    admin = make_org_member(pg_session, org.id)
+    candidate = _compound_candidate(pg_session, organization_id=org.id, source_term="QuasiNearMiss")
+    approved = _approve_compound(
+        pg_session, organization_id=org.id, candidate=candidate, canonical_event_type="INCIDENT",
+        target_event_subtype="NEAR_MISS", acting_user_id=admin.id,
+    )
+    assert approved.status == "APPROVED"
+    assert approved.proposed_canonical_term == "INCIDENT"
+    assert approved.provenance["target_event_subtype"] == "NEAR_MISS"
+
+
+@requires_postgres
+def test_compound_target_invented_subtype_approval_fails_and_leaves_decision_proposed(pg_session):
+    """Ontology safety: a compound `target_event_subtype` that is not a
+    genuinely pre-existing SIE canonical value must be refused exactly
+    like a top-level invalid canonical term -- never invented merely to
+    force a source mapping through."""
+    org = make_org(pg_session, "HSE Decisions - Compound Invalid")
+    admin = make_org_member(pg_session, org.id)
+    candidate = _compound_candidate(pg_session, organization_id=org.id, source_term="QuasiFireIncident")
+    candidate.provenance = {"target_event_subtype": "TOTALLY_INVENTED_SUBTYPE"}
+    pg_session.add(candidate)
+    pg_session.commit()
+    proposed = svc.propose_mapping(
+        pg_session, organization_id=org.id, decision_id=candidate.id, proposed_canonical_term="INCIDENT",
+        rationale="r", acting_user_id=admin.id,
+    )
+    with pytest.raises(InvalidCanonicalTermError):
+        svc.approve_mapping(pg_session, organization_id=org.id, decision_id=proposed.id, acting_user_id=admin.id)
+
+    pg_session.expire_all()
+    still_proposed = pg_session.query(TerminologyMappingDecision).filter(TerminologyMappingDecision.id == proposed.id).one()
+    assert still_proposed.status == "PROPOSED"
+
+
+# --- Corrective commit (blocker 2): compound subtype validation must be strictly scoped ----------
+# to the selected event_type's own canonical subtype vocabulary -- never a blanket union with
+# every top-level SafetyEventType value (which previously let e.g. INCIDENT+OBSERVATION validate
+# purely because OBSERVATION happens to exist *somewhere* in the enum).
+
+
+@requires_postgres
+@pytest.mark.parametrize(
+    ("term", "target_subtype"),
+    [("QuasiNearMissB2", "NEAR_MISS"), ("QuasiPropertyDamageB2", "PROPERTY_DAMAGE"), ("QuasiVehicleAccidentB2", "VEHICLE_INCIDENT")],
+)
+def test_incident_compound_target_the_three_genuine_incident_subtypes_are_accepted(pg_session, term, target_subtype):
+    org = make_org(pg_session, f"HSE Decisions - Compound Valid {target_subtype}")
+    admin = make_org_member(pg_session, org.id)
+    candidate = _compound_candidate(pg_session, organization_id=org.id, source_term=term)
+    approved = _approve_compound(
+        pg_session, organization_id=org.id, candidate=candidate, canonical_event_type="INCIDENT",
+        target_event_subtype=target_subtype, acting_user_id=admin.id,
+    )
+    assert approved.status == "APPROVED"
+    assert approved.provenance["target_event_subtype"] == target_subtype
+
+
+@requires_postgres
+@pytest.mark.parametrize("bogus_subtype", ["OBSERVATION", "PERMIT", "TRAINING"])
+def test_incident_compound_target_other_top_level_event_types_are_rejected(pg_session, bogus_subtype):
+    """Blocker 2's own explicit invariant: `INCIDENT + OBSERVATION`,
+    `INCIDENT + PERMIT`, and `INCIDENT + TRAINING` must all be refused --
+    each is a genuine top-level `SafetyEventType` value, but NONE of
+    them is itself a curated `INCIDENT` subtype, so none may validate as
+    a compound target merely because it exists somewhere in the enum."""
+    org = make_org(pg_session, f"HSE Decisions - Compound Invalid {bogus_subtype}")
+    admin = make_org_member(pg_session, org.id)
+    candidate = _compound_candidate(pg_session, organization_id=org.id, source_term=f"QuasiBogus{bogus_subtype}")
+    candidate.provenance = {"target_event_subtype": bogus_subtype}
+    pg_session.add(candidate)
+    pg_session.commit()
+    proposed = svc.propose_mapping(
+        pg_session, organization_id=org.id, decision_id=candidate.id, proposed_canonical_term="INCIDENT",
+        rationale="r", acting_user_id=admin.id,
+    )
+    with pytest.raises(InvalidCanonicalTermError):
+        svc.approve_mapping(pg_session, organization_id=org.id, decision_id=proposed.id, acting_user_id=admin.id)
+
+    pg_session.expire_all()
+    still_proposed = pg_session.query(TerminologyMappingDecision).filter(TerminologyMappingDecision.id == proposed.id).one()
+    assert still_proposed.status == "PROPOSED"  # no mutation happened before the failure
+    assert still_proposed.reviewer_user_id is None
+    assert still_proposed.decided_at is None
+    assert still_proposed.proposed_canonical_term == "INCIDENT"  # the proposal itself is untouched too
+
+
+@requires_postgres
+def test_tightened_compound_validation_does_not_break_the_active_mapping_index_or_adapter(pg_session):
+    """Traces the corrective commit's own required caller list --
+    approve_mapping() -> build_active_mapping_index() ->
+    CalibratedTerminologyMappingAdapter -- end to end for all three
+    genuinely-valid compound targets, proving the tightened validation
+    changed nothing about how an already-APPROVED compound decision is
+    read back and applied."""
+    org = make_org(pg_session, "HSE Decisions - Compound Tightened Still Resolves")
+    admin = make_org_member(pg_session, org.id)
+
+    specs = {
+        "QuasiNearMissC": ("INCIDENT", "NEAR_MISS"),
+        "QuasiPropertyDamageC": ("INCIDENT", "PROPERTY_DAMAGE"),
+        "QuasiVehicleAccidentC": ("INCIDENT", "VEHICLE_INCIDENT"),
+    }
+    for term, (canonical, subtype) in specs.items():
+        candidate = _compound_candidate(pg_session, organization_id=org.id, source_term=term)
+        _approve_compound(
+            pg_session, organization_id=org.id, candidate=candidate, canonical_event_type=canonical,
+            target_event_subtype=subtype, acting_user_id=admin.id,
+        )
+
+    index = svc.build_active_mapping_index(pg_session, organization_id=org.id, source_system="synthetic-hse-xlsx")
+    adapter = CalibratedTerminologyMappingAdapter(active_mappings=index)
+    for term, (canonical, subtype) in specs.items():
+        enterprise_ingestion_service.ingest_batch(
+            pg_session, organization_id=org.id,
+            payloads=[RawSafetyEventPayload(
+                event_type=term, event_time="2026-06-07T00:00:00Z", source_system="synthetic-hse-xlsx",
+                source_record_id=f"TIGHT-{term}",
+            )],
+            adapter=adapter, source_id=None,
+        )
+        event = pg_session.query(SafetyEvent).filter(SafetyEvent.source_record_id == f"TIGHT-{term}").one()
+        assert event.event_type == canonical
+        assert event.event_subtype == subtype
+        assert event.data_quality_status != "QUARANTINED"
+
+
+@requires_postgres
+def test_compound_target_reprocessing_applies_both_fields_with_exact_shared_provenance(pg_session):
+    org = make_org(pg_session, "HSE Decisions - Compound Reprocessing")
+    admin = make_org_member(pg_session, org.id)
+
+    enterprise_ingestion_service.ingest_batch(
+        pg_session, organization_id=org.id,
+        payloads=[RawSafetyEventPayload(
+            event_type="QuasiPropertyDamage", event_time="2026-06-01T00:00:00Z", source_system="synthetic-hse-xlsx",
+            source_record_id="COMPOUND-1",
+        )],
+        adapter=CalibratedTerminologyMappingAdapter(), source_id=None,
+    )
+    before = pg_session.query(SafetyEvent).filter(SafetyEvent.source_record_id == "COMPOUND-1").one()
+    assert before.data_quality_status == "QUARANTINED"
+    assert before.event_subtype is None
+
+    candidate = _compound_candidate(pg_session, organization_id=org.id, source_term="QuasiPropertyDamage")
+    approved = _approve_compound(
+        pg_session, organization_id=org.id, candidate=candidate, canonical_event_type="INCIDENT",
+        target_event_subtype="PROPERTY_DAMAGE", acting_user_id=admin.id,
+    )
+
+    result = reproc.reprocess_quarantined_records(pg_session, organization_id=org.id, decision_id=approved.id, acting_user_id=admin.id)
+    assert result.records_updated == 1
+
+    pg_session.expire_all()
+    after = pg_session.query(SafetyEvent).filter(SafetyEvent.source_record_id == "COMPOUND-1").one()
+    assert after.event_type == "INCIDENT"
+    assert after.event_subtype == "PROPERTY_DAMAGE"
+    assert after.data_quality_status != "QUARANTINED"
+
+    prov = after.attributes["_terminology_calibration"]
+    assert prov["event_type"]["decision_id"] == str(approved.id)
+    assert prov["event_type"]["mapping_version"] == approved.mapping_version
+    assert prov["event_type"]["canonical_term"] == "INCIDENT"
+    assert prov["event_subtype"]["decision_id"] == str(approved.id)  # SAME decision drove both fields
+    assert prov["event_subtype"]["mapping_version"] == approved.mapping_version
+    assert prov["event_subtype"]["canonical_term"] == "PROPERTY_DAMAGE"
+    assert prov["event_subtype"]["derived_from_compound_event_type_decision"] is True
+    assert after.source_value["event_type"] == "QuasiPropertyDamage"  # raw term preserved
+
+
+@requires_postgres
+def test_compound_target_never_overrides_a_genuine_independent_raw_subtype(pg_session):
+    """A payload that DOES carry its own raw event_subtype value must
+    resolve on its own terms -- the compound target is consulted ONLY
+    when the payload has no independent subtype at all."""
+    org = make_org(pg_session, "HSE Decisions - Compound Never Overrides Real Subtype")
+    admin = make_org_member(pg_session, org.id)
+    candidate = _compound_candidate(pg_session, organization_id=org.id, source_term="QuasiVehicleAccident")
+    _approve_compound(
+        pg_session, organization_id=org.id, candidate=candidate, canonical_event_type="INCIDENT",
+        target_event_subtype="VEHICLE_INCIDENT", acting_user_id=admin.id,
+    )
+    index = svc.build_active_mapping_index(pg_session, organization_id=org.id, source_system="synthetic-hse-xlsx")
+    adapter = CalibratedTerminologyMappingAdapter(active_mappings=index)
+
+    # A record whose raw event_subtype is its own genuine, independently
+    # resolvable value -- the static alias table's own "first aid case",
+    # nothing to do with the compound target.
+    enterprise_ingestion_service.ingest_batch(
+        pg_session, organization_id=org.id,
+        payloads=[RawSafetyEventPayload(
+            event_type="QuasiVehicleAccident", event_subtype="first aid case", event_time="2026-06-02T00:00:00Z",
+            source_system="synthetic-hse-xlsx", source_record_id="COMPOUND-2",
+        )],
+        adapter=adapter, source_id=None,
+    )
+    event = pg_session.query(SafetyEvent).filter(SafetyEvent.source_record_id == "COMPOUND-2").one()
+    assert event.event_type == "INCIDENT"
+    assert event.event_subtype == "FIRST_AID_CASE"  # the record's own real subtype wins, never the compound target
+
+
+@requires_postgres
+def test_compound_reprocessing_is_idempotent(pg_session):
+    org = make_org(pg_session, "HSE Decisions - Compound Idempotent")
+    admin = make_org_member(pg_session, org.id)
+    enterprise_ingestion_service.ingest_batch(
+        pg_session, organization_id=org.id,
+        payloads=[RawSafetyEventPayload(
+            event_type="QuasiNearMiss2", event_time="2026-06-03T00:00:00Z", source_system="synthetic-hse-xlsx",
+            source_record_id="COMPOUND-3",
+        )],
+        adapter=CalibratedTerminologyMappingAdapter(), source_id=None,
+    )
+    candidate = _compound_candidate(pg_session, organization_id=org.id, source_term="QuasiNearMiss2")
+    approved = _approve_compound(
+        pg_session, organization_id=org.id, candidate=candidate, canonical_event_type="INCIDENT",
+        target_event_subtype="NEAR_MISS", acting_user_id=admin.id,
+    )
+    first = reproc.reprocess_quarantined_records(pg_session, organization_id=org.id, decision_id=approved.id, acting_user_id=admin.id)
+    assert first.records_updated == 1
+    second = reproc.reprocess_quarantined_records(pg_session, organization_id=org.id, decision_id=approved.id, acting_user_id=admin.id)
+    assert second.records_updated == 0
+    assert second.records_examined == 0  # no longer QUARANTINED, so not even re-examined -- no duplicate events
+
+
+@requires_postgres
+def test_opening_a_new_version_carries_forward_the_compound_target(pg_session):
+    org = make_org(pg_session, "HSE Decisions - Compound Version Carry-Forward")
+    admin = make_org_member(pg_session, org.id)
+    candidate = _compound_candidate(pg_session, organization_id=org.id, source_term="QuasiNearMiss3")
+    approved = _approve_compound(
+        pg_session, organization_id=org.id, candidate=candidate, canonical_event_type="INCIDENT",
+        target_event_subtype="NEAR_MISS", acting_user_id=admin.id,
+    )
+    v2 = svc.open_new_version(pg_session, organization_id=org.id, prior_decision_id=approved.id, acting_user_id=admin.id)
+    assert v2.provenance.get("target_event_subtype") == "NEAR_MISS"  # never silently dropped
+
+
+# --- Ontology safety: no rejected term can ever be activated by reprocessing --------------------
+
+
+@requires_postgres
+def test_a_rejected_decision_can_never_be_reprocessed(pg_session):
+    org = make_org(pg_session, "HSE Decisions - Rejected Cannot Reprocess")
+    admin = make_org_member(pg_session, org.id)
+    candidate = _create_candidate(pg_session, organization_id=org.id)
+    proposed = svc.propose_mapping(
+        pg_session, organization_id=org.id, decision_id=candidate.id, proposed_canonical_term=None,
+        rationale="No confident classification.", acting_user_id=admin.id,
+    )
+    rejected = svc.reject_mapping(pg_session, organization_id=org.id, decision_id=proposed.id, acting_user_id=admin.id, reason="No exact canonical value exists.")
+    assert rejected.status == "REJECTED"
+    with pytest.raises(reproc.ReprocessingRequiresApprovedDecisionError):
+        reproc.reprocess_quarantined_records(pg_session, organization_id=org.id, decision_id=rejected.id, acting_user_id=admin.id)
+
+
+# --- Rejection safety sweep: many distinct rejected terms, records stay quarantined --------------
+
+
+@requires_postgres
+def test_many_rejected_terms_across_two_domains_all_remain_quarantined_with_source_terms_intact(pg_session):
+    """Mirrors the real dataset's own rejection sweep at synthetic scale:
+    several distinct terms across both event_type and event_subtype (two
+    of them sharing the literal name "Others" under different domains,
+    kept as fully independent decisions -- item 20's own requirement) are
+    all rejected, and every one of their underlying records stays
+    QUARANTINED with its original source term untouched."""
+    org = make_org(pg_session, "HSE Decisions - Rejection Sweep")
+    admin = make_org_member(pg_session, org.id)
+
+    incident_terms = ["QuasiFireIncident2", "QuasiOthersIncident", "QuasiSecurityBreach"]
+    observation_terms = ["QuasiWorkingAtHeight", "QuasiOthersObservation", "QuasiElectricalSafety"]
+
+    for term in incident_terms:
+        enterprise_ingestion_service.ingest_batch(
+            pg_session, organization_id=org.id,
+            payloads=[RawSafetyEventPayload(
+                event_type=term, event_time="2026-06-05T00:00:00Z", source_system="synthetic-hse-xlsx",
+                source_record_id=f"REJ-{term}",
+            )],
+            adapter=CalibratedTerminologyMappingAdapter(), source_id=None,
+        )
+        entry = TerminologyReviewEntry(
+            domain="event_type", context=None, source_term=term, proposed_canonical_term=None,
+            status=TerminologyReviewStatus.UNKNOWN, reason="No alias match.", occurrence_count=1,
+        )
+        created = svc.create_review_candidates(pg_session, organization_id=org.id, source_system="synthetic-hse-xlsx", entries=[entry])
+        proposed = svc.propose_mapping(
+            pg_session, organization_id=org.id, decision_id=created[0].id, proposed_canonical_term=None,
+            rationale="No confident classification.", acting_user_id=admin.id,
+        )
+        svc.reject_mapping(pg_session, organization_id=org.id, decision_id=proposed.id, acting_user_id=admin.id, reason="No exact canonical value exists; would require inventing one.")
+
+    # First establish an APPROVED, eligible event_type for the observation-domain records
+    # (event_subtype resolution only ever applies under an already-resolved event_type --
+    # exactly like the real dataset's own OBSERVATION sheet, item 7's own scoping rule).
+    obs_type_candidate = _create_candidate(pg_session, organization_id=org.id, source_term="QuasiObsType")
+    obs_type_proposed = svc.propose_mapping(
+        pg_session, organization_id=org.id, decision_id=obs_type_candidate.id, proposed_canonical_term="OBSERVATION",
+        rationale="r", acting_user_id=admin.id,
+    )
+    svc.approve_mapping(pg_session, organization_id=org.id, decision_id=obs_type_proposed.id, acting_user_id=admin.id)
+
+    for term in observation_terms:
+        enterprise_ingestion_service.ingest_batch(
+            pg_session, organization_id=org.id,
+            payloads=[RawSafetyEventPayload(
+                event_type="QuasiObsType", event_subtype=term, event_time="2026-06-05T00:00:00Z",
+                source_system="synthetic-hse-xlsx", source_record_id=f"REJ-{term}",
+            )],
+            adapter=CalibratedTerminologyMappingAdapter(), source_id=None,
+        )
+        entry = TerminologyReviewEntry(
+            domain="event_subtype", context="OBSERVATION", source_term=term, proposed_canonical_term=None,
+            status=TerminologyReviewStatus.UNKNOWN, reason="No alias match.", occurrence_count=1,
+        )
+        created = svc.create_review_candidates(pg_session, organization_id=org.id, source_system="synthetic-hse-xlsx", entries=[entry])
+        proposed = svc.propose_mapping(
+            pg_session, organization_id=org.id, decision_id=created[0].id, proposed_canonical_term=None,
+            rationale="No confident classification.", acting_user_id=admin.id,
+        )
+        svc.reject_mapping(pg_session, organization_id=org.id, decision_id=proposed.id, acting_user_id=admin.id, reason="No exact canonical Observation value exists.")
+
+    pg_session.expire_all()
+    for term in incident_terms:
+        event = pg_session.query(SafetyEvent).filter(SafetyEvent.source_record_id == f"REJ-{term}").one()
+        assert event.data_quality_status == "QUARANTINED"
+        assert event.source_value["event_type"] == term
+        assert "_terminology_calibration" not in (event.attributes or {})
+    for term in observation_terms:
+        event = pg_session.query(SafetyEvent).filter(SafetyEvent.source_record_id == f"REJ-{term}").one()
+        assert event.data_quality_status == "QUARANTINED"
+        assert event.source_value["event_subtype"] == term
+
+    # The two independently-scoped "Others"-shaped decisions (Incident vs. Observation
+    # domain) are genuinely distinct rows, never collapsed into one global decision.
+    incident_others = pg_session.query(TerminologyMappingDecision).filter(
+        TerminologyMappingDecision.organization_id == org.id, TerminologyMappingDecision.source_term == "QuasiOthersIncident",
+    ).one()
+    observation_others = pg_session.query(TerminologyMappingDecision).filter(
+        TerminologyMappingDecision.organization_id == org.id, TerminologyMappingDecision.source_term == "QuasiOthersObservation",
+    ).one()
+    assert incident_others.id != observation_others.id
+    assert incident_others.domain == "event_type"
+    assert observation_others.domain == "event_subtype"
+    assert incident_others.status == "REJECTED"
+    assert observation_others.status == "REJECTED"
+
+
+# --- End-to-end synthetic mirror of the real 18-term human review sweep -------------------------
+
+
+@requires_postgres
+def test_full_synthetic_hse_decision_sweep_matches_expected_final_counts(pg_session):
+    """A small, fully synthetic mirror of the real-dataset review this
+    milestone performed: N terms proposed and decided (some APPROVED
+    with a compound target, most REJECTED), only APPROVED ones
+    reprocessed, and the final counts (decisions persisted, records
+    reprocessed, records remaining quarantined) checked exactly -- never
+    just "some records changed"."""
+    org = make_org(pg_session, "HSE Decisions - Full Sweep")
+    admin = make_org_member(pg_session, org.id)
+
+    approved_terms = {
+        "QuasiSweepNearMiss": ("INCIDENT", "NEAR_MISS", 3),
+        "QuasiSweepPropertyDamage": ("INCIDENT", "PROPERTY_DAMAGE", 2),
+    }
+    rejected_terms = {"QuasiSweepFireIncident": 2, "QuasiSweepSecurityBreach": 1, "QuasiSweepOthers": 1}
+
+    all_decisions = []
+    for term, (canonical, subtype, count) in approved_terms.items():
+        for i in range(count):
+            enterprise_ingestion_service.ingest_batch(
+                pg_session, organization_id=org.id,
+                payloads=[RawSafetyEventPayload(
+                    event_type=term, event_time="2026-06-06T00:00:00Z", source_system="synthetic-hse-xlsx",
+                    source_record_id=f"SWEEP-{term}-{i}",
+                )],
+                adapter=CalibratedTerminologyMappingAdapter(), source_id=None,
+            )
+        candidate = _compound_candidate(pg_session, organization_id=org.id, source_term=term, occurrence_count=count)
+        approved = _approve_compound(
+            pg_session, organization_id=org.id, candidate=candidate, canonical_event_type=canonical,
+            target_event_subtype=subtype, acting_user_id=admin.id,
+        )
+        all_decisions.append(("approved", approved))
+
+    for term, count in rejected_terms.items():
+        for i in range(count):
+            enterprise_ingestion_service.ingest_batch(
+                pg_session, organization_id=org.id,
+                payloads=[RawSafetyEventPayload(
+                    event_type=term, event_time="2026-06-06T00:00:00Z", source_system="synthetic-hse-xlsx",
+                    source_record_id=f"SWEEP-{term}-{i}",
+                )],
+                adapter=CalibratedTerminologyMappingAdapter(), source_id=None,
+            )
+        entry = TerminologyReviewEntry(
+            domain="event_type", context=None, source_term=term, proposed_canonical_term=None,
+            status=TerminologyReviewStatus.UNKNOWN, reason="No alias match.", occurrence_count=count,
+        )
+        created = svc.create_review_candidates(pg_session, organization_id=org.id, source_system="synthetic-hse-xlsx", entries=[entry])
+        proposed = svc.propose_mapping(
+            pg_session, organization_id=org.id, decision_id=created[0].id, proposed_canonical_term=None,
+            rationale="No confident classification.", acting_user_id=admin.id,
+        )
+        rejected = svc.reject_mapping(pg_session, organization_id=org.id, decision_id=proposed.id, acting_user_id=admin.id, reason="No exact canonical value exists.")
+        all_decisions.append(("rejected", rejected))
+
+    # None left pending.
+    pg_session.expire_all()
+    decisions = pg_session.query(TerminologyMappingDecision).filter(TerminologyMappingDecision.organization_id == org.id).all()
+    assert len(decisions) == len(approved_terms) + len(rejected_terms)
+    assert {d.status for d in decisions} == {"APPROVED", "REJECTED"}
+
+    quarantined_before = pg_session.query(SafetyEvent).filter(
+        SafetyEvent.organization_id == org.id, SafetyEvent.data_quality_status == "QUARANTINED"
+    ).count()
+    expected_total = sum(c for _, _, c in approved_terms.values()) + sum(rejected_terms.values())
+    assert quarantined_before == expected_total
+
+    total_reprocessed = 0
+    for kind, decision in all_decisions:
+        if kind == "approved":
+            result = reproc.reprocess_quarantined_records(pg_session, organization_id=org.id, decision_id=decision.id, acting_user_id=admin.id)
+            total_reprocessed += result.records_updated
+
+    expected_reprocessed = sum(c for _, _, c in approved_terms.values())
+    assert total_reprocessed == expected_reprocessed
+
+    pg_session.expire_all()
+    quarantined_after = pg_session.query(SafetyEvent).filter(
+        SafetyEvent.organization_id == org.id, SafetyEvent.data_quality_status == "QUARANTINED"
+    ).count()
+    expected_remaining = sum(rejected_terms.values())
+    assert quarantined_after == expected_remaining
+    assert quarantined_before - quarantined_after == expected_reprocessed
+
+    # Attempting to reprocess a REJECTED decision from this same sweep is refused.
+    rejected_decision = next(d for kind, d in all_decisions if kind == "rejected")
+    with pytest.raises(reproc.ReprocessingRequiresApprovedDecisionError):
+        reproc.reprocess_quarantined_records(pg_session, organization_id=org.id, decision_id=rejected_decision.id, acting_user_id=admin.id)

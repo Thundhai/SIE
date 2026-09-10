@@ -1,0 +1,48 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+sqlalchemy==2.0.36
+alembic==1.14.0
+psycopg[binary]==3.2.3
+pydantic==2.10.4
+pydantic-settings==2.7.0
+
+# Production authentication (see app/services/oidc_verifier.py) -- an
+# established JWT/OIDC library, not a hand-rolled cryptographic
+# implementation. The [crypto] extra pulls in `cryptography`, needed for
+# RS256/ES256-family asymmetric signature verification (the algorithms a
+# real OIDC provider's JWKS actually publishes).
+PyJWT[crypto]==2.10.1
+email-validator==2.2.0
+python-dotenv==1.0.1
+python-multipart==0.0.32
+
+# Semantic embeddings & retrieval (see app/embeddings/, app/retrieval/).
+# pgvector's SQLAlchemy integration (Vector column type) — the
+# PostgreSQL vector extension itself is enabled per-database by the
+# 0006 migration, not by this package.
+pgvector==0.5.0
+
+# Ingestion format adapters (see app/ingestion/adapters/)
+pypdf==6.16.2
+python-docx==1.2.0
+openpyxl==3.1.5
+python-pptx==1.0.2
+striprtf==0.0.33
+defusedxml==0.7.1
+Pillow==12.3.0
+
+# Testing (httpx also backs app/llm/provider.py::OpenAICompatibleLLMProvider —
+# the real-provider HTTP extension point, never invoked by the test suite)
+pytest==8.3.4
+httpx==0.28.1
+
+# Gradient Boosting comparison baseline only (see
+# app/predictions/gradient_boosting.py) — a deliberate, milestone-directed
+# exception to this project's otherwise-consistent no-heavy-ML-dependency
+# policy (every other model in app/predictions/ is hand-rolled). Not used
+# anywhere else in the codebase; the Logistic Regression baseline
+# (app/predictions/logistic_regression.py) remains hand-rolled, pure
+# Python. numpy/scipy are scikit-learn's own required dependencies.
+scikit-learn==1.9.0
+numpy==2.5.2
+scipy==1.18.1

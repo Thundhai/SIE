@@ -1,0 +1,256 @@
+{
+  "label": "Prototype / controlled-scenario calibration only \u2014 not a production benchmark.",
+  "scenarios": {
+    "A": {
+      "scenario_key": "A",
+      "scenario_name": "Stable / Low Concern",
+      "description": "Flat incident frequency, good inspection coverage, low repeat findings, ~90% training completion, low maintenance backlog across four consecutive 30-day periods.",
+      "dataset_record_count": 72,
+      "data_quality": {
+        "total_records": 72,
+        "valid_records": 72,
+        "partial_records": 0,
+        "quarantined_records": 0,
+        "rejected_records": 0,
+        "duplicate_records": 0,
+        "stale_records": 0,
+        "version_conflicts": 0,
+        "missing_timestamps": 0,
+        "invalid_classifications": 0,
+        "missing_identifiers": 0,
+        "completeness_rate": 1.0,
+        "acceptance_rate": 1.0,
+        "rejection_rate": 0.0,
+        "quarantine_rate": 0.0,
+        "duplicate_rate": 0.0,
+        "temporal_validity_rate": 1.0
+      },
+      "expected_intelligence": {
+        "near_miss_trend": "STABLE",
+        "incident_trend": "STABLE",
+        "risk_signals": "none"
+      },
+      "actual_intelligence": {
+        "near_miss_trend": "STABLE",
+        "incident_trend": "STABLE",
+        "risk_signals": "none"
+      },
+      "calibration_outcomes": {
+        "near_miss_trend_stable": "EXPECTED",
+        "incident_trend_stable": "EXPECTED",
+        "no_risk_signals": "EXPECTED"
+      },
+      "notes": []
+    },
+    "B": {
+      "scenario_key": "B",
+      "scenario_name": "Emerging Risk",
+      "description": "Sharp increase in near misses, unsafe observations, overdue training, overdue maintenance, and repeat findings in the most recent 30 days against a quiet 90-day baseline; incident frequency itself stays flat -- leading indicators only, no claimed causation.",
+      "dataset_record_count": 77,
+      "data_quality": {
+        "total_records": 77,
+        "valid_records": 77,
+        "partial_records": 0,
+        "quarantined_records": 0,
+        "rejected_records": 0,
+        "duplicate_records": 0,
+        "stale_records": 0,
+        "version_conflicts": 0,
+        "missing_timestamps": 0,
+        "invalid_classifications": 0,
+        "missing_identifiers": 0,
+        "completeness_rate": 1.0,
+        "acceptance_rate": 1.0,
+        "rejection_rate": 0.0,
+        "quarantine_rate": 0.0,
+        "duplicate_rate": 0.0,
+        "temporal_validity_rate": 1.0
+      },
+      "expected_intelligence": {
+        "near_miss_trend": "INCREASING",
+        "unsafe_observation_surge": "fires",
+        "training_compliance_drop": "fires",
+        "high_potential_event_cluster": "does not fire"
+      },
+      "actual_intelligence": {
+        "near_miss_trend": "INCREASING",
+        "risk_signals": [
+          "TRAINING_COMPLIANCE_DROP",
+          "UNSAFE_OBSERVATION_SURGE"
+        ]
+      },
+      "calibration_outcomes": {
+        "near_miss_trend_increasing": "EXPECTED",
+        "unsafe_observation_surge_fires": "EXPECTED",
+        "training_compliance_drop_fires": "EXPECTED",
+        "no_lagging_signal_from_leading_only_data": "EXPECTED"
+      },
+      "notes": [
+        "Leading-indicator deterioration only -- no claim that these factors caused an incident."
+      ]
+    },
+    "C": {
+      "scenario_key": "C",
+      "scenario_name": "Lagging Event Increase",
+      "description": "Leading indicators stay identical to a stable four-period baseline; a sudden cluster of six high-potential incidents appears only in the current 30-day window.",
+      "dataset_record_count": 65,
+      "data_quality": {
+        "total_records": 65,
+        "valid_records": 65,
+        "partial_records": 0,
+        "quarantined_records": 0,
+        "rejected_records": 0,
+        "duplicate_records": 0,
+        "stale_records": 0,
+        "version_conflicts": 0,
+        "missing_timestamps": 0,
+        "invalid_classifications": 0,
+        "missing_identifiers": 0,
+        "completeness_rate": 1.0,
+        "acceptance_rate": 1.0,
+        "rejection_rate": 0.0,
+        "quarantine_rate": 0.0,
+        "duplicate_rate": 0.0,
+        "temporal_validity_rate": 1.0
+      },
+      "expected_intelligence": {
+        "incident_trend": "INCREASING",
+        "near_miss_trend": "STABLE",
+        "high_potential_event_cluster": "fires",
+        "anomaly": "ANOMALOUS"
+      },
+      "actual_intelligence": {
+        "incident_trend": "INCREASING",
+        "near_miss_trend": "STABLE",
+        "risk_signals": [
+          "HIGH_POTENTIAL_EVENT_CLUSTER"
+        ],
+        "anomaly_status": "ANOMALOUS",
+        "anomaly_baseline_counts": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "anomaly_current_count": 6
+      },
+      "calibration_outcomes": {
+        "incident_trend_increasing": "EXPECTED",
+        "near_miss_trend_stable": "EXPECTED",
+        "high_potential_event_cluster_fires": "EXPECTED",
+        "anomaly_detected_where_statistically_justified": "EXPECTED"
+      },
+      "notes": []
+    },
+    "D": {
+      "scenario_key": "D",
+      "scenario_name": "Data Quality Degradation",
+      "description": "Missing event dates, an invalid severity classification, an exact-duplicate resend, a same-version content conflict, and records missing their identifier, deliberately mixed with genuinely valid records.",
+      "dataset_record_count": 16,
+      "data_quality": {
+        "total_records": 16,
+        "valid_records": 10,
+        "partial_records": 2,
+        "quarantined_records": 2,
+        "rejected_records": 2,
+        "duplicate_records": 1,
+        "stale_records": 0,
+        "version_conflicts": 1,
+        "missing_timestamps": 2,
+        "invalid_classifications": 2,
+        "missing_identifiers": 2,
+        "completeness_rate": 0.75,
+        "acceptance_rate": 0.625,
+        "rejection_rate": 0.125,
+        "quarantine_rate": 0.125,
+        "duplicate_rate": 0.0625,
+        "temporal_validity_rate": 0.875
+      },
+      "expected_intelligence": {
+        "quarantined_records": "> 0",
+        "rejected_records": "> 0",
+        "duplicate_records": "> 0",
+        "version_conflicts": "> 0",
+        "analytics_event_count": "== accepted (VALID+PARTIAL) records only"
+      },
+      "actual_intelligence": {
+        "quarantined_records": 2,
+        "rejected_records": 2,
+        "duplicate_records": 1,
+        "version_conflicts": 1,
+        "analytics_event_count": 10
+      },
+      "calibration_outcomes": {
+        "quality_degradation_reflected_in_metrics": "EXPECTED",
+        "quarantined_records_excluded_from_analytics": "EXPECTED",
+        "version_conflict_detected_not_silently_applied": "EXPECTED"
+      },
+      "notes": [
+        "Schema validity only -- never presented as factual correctness of the underlying record."
+      ]
+    },
+    "E": {
+      "scenario_key": "E",
+      "scenario_name": "Recovery",
+      "description": "An elevated period 60-90 days ago (frequent near misses, overdue training, high maintenance backlog, repeat findings) improving through a transitional period into a recovered most-recent 30 days.",
+      "dataset_record_count": 53,
+      "data_quality": {
+        "total_records": 53,
+        "valid_records": 53,
+        "partial_records": 0,
+        "quarantined_records": 0,
+        "rejected_records": 0,
+        "duplicate_records": 0,
+        "stale_records": 0,
+        "version_conflicts": 0,
+        "missing_timestamps": 0,
+        "invalid_classifications": 0,
+        "missing_identifiers": 0,
+        "completeness_rate": 1.0,
+        "acceptance_rate": 1.0,
+        "rejection_rate": 0.0,
+        "quarantine_rate": 0.0,
+        "duplicate_rate": 0.0,
+        "temporal_validity_rate": 1.0
+      },
+      "expected_intelligence": {
+        "near_miss_trend": "DECREASING",
+        "training_completion_rate": ">= 0.8",
+        "training_compliance_drop": "does not fire"
+      },
+      "actual_intelligence": {
+        "near_miss_trend": "DECREASING",
+        "training_completion_rate": 0.8889,
+        "risk_signals": "none"
+      },
+      "calibration_outcomes": {
+        "near_miss_trend_decreasing": "EXPECTED",
+        "training_completion_recovered": "EXPECTED",
+        "no_training_compliance_drop_in_recovered_window": "EXPECTED"
+      },
+      "notes": [
+        "Indicators moving in the improving direction is not, by itself, proof of actual safety improvement -- see this module's own docstring and the milestone's own caution."
+      ]
+    }
+  },
+  "provenance": {
+    "checked_count": 72,
+    "all_chains_intact": true,
+    "failures": []
+  },
+  "predictive_readiness": {
+    "examples_built": 3,
+    "reproducible": true,
+    "no_future_leakage": true,
+    "tenant_isolated": true,
+    "missing_data_handled": true,
+    "notes": []
+  },
+  "tenant_isolation": {
+    "org_a_events_visible_to_org_b": 0,
+    "org_b_events_visible_to_org_a": 0,
+    "quality_metrics_isolated": true,
+    "predictive_dataset_isolated": true
+  },
+  "generated_at": "2026-09-02T07:33:49.496424+00:00"
+}

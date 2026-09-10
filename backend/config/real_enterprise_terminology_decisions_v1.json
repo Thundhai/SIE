@@ -1,0 +1,188 @@
+{
+  "artifact_version": 1,
+  "artifact_id": "real_enterprise_terminology_decisions_v1",
+  "description": "Durable, version-controlled, PII-free representation of the 18 governed HSE terminology decisions made during human review of the real enterprise dataset's own event_type/event_subtype terms (Real Enterprise Terminology Calibration v0.1 / Implement Approved HSE Terminology Decisions v0.1). Contains no real enterprise record IDs, workbook content, names, narratives, emails, or phone numbers -- only terminology terms (already public in docs/REAL_ENTERPRISE_DATASET_EVALUATION_REPORT.md), their occurrence counts, and the governed decision each one received. Decision UUIDs are NOT recorded here -- they are generated fresh by TerminologyMappingDecision each time this artifact is applied (see app/services/terminology_decision_artifact_service.py); this file carries only the stable scope key (source_system, domain, context, source_term) and the decided outcome, never a database identifier.",
+  "source_system": "alm-hse-xlsx",
+  "decisions": [
+    {
+      "source_term": "NearMiss",
+      "domain": "event_type",
+      "context": null,
+      "occurrence_count": 6,
+      "decision": "APPROVED",
+      "canonical_event_type": "INCIDENT",
+      "target_event_subtype": "NEAR_MISS",
+      "rationale": "This organization's incident register files near-misses as an Incident-type record; SIE's own pre-existing NEAR_MISS SafetyEventType value is reused as the compound subtype target, never invented."
+    },
+    {
+      "source_term": "PropertyDamage",
+      "domain": "event_type",
+      "context": null,
+      "occurrence_count": 5,
+      "decision": "APPROVED",
+      "canonical_event_type": "INCIDENT",
+      "target_event_subtype": "PROPERTY_DAMAGE",
+      "rationale": "Matches the existing INCIDENT/PROPERTY_DAMAGE subtype vocabulary exactly."
+    },
+    {
+      "source_term": "VehicleAccident",
+      "domain": "event_type",
+      "context": null,
+      "occurrence_count": 2,
+      "decision": "APPROVED",
+      "canonical_event_type": "INCIDENT",
+      "target_event_subtype": "VEHICLE_INCIDENT",
+      "rationale": "Matches the existing INCIDENT/VEHICLE_INCIDENT subtype vocabulary exactly."
+    },
+    {
+      "source_term": "FireIncident",
+      "domain": "event_type",
+      "context": null,
+      "occurrence_count": 4,
+      "decision": "REJECTED",
+      "canonical_event_type": null,
+      "target_event_subtype": null,
+      "rationale": "No validated SIE canonical value exists for this term; approving would require inventing FIRE_INCIDENT, which this milestone explicitly forbids."
+    },
+    {
+      "source_term": "Others",
+      "domain": "event_type",
+      "context": null,
+      "occurrence_count": 3,
+      "decision": "REJECTED",
+      "canonical_event_type": null,
+      "target_event_subtype": null,
+      "rationale": "A catch-all term with no single, semantically exact canonical classification; approving would require guessing."
+    },
+    {
+      "source_term": "SecurityBreach",
+      "domain": "event_type",
+      "context": null,
+      "occurrence_count": 2,
+      "decision": "REJECTED",
+      "canonical_event_type": null,
+      "target_event_subtype": null,
+      "rationale": "No validated SIE canonical value exists (would require inventing SECURITY_BREACH)."
+    },
+    {
+      "source_term": "HazardObservation",
+      "domain": "event_type",
+      "context": null,
+      "occurrence_count": 1,
+      "decision": "REJECTED",
+      "canonical_event_type": null,
+      "target_event_subtype": null,
+      "rationale": "No validated SIE canonical value exists (would require inventing HAZARD_OBSERVATION); also not the same concept as the existing OBSERVATION event_type."
+    },
+    {
+      "source_term": "Working At Height",
+      "domain": "event_subtype",
+      "context": "OBSERVATION",
+      "occurrence_count": 128,
+      "decision": "REJECTED",
+      "canonical_event_type": null,
+      "target_event_subtype": null,
+      "rationale": "The existing WORK_AT_HEIGHT value belongs to the PERMIT domain's own subtype vocabulary, a different context; reusing it for OBSERVATION would substitute a different domain for an approximate match, which this milestone explicitly forbids."
+    },
+    {
+      "source_term": "PPE Compliance",
+      "domain": "event_subtype",
+      "context": "OBSERVATION",
+      "occurrence_count": 117,
+      "decision": "REJECTED",
+      "canonical_event_type": null,
+      "target_event_subtype": null,
+      "rationale": "PPE_ISSUE is not an exact semantic equivalent. PPE Compliance is a broader observation topic/category (spanning both compliant and non-compliant observations), while PPE_ISSUE denotes a specific negative finding. Approving PPE_ISSUE here would silently substitute an approximate category for an exact one. Therefore it remains rejected and quarantined. Ontology limitation: SIE's Observation subtype vocabulary has no dedicated 'PPE compliance topic/category' value distinct from 'PPE issue'."
+    },
+    {
+      "source_term": "Electrical Safety",
+      "domain": "event_subtype",
+      "context": "OBSERVATION",
+      "occurrence_count": 47,
+      "decision": "REJECTED",
+      "canonical_event_type": null,
+      "target_event_subtype": null,
+      "rationale": "No validated SIE canonical Observation subtype value exists (would require inventing ELECTRICAL_SAFETY)."
+    },
+    {
+      "source_term": "Environmental",
+      "domain": "event_subtype",
+      "context": "OBSERVATION",
+      "occurrence_count": 32,
+      "decision": "REJECTED",
+      "canonical_event_type": null,
+      "target_event_subtype": null,
+      "rationale": "No validated SIE canonical Observation subtype value exists (would require inventing ENVIRONMENTAL as an Observation subtype)."
+    },
+    {
+      "source_term": "Lifting Operations",
+      "domain": "event_subtype",
+      "context": "OBSERVATION",
+      "occurrence_count": 31,
+      "decision": "REJECTED",
+      "canonical_event_type": null,
+      "target_event_subtype": null,
+      "rationale": "The existing LIFTING_OPERATION value belongs to the PERMIT domain's own subtype vocabulary, a different context; reusing it for OBSERVATION would substitute a different domain for an approximate match."
+    },
+    {
+      "source_term": "Procedure Violation",
+      "domain": "event_subtype",
+      "context": "OBSERVATION",
+      "occurrence_count": 29,
+      "decision": "REJECTED",
+      "canonical_event_type": null,
+      "target_event_subtype": null,
+      "rationale": "No validated SIE canonical Observation subtype value exists (would require inventing PROCEDURE_VIOLATION)."
+    },
+    {
+      "source_term": "Equipment Safety",
+      "domain": "event_subtype",
+      "context": "OBSERVATION",
+      "occurrence_count": 13,
+      "decision": "REJECTED",
+      "canonical_event_type": null,
+      "target_event_subtype": null,
+      "rationale": "No validated SIE canonical Observation subtype value exists (would require inventing EQUIPMENT_SAFETY)."
+    },
+    {
+      "source_term": "Others",
+      "domain": "event_subtype",
+      "context": "OBSERVATION",
+      "occurrence_count": 13,
+      "decision": "REJECTED",
+      "canonical_event_type": null,
+      "target_event_subtype": null,
+      "rationale": "A catch-all term with no single, semantically exact canonical classification; approving would require guessing. Independently scoped from the event_type-domain 'Others' term above -- never collapsed into one global decision."
+    },
+    {
+      "source_term": "Documentation",
+      "domain": "event_subtype",
+      "context": "OBSERVATION",
+      "occurrence_count": 11,
+      "decision": "REJECTED",
+      "canonical_event_type": null,
+      "target_event_subtype": null,
+      "rationale": "No validated SIE canonical Observation subtype value exists for this term."
+    },
+    {
+      "source_term": "Fire Safety",
+      "domain": "event_subtype",
+      "context": "OBSERVATION",
+      "occurrence_count": 4,
+      "decision": "REJECTED",
+      "canonical_event_type": null,
+      "target_event_subtype": null,
+      "rationale": "No validated SIE canonical Observation subtype value exists (would require inventing FIRE_SAFETY)."
+    },
+    {
+      "source_term": "Emergency Preparedness",
+      "domain": "event_subtype",
+      "context": "OBSERVATION",
+      "occurrence_count": 2,
+      "decision": "REJECTED",
+      "canonical_event_type": null,
+      "target_event_subtype": null,
+      "rationale": "No validated SIE canonical Observation subtype value exists (would require inventing EMERGENCY_PREPAREDNESS)."
+    }
+  ]
+}

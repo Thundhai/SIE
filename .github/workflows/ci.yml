@@ -1,0 +1,169 @@
+name: CI
+
+# SIE Milestone 19: Continuous Integration & Quality Gate Foundation v0.1.
+# CI infrastructure only — this workflow runs the repository's existing
+# checks for real, it does not add, change, or skip any of them. See
+# docs/CI.md for what each job checks and what a green build does (and
+# does not) mean.
+
+on:
+  push:
+    branches:
+      - main
+      - "claude/**"
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend (PostgreSQL 16 + pgvector)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      # Matches the postgres service container below exactly, and mirrors
+      # backend/docker-compose.yml's own local-dev defaults — ephemeral,
+      # CI-only credentials, never a real environment's. app/core/config.py
+      # reads these (POSTGRES_*) to build the app's own DB connection;
+      # PG_TEST_DATABASE_URL is read directly by tests/postgres_support.py
+      # for the *separate* database the pgvector-marked integration tests
+      # use, so application data and test data are never the same database
+      # (see that module's own docstring).
+      POSTGRES_USER: sie
+      POSTGRES_PASSWORD: sie
+      POSTGRES_DB: sie
+      POSTGRES_HOST: localhost
+      POSTGRES_PORT: "5432"
+      PG_TEST_DATABASE_URL: postgresql+psycopg://sie:sie@localhost:5432/sie_test
+    services:
+      postgres:
+        # pgvector/pgvector:pg16 — upstream PostgreSQL 16 with the pgvector
+        # extension available to enable (not a fork), the same image
+        # backend/docker-compose.yml uses for local development. The
+        # extension is enabled per-database below, not by the image alone.
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: sie
+          POSTGRES_PASSWORD: sie
+          POSTGRES_DB: sie
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U sie -d sie"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: pip install -r requirements.txt
+
+      - name: Provision the test database and verify pgvector is available
+        # `sie` (the application database) is created by the service
+        # container itself via POSTGRES_DB above; `sie_test` (the
+        # pytest-only database tests/postgres_support.py's pg_session
+        # fixture uses) is not, so it's created here. The pgvector
+        # extension is then explicitly enabled and its presence verified
+        # on both databases *before* anything that depends on it runs —
+        # a real assertion, not an assumption: this step fails the job
+        # if the extension genuinely isn't available.
+        shell: python
+        run: |
+          import psycopg
+
+          conn = psycopg.connect(
+              "postgresql://sie:sie@localhost:5432/postgres", autocommit=True
+          )
+          try:
+              conn.execute("CREATE DATABASE sie_test")
+              print("Created database sie_test.")
+          except psycopg.errors.DuplicateDatabase:
+              print("Database sie_test already exists.")
+          conn.close()
+
+          for database in ("sie", "sie_test"):
+              conn = psycopg.connect(
+                  f"postgresql://sie:sie@localhost:5432/{database}", autocommit=True
+              )
+              conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+              row = conn.execute(
+                  "SELECT extname, extversion FROM pg_extension WHERE extname = 'vector'"
+              ).fetchone()
+              conn.close()
+              assert row is not None, f"pgvector extension is not available on database {database!r}."
+              print(f"{database}: pgvector extension {row[0]} {row[1]} is available.")
+
+      - name: Apply migrations to the fresh database (alembic upgrade head)
+        # Proves a genuinely fresh database migrates cleanly end to end —
+        # the same property backend/docker-compose.yml's own startup
+        # command depends on. This step fails the job if any migration
+        # cannot be applied.
+        run: alembic upgrade head
+
+      - name: Run the backend test suite (python -m pytest -q)
+        # Runs unconditionally against SQLite (most tests) and the real
+        # postgres/pgvector service above (tests marked @pytest.mark.postgres
+        # — see tests/postgres_support.py) in the same run. No marker is
+        # excluded and no failure here is treated as non-fatal.
+        run: python -m pytest -q
+
+      - name: Verify migration state is clean (alembic check)
+        # See docs/CI.md's "Known limitation" note: this repository has a
+        # pre-existing, long-documented drift between one raw index
+        # migration 0006 creates and app/models/embedding.py's own
+        # metadata (called out explicitly in migrations 0007 through 0015's
+        # own docstrings, predating this CI milestone). This step is not
+        # suppressed or made non-fatal for that reason — alembic check
+        # runs for real and this job fails if it reports anything, exactly
+        # as it does today. Fixing it would mean editing a database model,
+        # which SIE Milestone 19 (CI infrastructure only) is explicitly
+        # not scoped to do.
+        run: alembic check
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      # This repository's own lockfile is bun.lock (no package-lock.json/
+      # yarn.lock/pnpm-lock.yaml exists) — Bun is the project's actual,
+      # already-established package manager, so this job uses `bun`
+      # rather than inventing an `npm`-based install this repository
+      # doesn't otherwise use. The scripts themselves (test/lint/build)
+      # are untouched — see package.json; `bun run <script>` executes the
+      # exact same command `npm run <script>` would.
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install frontend dependencies (bun install)
+        run: bun install --frozen-lockfile
+
+      - name: Run the frontend test suite (bun run test)
+        run: bun run test
+
+      - name: Type check (bun run lint)
+        # `lint` is exactly what package.json already defines it to be
+        # (`tsc --noEmit`) — this workflow does not redefine it.
+        run: bun run lint
+
+      - name: Production build (bun run build)
+        run: bun run build

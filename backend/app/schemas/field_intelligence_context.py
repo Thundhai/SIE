@@ -1,0 +1,193 @@
+"""HTTP response shapes for `GET /api/v1/intelligence/context` — SIE
+Milestone 32: Field Intelligence Context Composition v0.1. Mirrors
+`app/intelligence/context_composition.py`'s own dataclasses field-for-
+field, the same internal-domain-object/API-schema split
+`app/schemas/enterprise_intelligence.py` already establishes for
+`compute_enterprise_intelligence()`.
+
+Four top-level sections — `observed`, `deterministic`, `predictive`,
+`knowledge` — never merged into one flattened shape (see
+`context_composition.py`'s own docstring, restating
+`SIE_FIELD_INTELLIGENCE_CONTEXT_V0_1.md` §7's "never merged into one
+undifferentiated feed" rule). `deterministic` reuses
+`EnterpriseIntelligenceRead` verbatim (via composition, not
+inheritance) rather than redefining indicators/trend/anomaly/etc. a
+second time.
+
+**`operational_scope` (SIE Milestone 35, corrected by SIE Milestone
+35A: Canonical Project Attribution Correction).** Set only when the
+caller supplies `project_id` on `GET .../context` or
+`GET .../sites/{site_id}/context` (`app/api/v1/intelligence.py`); `None`
+otherwise, so every pre-M35 caller's response is byte-for-byte
+unchanged. `level` always states exactly what `deterministic`/
+`observed`/`predictive` were actually computed *over* (the geographic/
+tenant scope) — `"ORGANIZATION"` or `"SITE"`, the same `scope` this
+endpoint already accepts — never `"PROJECT"`: geographic scope and
+project filtering are two independent, orthogonal dimensions (see
+`OperationalScopeProjectRead.filtered`'s own field docstring below for
+exactly which parts of the response are, and are not, genuinely
+filtered to this project's explicitly-attributed `SafetyEvent` rows —
+never merely site co-location; M35's own first cut conflated the two,
+which is exactly what M35A corrects — see
+`docs/OPERATIONAL_SCOPE_FOUNDATION_V0_1.md`'s "Project attribution"
+section for the full history). `project.site_ids` is point-in-time
+correct as of SIE Milestone 36: when the caller explicitly supplies
+`as_of`, `site_ids` (and the `400` site-consistency check on
+`GET .../sites/{site_id}/context`) are reconstructed from
+`ProjectSiteHistory` and genuinely reflect that historical instant, not
+today's `project_sites` row (see
+`app/models/project_site_history.py`'s own docstring); when `as_of` is
+omitted (the live case), `site_ids` remains the fast, current-state
+`project_sites` lookup, unchanged from SIE Milestone 35 — see
+`docs/OPERATIONAL_SCOPE_FOUNDATION_V0_1.md` §11 for the full account.
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime
+
+from pydantic import BaseModel, Field
+
+from app.schemas.enterprise_intelligence import (
+    ActionsContextRead,
+    EnterpriseIntelligenceRead,
+    PredictiveContextRead,
+)
+from app.schemas.memory_integration import IntegratedMemoryRead
+from app.schemas.retrieval import RetrievalResultRead
+
+
+class ObservedFindingRead(BaseModel):
+    finding_id: uuid.UUID
+    title: str
+    status: str
+    risk_area_label: str
+    inherent_risk_classification: str | None
+    residual_risk_classification: str | None
+    assessment_id: uuid.UUID
+    site_id: uuid.UUID | None
+    created_at: datetime
+
+
+class ObservedActionRead(BaseModel):
+    action_id: uuid.UUID
+    title: str
+    status: str
+    priority: str
+    due_date: datetime | None
+    site_id: uuid.UUID | None
+
+
+class ObservedFactRead(BaseModel):
+    outcome: str = "OK | UNAVAILABLE"
+    unavailable_reason: str | None
+    event_count: int
+    evidence_sample_event_ids: list[uuid.UUID]
+    open_finding_count: int
+    open_finding_sample: list[ObservedFindingRead]
+    open_finding_control_count: int
+    actions: ActionsContextRead | None
+    open_action_sample: list[ObservedActionRead]
+
+
+class PredictiveSignalRead(BaseModel):
+    outcome: str = "AVAILABLE | NOT_AVAILABLE | EXCLUDED_GENERATED_AFTER_AS_OF"
+    value: PredictiveContextRead | None
+
+
+class KnowledgeEvidenceRead(BaseModel):
+    outcome: str = "RESULTS | NO_RELEVANT_EVIDENCE | NOT_QUERIED | UNAVAILABLE"
+    unavailable_reason: str | None
+    query: str | None
+    results: list[RetrievalResultRead]
+    result_count: int
+
+
+class OrganizationalMemoryContextRead(BaseModel):
+    """SIE Milestone 41A: a fifth, independent, explicitly-labeled
+    category alongside `observed`/`deterministic`/`predictive`/
+    `knowledge` above -- never merged into any of them. `items` reuses
+    `IntegratedMemoryRead` verbatim from SIE Milestone 41's own schema
+    module (`app/schemas/memory_integration.py`) -- the identical shape
+    `GET /intelligence/memory-context` already returns, never a second,
+    parallel definition of the same data."""
+
+    outcome: str = "OK | UNAVAILABLE"
+    unavailable_reason: str | None
+    items: list[IntegratedMemoryRead]
+    calculation_version: str
+
+
+class OperationalScopeSiteRead(BaseModel):
+    id: uuid.UUID
+    name: str
+
+
+class OperationalScopeProjectRead(BaseModel):
+    id: uuid.UUID
+    name: str
+    code: str | None
+    status: str
+    site_ids: list[uuid.UUID] = Field(
+        default_factory=list,
+        description=(
+            "SIE Milestone 36: the project's associated site ids AS OF this response's own `as_of` when the "
+            "caller explicitly supplied one -- reconstructed from ProjectSiteHistory, never today's project_sites "
+            "row. When `as_of` was omitted (the live case), this is the current project_sites lookup, unchanged "
+            "from SIE Milestone 35. See this module's own docstring."
+        ),
+    )
+    filtered: bool = Field(
+        True,
+        description=(
+            "SIE Milestone 35A, made point-in-time correct by SIE Milestone 35B. Always true when this field "
+            "is present: observed.event_count/evidence_sample_event_ids and deterministic.indicators/trend/"
+            "concentrations/patterns/risk are genuinely computed only from SafetyEvent rows attributed to this "
+            "project AS OF this response's own `as_of` -- reconstructed from the append-only "
+            "SafetyEventProjectAttributionHistory log, never merely the current-state "
+            "SafetyEvent.attributed_project_id column and never merely site co-location, so a historical `as_of` "
+            "correctly reflects what this project's attribution genuinely was at that instant even across a "
+            "later re-attribution or clear. deterministic.anomalies/associations, predictive, "
+            "observed.actions/open_action_sample, and observed.open_finding_sample are NOT filtered by project "
+            "(SafetyAction/RiskAssessmentFinding carry no project attribution, and Prediction has no project "
+            "dimension at all) and continue to reflect the full site/organization population -- see "
+            "docs/OPERATIONAL_SCOPE_FOUNDATION_V0_1.md's 'Project attribution' section for the complete list."
+        ),
+    )
+
+
+class OperationalScopeRead(BaseModel):
+    level: str = "ORGANIZATION | SITE -- what deterministic/observed/predictive were actually computed over"
+    site: OperationalScopeSiteRead | None = None
+    project: OperationalScopeProjectRead | None = None
+
+
+class FieldIntelligenceContextRead(BaseModel):
+    scope: str
+    organization_id: uuid.UUID
+    entity_id: uuid.UUID | None
+    as_of: datetime
+    window_days: int
+    generated_at: datetime
+    observed: ObservedFactRead
+    deterministic: EnterpriseIntelligenceRead
+    predictive: PredictiveSignalRead
+    knowledge: KnowledgeEvidenceRead
+    organizational_memory: OrganizationalMemoryContextRead
+    calculation_versions: dict[str, str]
+    operational_scope: OperationalScopeRead | None = None
+
+
+__all__ = [
+    "ObservedFindingRead",
+    "ObservedActionRead",
+    "ObservedFactRead",
+    "PredictiveSignalRead",
+    "KnowledgeEvidenceRead",
+    "OrganizationalMemoryContextRead",
+    "OperationalScopeSiteRead",
+    "OperationalScopeProjectRead",
+    "OperationalScopeRead",
+    "FieldIntelligenceContextRead",
+]

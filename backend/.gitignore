@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+*.db
+*.sqlite3
+
+# Local filesystem StorageProvider root (app/ingestion/storage.py) —
+# uploaded file bytes, never committed.
+/var/

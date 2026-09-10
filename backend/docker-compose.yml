@@ -1,0 +1,56 @@
+services:
+  db:
+    # pgvector/pgvector:pg16 is upstream PostgreSQL 16 with the pgvector
+    # extension pre-installed (not a fork) — a drop-in replacement for
+    # postgres:16-alpine. The extension itself is still only *enabled*
+    # per-database by migration 0006 (`CREATE EXTENSION IF NOT EXISTS
+    # vector`); this image just makes that extension available to enable.
+    # See the README's "Semantic Knowledge Architecture" section.
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-sie}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sie}
+      POSTGRES_DB: ${POSTGRES_DB:-sie}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - sie_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sie} -d ${POSTGRES_DB:-sie}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      DEBUG: ${DEBUG:-false}
+      # Default on for local docker-compose use only — see the README's
+      # "Identity architecture" section. Never set true in production.
+      DEV_MODE: ${DEV_MODE:-true}
+      POSTGRES_USER: ${POSTGRES_USER:-sie}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sie}
+      POSTGRES_DB: ${POSTGRES_DB:-sie}
+      POSTGRES_HOST: db
+      POSTGRES_PORT: 5432
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+    # `alembic upgrade head` from a genuinely fresh database is verified
+    # to succeed end to end (0001 -> 0006) with no manual intervention —
+    # see the README's "Known gaps / next phase" section for the
+    # migration-0005 enum-type-creation defect this fixed, and
+    # tests/test_migrations.py for the regression test that guards it.
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+
+volumes:
+  sie_postgres_data:
