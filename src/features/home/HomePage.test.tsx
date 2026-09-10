@@ -1,4 +1,5 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../../services/api/errors';
@@ -14,10 +15,30 @@ vi.mock('../../services/api/intelligence', () => ({
 vi.mock('../../services/api/events', () => ({
   listEvents: vi.fn(),
 }));
+vi.mock('../../services/api/attention', () => ({
+  getAttention: vi.fn(),
+}));
+vi.mock('../../services/api/decisions', () => ({
+  listDecisions: vi.fn(),
+  createDecision: vi.fn(),
+}));
+vi.mock('../../services/api/memoryIntegration', () => ({
+  getMemoryContext: vi.fn(),
+  getSiteMemoryContext: vi.fn(),
+}));
+vi.mock('../actions/useActionRepository', () => ({
+  useActionRepository: () => ({
+    list: vi.fn().mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 50 }),
+    isFixtureBacked: false,
+  }),
+}));
 
 import { getAnalyticsSummary } from '../../services/api/analytics';
+import { getAttention, type AttentionItem } from '../../services/api/attention';
+import { createDecision, listDecisions, type IntelligenceDecision } from '../../services/api/decisions';
 import { listEvents } from '../../services/api/events';
 import { getEnterpriseIntelligence } from '../../services/api/intelligence';
+import { getMemoryContext } from '../../services/api/memoryIntegration';
 
 const ORGANIZATION = { id: 'org-1', name: 'Acme' };
 
@@ -94,10 +115,44 @@ const ONE_EVENT = {
   data_quality_status: 'VALID',
 };
 
+const ATTENTION_ITEM: AttentionItem = {
+  category: 'SIGNIFICANT_ANOMALY',
+  priority: 'HIGH',
+  title: 'Vehicle incidents above baseline',
+  explanation: 'Vehicle incidents this period are above the recent baseline.',
+  scope: 'organization',
+  site_id: null,
+  site_label: null,
+  as_of: '2026-06-01T00:00:00Z',
+  window_days: 90,
+  evidence: { source: 'enterprise_anomaly', calculation_version: 'v1', entity_ids: [], event_ids: ['evt-1'] },
+  limitation: null,
+  reference: 'ref-anomaly-vehicle-incidents',
+};
+
+const ATTENTION_SUCCESS = {
+  scope: 'organization',
+  organization_id: 'org-1',
+  entity_id: null,
+  as_of: '2026-06-01T00:00:00Z',
+  window_days: 90,
+  generated_at: '2026-06-01T00:05:00Z',
+  items: [ATTENTION_ITEM],
+  category_statuses: [],
+  calculation_versions: {},
+};
+
 describe('HomePage', () => {
   beforeEach(() => {
     vi.mocked(getAnalyticsSummary).mockResolvedValue(ANALYTICS_SUMMARY);
     vi.mocked(listEvents).mockResolvedValue({ items: [ONE_EVENT], total: 1, page: 1, page_size: 5 });
+    vi.mocked(getAttention).mockResolvedValue(ATTENTION_SUCCESS);
+    vi.mocked(listDecisions).mockResolvedValue({ items: [], total: 0, page: 1, page_size: 100 });
+    vi.mocked(getMemoryContext).mockResolvedValue({
+      scope: 'organization', organization_id: 'org-1', entity_id: null, project_id: null,
+      as_of: '2026-06-01T00:00:00Z', generated_at: '2026-06-01T00:00:00Z', items: [], total: 0, page: 1, page_size: 25,
+      calculation_version: 'v1',
+    });
   });
 
   it('renders the Home heading', () => {
@@ -117,7 +172,7 @@ describe('HomePage', () => {
     expect(screen.getByText('No organization context available')).toBeInTheDocument();
   });
 
-  it('handles the enterprise intelligence API success: renders risk score, "what is changing", and "needs attention"', async () => {
+  it('handles the enterprise intelligence API success: renders risk score, "what is changing", and ranked attention', async () => {
     vi.mocked(getEnterpriseIntelligence).mockResolvedValue(INTELLIGENCE_SUCCESS);
     renderHome();
 
@@ -125,9 +180,38 @@ describe('HomePage', () => {
     expect(screen.getByText('Moderate')).toBeInTheDocument();
     expect(screen.getByText('Vehicle incidents')).toBeInTheDocument();
     expect(screen.getByText('Above baseline')).toBeInTheDocument();
-    expect(screen.getByText('Open actions')).toBeInTheDocument();
-    expect(screen.getByText('4')).toBeInTheDocument();
-    expect(screen.getByText('High-priority actions')).toBeInTheDocument();
+    // The ranked attention list (SIE Milestone 33/42) — replaces the old
+    // flat "Open actions"/"High-priority actions" counts as the primary
+    // prioritization mechanism.
+    expect(screen.getByText('Vehicle incidents above baseline')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Review' })).toBeInTheDocument();
+  });
+
+  it('opens the review drawer from Home and records a decision', async () => {
+    vi.mocked(getEnterpriseIntelligence).mockResolvedValue(INTELLIGENCE_SUCCESS);
+    const decisionRecord: IntelligenceDecision = {
+      id: 'dec-1', organization_id: 'org-1', site_id: null, site_label: null, scope: 'organization',
+      attention_reference: ATTENTION_ITEM.reference, attention_category: ATTENTION_ITEM.category,
+      attention_priority: ATTENTION_ITEM.priority, attention_title: ATTENTION_ITEM.title,
+      attention_explanation: ATTENTION_ITEM.explanation, intelligence_as_of: ATTENTION_ITEM.as_of,
+      intelligence_window_days: ATTENTION_ITEM.window_days, calculation_version: 'v1',
+      evidence_source: 'enterprise_anomaly', evidence_entity_ids: [], evidence_event_ids: ['evt-1'],
+      decision: 'ACT', rationale: 'Raising a corrective action.', linked_action_id: null, linked_action: null,
+      decided_by_user_id: 'user-1', decided_by_api_client_id: null, decided_at: '2026-06-01T01:00:00Z',
+      created_at: '2026-06-01T01:00:00Z', updated_at: '2026-06-01T01:00:00Z',
+    };
+    vi.mocked(createDecision).mockResolvedValue(decisionRecord);
+    renderHome();
+
+    await waitFor(() => expect(screen.getByText('Vehicle incidents above baseline')).toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: 'Review' }));
+    const dialog = await screen.findByRole('dialog');
+
+    await userEvent.selectOptions(within(dialog).getByLabelText('Decision'), 'ACT');
+    await userEvent.type(within(dialog).getByLabelText('Rationale'), 'Raising a corrective action.');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Record decision' }));
+
+    await waitFor(() => expect(createDecision).toHaveBeenCalled());
   });
 
   it('handles the enterprise intelligence API failure without blanking the rest of the page', async () => {
