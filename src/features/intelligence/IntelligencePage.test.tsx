@@ -221,7 +221,11 @@ describe('IntelligencePage', () => {
 
     expect(screen.getAllByRole('status')[0]).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText('Vehicle incidents above baseline')).toBeInTheDocument());
-    expect(screen.getByText('61.2')).toBeInTheDocument();
+    // The deterministic risk score renders both in the "Current operational
+    // state" orientation section and in the Intelligence Context section's
+    // own Deterministic panel — both real, independently-rendered readings
+    // of the same field, not a duplicate-rendering bug.
+    expect(screen.getAllByText('61.2').length).toBeGreaterThan(0);
   });
 
   it('shows an honest empty state when there are no attention items', async () => {
@@ -238,8 +242,9 @@ describe('IntelligencePage', () => {
     renderPage();
 
     await waitFor(() => expect(screen.getByText('Could not reach the SIE API.')).toBeInTheDocument());
-    // Intelligence context still renders.
-    await waitFor(() => expect(screen.getByText('61.2')).toBeInTheDocument());
+    // Intelligence context still renders (both the orientation section and
+    // the Deterministic panel read the same successfully-loaded context).
+    await waitFor(() => expect(screen.getAllByText('61.2').length).toBeGreaterThan(0));
   });
 
   it('shows an error state for intelligence context without blanking attention (independent lanes)', async () => {
@@ -248,7 +253,9 @@ describe('IntelligencePage', () => {
     renderPage();
 
     await waitFor(() => expect(screen.getByText('Vehicle incidents above baseline')).toBeInTheDocument());
-    expect(screen.getByText('Could not reach the SIE API.')).toBeInTheDocument();
+    // Both the orientation section and the Intelligence Context section read
+    // the same failed contextState and independently render an error.
+    expect(screen.getAllByText('Could not reach the SIE API.').length).toBeGreaterThan(0);
   });
 
   // --- 2. Attention: items load, order preserved, human-readable fields, reference preserved ----
@@ -449,8 +456,8 @@ describe('IntelligencePage', () => {
     renderPage();
 
     await waitFor(() => expect(screen.getByText('Observed data is unavailable: Database timeout.')).toBeInTheDocument());
-    // Deterministic still renders.
-    expect(screen.getByText('61.2')).toBeInTheDocument();
+    // Deterministic still renders (orientation section + Deterministic panel).
+    expect(screen.getAllByText('61.2').length).toBeGreaterThan(0);
   });
 
   // --- 5. Context: organization/site scope --------------------------------------------------------
@@ -468,6 +475,118 @@ describe('IntelligencePage', () => {
 
     await waitFor(() => expect(getSiteAttention).toHaveBeenCalledWith(expect.objectContaining({ organizationId: 'org-1', siteId: 'site-1' }), expect.anything()));
     expect(getSiteFieldIntelligenceContext).toHaveBeenCalledWith(expect.objectContaining({ organizationId: 'org-1', siteId: 'site-1' }), expect.anything());
+  });
+
+  // --- 6. Current operational state (M42 correction §9) ------------------------------------------
+
+  it('renders "Current operational state" before "Attention"', async () => {
+    vi.mocked(getAttention).mockResolvedValue(makeAttentionResult());
+    vi.mocked(getFieldIntelligenceContext).mockResolvedValue(makeContext());
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('Vehicle incidents above baseline')).toBeInTheDocument());
+    const headings = screen.getAllByRole('heading', { level: 2 }).map((el) => el.textContent);
+    const stateIndex = headings.indexOf('Current operational state');
+    const attentionIndex = headings.indexOf('Attention');
+    expect(stateIndex).toBeGreaterThanOrEqual(0);
+    expect(attentionIndex).toBeGreaterThan(stateIndex);
+  });
+
+  it('renders real deterministic risk score and classification, and observed activity, in the orientation section', async () => {
+    vi.mocked(getAttention).mockResolvedValue(makeAttentionResult());
+    vi.mocked(getFieldIntelligenceContext).mockResolvedValue(makeContext());
+    renderPage();
+
+    const heading = await screen.findByRole('heading', { name: 'Current operational state' });
+    const section = within(heading.closest('section') as HTMLElement);
+
+    expect(section.getByText('61.2')).toBeInTheDocument();
+    expect(section.getByText('High')).toBeInTheDocument(); // risk classification label
+    // Observed activity — real event/finding/action counts from the same
+    // FieldIntelligenceContext already loaded for the section below.
+    expect(section.getByText(/40 events recorded/)).toBeInTheDocument();
+    expect(section.getByText(/2 open findings/)).toBeInTheDocument();
+    expect(section.getByText(/4 open actions/)).toBeInTheDocument();
+  });
+
+  it('shows Predictive as available and model-labeled in the orientation section only when the backend returns AVAILABLE', async () => {
+    vi.mocked(getAttention).mockResolvedValue(makeAttentionResult());
+    vi.mocked(getFieldIntelligenceContext).mockResolvedValue(
+      makeContext({
+        entity_id: 'site-1',
+        predictive: {
+          outcome: 'AVAILABLE',
+          value: { prediction_id: 'pred-1', prediction_time: '2026-06-01T00:00:00Z', outcome: 'ELEVATED', risk_score: 0.7, probability: 0.7, risk_category: 'ELEVATED', model_version: 'v1' },
+        },
+      }),
+    );
+    renderPage();
+
+    const heading = await screen.findByRole('heading', { name: 'Current operational state' });
+    const section = within(heading.closest('section') as HTMLElement);
+    expect(section.getByText('Model-derived: ELEVATED')).toBeInTheDocument();
+  });
+
+  it('shows Predictive NOT_AVAILABLE honestly in the orientation section at organization scope, never a fabricated value', async () => {
+    vi.mocked(getAttention).mockResolvedValue(makeAttentionResult());
+    vi.mocked(getFieldIntelligenceContext).mockResolvedValue(makeContext()); // entity_id: null, predictive: NOT_AVAILABLE
+    renderPage();
+
+    const heading = await screen.findByRole('heading', { name: 'Current operational state' });
+    const section = within(heading.closest('section') as HTMLElement);
+    expect(section.getByText('Not available at organization scope — select a site above.')).toBeInTheDocument();
+  });
+
+  it('never converts an unavailable deterministic risk score into zero or a fabricated value', async () => {
+    vi.mocked(getAttention).mockResolvedValue(makeAttentionResult());
+    vi.mocked(getFieldIntelligenceContext).mockResolvedValue(
+      makeContext({
+        deterministic: makeEnterpriseIntelligence({
+          deterministic_risk: { score: null, classification: 'INSUFFICIENT_DATA', version: 'v1', components: [], insufficient_data_reason: 'Fewer than 10 events in window.' },
+        }),
+      }),
+    );
+    renderPage();
+
+    const heading = await screen.findByRole('heading', { name: 'Current operational state' });
+    const section = within(heading.closest('section') as HTMLElement);
+    expect(section.getByText('Not available — Fewer than 10 events in window.')).toBeInTheDocument();
+    expect(section.queryByText('0')).not.toBeInTheDocument();
+  });
+
+  it('updates the orientation section when scope switches to a site', async () => {
+    vi.mocked(listSites).mockResolvedValue([{ id: 'site-1', name: 'North Yard', location: null, country: null, status: 'ACTIVE', organization_id: 'org-1' }]);
+    vi.mocked(getAttention).mockResolvedValue(makeAttentionResult());
+    vi.mocked(getFieldIntelligenceContext).mockResolvedValue(makeContext());
+    vi.mocked(getSiteAttention).mockResolvedValue(makeAttentionResult([]));
+    vi.mocked(getSiteFieldIntelligenceContext).mockResolvedValue(
+      makeContext({
+        entity_id: 'site-1',
+        scope: 'site',
+        operational_scope: { level: 'SITE', site: { id: 'site-1', name: 'North Yard' }, project: null },
+        deterministic: makeEnterpriseIntelligence({ deterministic_risk: { score: 12.5, classification: 'LOW', version: 'v1', components: [], insufficient_data_reason: null } }),
+      }),
+    );
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('Vehicle incidents above baseline')).toBeInTheDocument());
+    await userEvent.selectOptions(screen.getByLabelText('Scope'), 'site-1');
+
+    const heading = await screen.findByRole('heading', { name: 'Current operational state' });
+    const section = within(heading.closest('section') as HTMLElement);
+    await waitFor(() => expect(section.getByText('Scope: North Yard')).toBeInTheDocument());
+    expect(section.getByText('12.5')).toBeInTheDocument();
+  });
+
+  it('keeps the orientation section from blocking Attention when intelligence context fails', async () => {
+    vi.mocked(getAttention).mockResolvedValue(makeAttentionResult());
+    vi.mocked(getFieldIntelligenceContext).mockRejectedValue(new ApiError('Could not reach the SIE API.', { status: 0 }));
+    renderPage();
+
+    // Attention still renders even though the orientation section (which
+    // shares contextState with the Intelligence Context section) is in error.
+    await waitFor(() => expect(screen.getByText('Vehicle incidents above baseline')).toBeInTheDocument());
+    expect(screen.getAllByText('Could not reach the SIE API.').length).toBeGreaterThan(0);
   });
 
   // --- No-organization / permission-denied states -------------------------------------------------

@@ -190,6 +190,8 @@ export function IntelligencePage() {
 
       {auth.organization && !isPermissionDenied && (
         <>
+          <CurrentOperationalStateSection state={contextState} onRetry={() => setReloadToken((t) => t + 1)} />
+
           <Section title="Attention" description="What deserves attention first, in the order SIE's own ranking already determined.">
             {attentionState.status === 'loading' && <LoadingState label="Loading attention…" />}
             {attentionState.status === 'error' && (
@@ -225,6 +227,107 @@ export function IntelligencePage() {
         />
       )}
     </PageContainer>
+  );
+}
+
+/**
+ * Current operational state — SIE Milestone 42 correction. A concise
+ * orientation layer, not a dashboard: "what is the current operational
+ * state before I decide what deserves my attention?"
+ *
+ * Reuses the exact `FieldIntelligenceContext` already fetched for the
+ * Intelligence Context section below (no new endpoint, no new
+ * calculation, no duplicate fetch) and renders only the handful of
+ * fields that answer that orientation question. Observed, deterministic,
+ * and predictive values are kept visibly distinct — never merged into
+ * one artificial score. Unavailable values are stated honestly, never
+ * substituted with zero or a fabricated figure. This section has its own
+ * loading/error state (mirroring `contextState`) so a failure here never
+ * blocks Attention or the other Intelligence Context panels from
+ * rendering independently.
+ */
+function CurrentOperationalStateSection({
+  state,
+  onRetry,
+}: {
+  state: AsyncState<FieldIntelligenceContext>;
+  onRetry: () => void;
+}) {
+  return (
+    <Section
+      title="Current operational state"
+      description="A brief orientation to what SIE currently observes — not a conclusion or an automated decision. See Attention below for what needs a human decision."
+    >
+      {state.status === 'loading' && <LoadingState label="Loading current operational state…" />}
+      {state.status === 'error' && <ErrorState description={state.message} onRetry={onRetry} />}
+      {state.status === 'success' && <OperationalStateSummary context={state.data} />}
+    </Section>
+  );
+}
+
+function OperationalStateSummary({ context }: { context: FieldIntelligenceContext }) {
+  const { observed, deterministic: det, predictive, operational_scope } = context;
+  const scopeLabel = operational_scope?.level === 'SITE' && operational_scope.site ? operational_scope.site.name : 'Organization-wide';
+
+  return (
+    <div className="flex flex-col gap-3">
+      <p className="text-xs font-medium uppercase tracking-wide text-text-muted">Scope: {scopeLabel}</p>
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <div className="rounded-lg border border-border bg-surface p-3.5">
+          <p className="text-xs font-medium uppercase tracking-wide text-text-muted">Deterministic risk</p>
+          {det.deterministic_risk.score !== null ? (
+            <>
+              <p className="mt-1 text-xl font-semibold text-text-primary">{det.deterministic_risk.score.toFixed(1)}</p>
+              <div className="mt-1.5">
+                <StatusBadge tone={riskClassificationTone(det.deterministic_risk.classification)} label={riskClassificationLabel(det.deterministic_risk.classification)} />
+              </div>
+            </>
+          ) : (
+            <p className="mt-1 text-sm text-text-muted">
+              Not available{det.deterministic_risk.insufficient_data_reason ? ` — ${det.deterministic_risk.insufficient_data_reason}` : '.'}
+            </p>
+          )}
+        </div>
+
+        <div className="rounded-lg border border-border bg-surface p-3.5">
+          <p className="text-xs font-medium uppercase tracking-wide text-text-muted">Data sufficiency</p>
+          <div className="mt-1.5">
+            <StatusBadge tone={dataSufficiencyTone(det.data_sufficiency.status)} label={dataSufficiencyLabel(det.data_sufficiency.status)} />
+          </div>
+        </div>
+
+        <div className="rounded-lg border border-border bg-surface p-3.5">
+          <p className="text-xs font-medium uppercase tracking-wide text-text-muted">Observed activity</p>
+          {observed.outcome === 'UNAVAILABLE' ? (
+            <p className="mt-1 text-sm text-text-muted">Unavailable{observed.unavailable_reason ? `: ${observed.unavailable_reason}` : '.'}</p>
+          ) : (
+            <p className="mt-1 text-sm text-text-primary">
+              {observed.event_count} event{observed.event_count === 1 ? '' : 's'} recorded
+              {' · '}
+              {observed.open_finding_count} open finding{observed.open_finding_count === 1 ? '' : 's'}
+              {observed.actions
+                ? ` · ${observed.actions.open_action_count} open action${observed.actions.open_action_count === 1 ? '' : 's'}`
+                : ''}
+            </p>
+          )}
+        </div>
+
+        <div className="rounded-lg border border-border bg-surface p-3.5">
+          <p className="text-xs font-medium uppercase tracking-wide text-text-muted">Predictive intelligence</p>
+          {predictive.outcome === 'AVAILABLE' && predictive.value ? (
+            <p className="mt-1 text-sm text-text-primary">
+              Model-derived: {predictive.value.risk_category ?? (predictive.value.risk_score !== null ? `score ${predictive.value.risk_score}` : 'available')}
+            </p>
+          ) : predictive.outcome === 'EXCLUDED_GENERATED_AFTER_AS_OF' ? (
+            <p className="mt-1 text-sm text-text-muted">Withheld — generated after this view's cutoff.</p>
+          ) : context.entity_id ? (
+            <p className="mt-1 text-sm text-text-muted">Not available for this site yet.</p>
+          ) : (
+            <p className="mt-1 text-sm text-text-muted">Not available at organization scope — select a site above.</p>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
