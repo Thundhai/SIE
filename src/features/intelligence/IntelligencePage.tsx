@@ -1,16 +1,27 @@
+import { useEffect, useMemo, useState } from 'react';
 import { Info } from 'lucide-react';
-import { useEffect, useState } from 'react';
 import { useAuth } from '../../auth/AuthContext';
 import { PageContainer } from '../../components/layout/PageContainer';
 import { Section } from '../../components/layout/Section';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { ErrorState } from '../../components/ui/ErrorState';
 import { LoadingState } from '../../components/ui/LoadingState';
+import { Select } from '../../components/ui/Select';
 import { StatusBadge } from '../../components/ui/StatusBadge';
 import { Tabs } from '../../components/ui/Tabs';
-import { getEnterpriseIntelligence, type EnterpriseIntelligence } from '../../services/api/intelligence';
+import type { AttentionItem, AttentionResult } from '../../services/api/attention';
+import { getAttention, getSiteAttention } from '../../services/api/attention';
+import type { IntelligenceDecision } from '../../services/api/decisions';
+import { listDecisions } from '../../services/api/decisions';
+import type { FieldIntelligenceContext } from '../../services/api/fieldIntelligenceContext';
+import { getFieldIntelligenceContext, getSiteFieldIntelligenceContext } from '../../services/api/fieldIntelligenceContext';
+import { listSites, type Site } from '../../services/api/sites';
 import type { AsyncState } from '../../types/common';
 import { formatCanonicalLabel } from '../events/eventStatus';
+import { AttentionList } from './AttentionList';
+import { AttentionReviewDrawer } from './AttentionReviewDrawer';
+import { DecisionHistorySection } from './DecisionHistorySection';
+import { OrganizationalMemoryCard } from './OrganizationalMemoryCard';
 import {
   anomalyDirectionLabel,
   anomalyStatusLabel,
@@ -26,7 +37,7 @@ import {
   trendTone,
 } from './intelligenceLabels';
 
-const TABS = [
+const DETAIL_TABS = [
   { value: 'indicators', label: 'Indicators' },
   { value: 'anomalies', label: 'Anomalies' },
   { value: 'patterns', label: 'Patterns' },
@@ -34,46 +45,136 @@ const TABS = [
 ];
 
 /**
- * Intelligence — the deterministic enterprise-intelligence workspace,
- * backed entirely by the real `GET /intelligence/enterprise` endpoint
- * (SIE Milestone 22/23, `INTELLIGENCE_READ`). No calculation is repeated
- * here: every score, classification, and count is exactly what the
- * backend returned. Plain HSE language throughout (see
- * `intelligenceLabels.ts`) — never "AI detected"/"AI prediction"
- * phrasing, and an anomaly is presented as a deviation from baseline,
- * never as an automatic risk conclusion. Site-level intelligence
- * (`GET /intelligence/sites/{site_id}`) and Risk Assessment
- * findings/controls/effectiveness stay for a later UI milestone — see
- * this file's own "known limitations" note in the completion report.
+ * Intelligence — SIE Milestone 42's primary intelligence workspace.
+ * Follows the information hierarchy the milestone spec requires:
+ *
+ *   Current operational state -> Attention -> Intelligence context -> Decisions
+ *
+ * Three real, already-built backend read endpoints, called once each
+ * per scope: `GET /intelligence/context` (SIE Milestone 32/41A — five
+ * independent, never-merged categories), `GET /intelligence/attention`
+ * (SIE Milestone 33 — the actual ranked prioritization the backend
+ * already computed, rendered in the order it was returned), and
+ * `GET /intelligence/decisions` (SIE Milestone 34 — recorded human
+ * decisions). No calculation, ranking, or applicability judgment is
+ * reproduced in this file.
+ *
+ * A "Scope" selector switches the whole workspace to one site's own
+ * scope — this is the one place Predictive intelligence becomes
+ * genuinely available (`PredictiveContext` is site-scoped only; see
+ * `services/api/fieldIntelligenceContext.ts`'s own note), and attention
+ * items narrow to that site specifically.
  */
 export function IntelligencePage() {
   const auth = useAuth();
-  const [state, setState] = useState<AsyncState<EnterpriseIntelligence>>({ status: 'loading' });
+  const [siteId, setSiteId] = useState<string>('');
+  const [sites, setSites] = useState<Site[]>([]);
+  const [attentionState, setAttentionState] = useState<AsyncState<AttentionResult>>({ status: 'loading' });
+  const [contextState, setContextState] = useState<AsyncState<FieldIntelligenceContext>>({ status: 'loading' });
+  const [decisionsState, setDecisionsState] = useState<AsyncState<IntelligenceDecision[]>>({ status: 'loading' });
   const [reloadToken, setReloadToken] = useState(0);
-  const [tab, setTab] = useState('indicators');
+  const [decisionRefreshToken, setDecisionRefreshToken] = useState(0);
+  const [detailTab, setDetailTab] = useState('indicators');
+  const [reviewItem, setReviewItem] = useState<AttentionItem | null>(null);
+
+  useEffect(() => {
+    if (!auth.organization) return;
+    let cancelled = false;
+    listSites(auth.organization.id).then((result) => {
+      if (!cancelled) setSites(result);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [auth.organization]);
 
   useEffect(() => {
     if (!auth.organization) return;
     const controller = new AbortController();
-    setState({ status: 'loading' });
-    getEnterpriseIntelligence({ organizationId: auth.organization.id }, controller.signal)
-      .then((data) => setState({ status: 'success', data }))
+    setAttentionState({ status: 'loading' });
+    const request = siteId
+      ? getSiteAttention({ organizationId: auth.organization.id, siteId }, controller.signal)
+      : getAttention({ organizationId: auth.organization.id }, controller.signal);
+    request
+      .then((result) => setAttentionState({ status: 'success', data: result }))
       .catch((error: unknown) => {
         if (controller.signal.aborted) return;
-        setState({ status: 'error', message: error instanceof Error ? error.message : 'Could not load intelligence data.' });
+        setAttentionState({ status: 'error', message: error instanceof Error ? error.message : 'Could not load attention.' });
       });
     return () => controller.abort();
-  }, [auth.organization, reloadToken]);
+  }, [auth.organization, siteId, reloadToken]);
 
-  const isPermissionDenied = state.status === 'error' && state.message.toLowerCase().includes('missing') && state.message.toLowerCase().includes('permission');
+  useEffect(() => {
+    if (!auth.organization) return;
+    const controller = new AbortController();
+    setContextState({ status: 'loading' });
+    const request = siteId
+      ? getSiteFieldIntelligenceContext({ organizationId: auth.organization.id, siteId }, controller.signal)
+      : getFieldIntelligenceContext({ organizationId: auth.organization.id }, controller.signal);
+    request
+      .then((result) => setContextState({ status: 'success', data: result }))
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        setContextState({ status: 'error', message: error instanceof Error ? error.message : 'Could not load intelligence context.' });
+      });
+    return () => controller.abort();
+  }, [auth.organization, siteId, reloadToken]);
+
+  // Recent decisions, fetched org-wide (not site-filtered) so the
+  // "already decided" annotation on the attention list stays correct
+  // regardless of which scope is currently selected.
+  useEffect(() => {
+    if (!auth.organization) return;
+    const controller = new AbortController();
+    setDecisionsState({ status: 'loading' });
+    listDecisions({ organizationId: auth.organization.id, pageSize: 100 }, controller.signal)
+      .then((result) => setDecisionsState({ status: 'success', data: result.items }))
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        setDecisionsState({ status: 'error', message: error instanceof Error ? error.message : 'Could not load decisions.' });
+      });
+    return () => controller.abort();
+  }, [auth.organization, decisionRefreshToken]);
+
+  // Correlates two already-fetched, real datasets by the one key the
+  // backend defines for exactly this purpose (`attention_reference`) —
+  // never a frontend-invented ranking or applicability judgment.
+  const decisionsByReference = useMemo(() => {
+    const map = new Map<string, IntelligenceDecision>();
+    if (decisionsState.status !== 'success') return map;
+    for (const record of decisionsState.data) {
+      if (!map.has(record.attention_reference)) {
+        map.set(record.attention_reference, record); // newest first already
+      }
+    }
+    return map;
+  }, [decisionsState]);
+
+  const isPermissionDenied =
+    attentionState.status === 'error' &&
+    attentionState.message.toLowerCase().includes('missing') &&
+    attentionState.message.toLowerCase().includes('permission');
 
   return (
     <PageContainer>
-      <div>
-        <h1 className="text-xl font-semibold text-navy-900">Intelligence</h1>
-        <p className="mt-1 text-sm text-text-secondary">
-          Deterministic risk, trend, anomaly, and pattern intelligence computed from your organization's recorded events.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="text-xl font-semibold text-navy-900">Intelligence</h1>
+          <p className="mt-1 text-sm text-text-secondary">
+            What SIE currently knows, what deserves attention, and the decisions recorded against it.
+          </p>
+        </div>
+        {sites.length > 0 && (
+          <div className="w-56">
+            <Select
+              label="Scope"
+              hideLabel
+              value={siteId}
+              onChange={(event) => setSiteId(event.target.value)}
+              options={[{ value: '', label: 'Organization-wide' }, ...sites.map((site) => ({ value: site.id, label: site.name }))]}
+            />
+          </div>
+        )}
       </div>
 
       {!auth.organization && (
@@ -83,117 +184,175 @@ export function IntelligencePage() {
         />
       )}
 
-      {auth.organization && state.status === 'loading' && <LoadingState label="Loading intelligence data…" />}
-
-      {auth.organization && state.status === 'error' && isPermissionDenied && (
+      {auth.organization && isPermissionDenied && (
         <EmptyState title="You don't have permission to view this" description="Ask an administrator for intelligence:read access in this organization." />
       )}
 
-      {auth.organization && state.status === 'error' && !isPermissionDenied && (
-        <ErrorState title="Could not load intelligence data" description={state.message} onRetry={() => setReloadToken((token) => token + 1)} />
+      {auth.organization && !isPermissionDenied && (
+        <>
+          <Section title="Attention" description="What deserves attention first, in the order SIE's own ranking already determined.">
+            {attentionState.status === 'loading' && <LoadingState label="Loading attention…" />}
+            {attentionState.status === 'error' && (
+              <ErrorState description={attentionState.message} onRetry={() => setReloadToken((t) => t + 1)} />
+            )}
+            {attentionState.status === 'success' && (
+              <AttentionList
+                items={attentionState.data.items}
+                decisionsByReference={decisionsByReference}
+                onReview={setReviewItem}
+              />
+            )}
+          </Section>
+
+          <IntelligenceContextSection
+            state={contextState}
+            onRetry={() => setReloadToken((t) => t + 1)}
+            detailTab={detailTab}
+            onDetailTabChange={setDetailTab}
+          />
+
+          <DecisionHistorySection organizationId={auth.organization.id} refreshToken={decisionRefreshToken} />
+        </>
       )}
 
-      {auth.organization && state.status === 'success' && (
-        <IntelligenceContent data={state.data} tab={tab} onTabChange={setTab} />
+      {auth.organization && (
+        <AttentionReviewDrawer
+          isOpen={reviewItem !== null}
+          onClose={() => setReviewItem(null)}
+          item={reviewItem}
+          organizationId={auth.organization.id}
+          onDecided={() => setDecisionRefreshToken((t) => t + 1)}
+        />
       )}
     </PageContainer>
   );
 }
 
-function IntelligenceContent({
-  data,
-  tab,
-  onTabChange,
+function IntelligenceContextSection({
+  state,
+  onRetry,
+  detailTab,
+  onDetailTabChange,
 }: {
-  data: EnterpriseIntelligence;
-  tab: string;
-  onTabChange: (value: string) => void;
+  state: AsyncState<FieldIntelligenceContext>;
+  onRetry: () => void;
+  detailTab: string;
+  onDetailTabChange: (value: string) => void;
 }) {
-  const insufficientData = data.data_sufficiency.status === 'INSUFFICIENT_DATA';
-
   return (
-    <>
-      {insufficientData && (
-        <div className="flex items-start gap-2 rounded-md border border-informational/30 bg-informational-surface px-3 py-2.5 text-sm text-informational">
-          <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-          <p>
-            Insufficient data for a reliable enterprise picture ({data.provenance.event_count} recorded event
-            {data.provenance.event_count === 1 ? '' : 's'} over the last {data.window_days} days). The figures below
-            still reflect exactly what has been recorded so far.
-          </p>
+    <Section title="Intelligence context" description="Five independent categories — never merged into one undifferentiated feed.">
+      {state.status === 'loading' && <LoadingState label="Loading intelligence context…" />}
+      {state.status === 'error' && <ErrorState description={state.message} onRetry={onRetry} />}
+      {state.status === 'success' && (
+        <div className="flex flex-col gap-6">
+          <ObservedPanel context={state.data} />
+          <DeterministicPanel context={state.data} detailTab={detailTab} onDetailTabChange={onDetailTabChange} />
+          <PredictivePanel context={state.data} />
+          <KnowledgePanel context={state.data} />
+          <OrganizationalMemoryPanel context={state.data} />
         </div>
       )}
-
-      <Section title="Enterprise risk" description={`As of ${new Date(data.as_of).toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}, based on the last ${data.window_days} days.`}>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          {/* SIE Milestone UI-DESIGN-01: the headline enterprise-risk
-              number is this page's one Level-3 "elevated important
-              content" tile — a restrained shadow on top of the ordinary
-              card border. Classification/data-sufficiency stay plain
-              Level-2 cards. */}
-          <div className="rounded-lg border border-border bg-surface p-4 shadow-xs">
-            <p className="text-xs font-medium uppercase tracking-wide text-text-muted">Risk score</p>
-            <p className="mt-1 text-2xl font-semibold text-text-primary">
-              {data.deterministic_risk.score !== null ? data.deterministic_risk.score.toFixed(1) : '—'}
-            </p>
-            {data.deterministic_risk.insufficient_data_reason && (
-              <p className="mt-1 text-xs text-text-muted">{data.deterministic_risk.insufficient_data_reason}</p>
-            )}
-          </div>
-          <div className="rounded-lg border border-border bg-surface p-4">
-            <p className="text-xs font-medium uppercase tracking-wide text-text-muted">Risk classification</p>
-            <div className="mt-1.5">
-              <StatusBadge
-                tone={riskClassificationTone(data.deterministic_risk.classification)}
-                label={riskClassificationLabel(data.deterministic_risk.classification)}
-              />
-            </div>
-          </div>
-          <div className="rounded-lg border border-border bg-surface p-4">
-            <p className="text-xs font-medium uppercase tracking-wide text-text-muted">Data sufficiency</p>
-            <div className="mt-1.5">
-              <StatusBadge tone={dataSufficiencyTone(data.data_sufficiency.status)} label={dataSufficiencyLabel(data.data_sufficiency.status)} />
-            </div>
-          </div>
-        </div>
-      </Section>
-
-      <Section title="Trend" description={data.trend.metric.replaceAll('_', ' ')}>
-        <div className="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface p-4">
-          <div>
-            <p className="text-sm text-text-primary">
-              {data.trend.current_value} recorded, compared with {data.trend.previous_value} in the prior period
-              {data.trend.percentage_change !== null ? ` (${data.trend.percentage_change > 0 ? '+' : ''}${data.trend.percentage_change.toFixed(1)}%)` : ''}.
-            </p>
-          </div>
-          <StatusBadge tone={trendTone(data.trend.classification)} label={trendLabel(data.trend.classification)} />
-        </div>
-      </Section>
-
-      <Section title="Details">
-        <Tabs items={TABS} value={tab} onChange={onTabChange} />
-        {tab === 'indicators' && <IndicatorsPanel data={data} />}
-        {tab === 'anomalies' && <AnomaliesPanel data={data} />}
-        {tab === 'patterns' && <PatternsPanel data={data} />}
-        {tab === 'associations' && <AssociationsPanel data={data} />}
-      </Section>
-
-      <p className="text-xs text-text-muted">
-        Generated {new Date(data.provenance.generated_at).toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
-        {' · '}
-        Based on {data.provenance.total_supporting_events} supporting event{data.provenance.total_supporting_events === 1 ? '' : 's'}.
-      </p>
-    </>
+    </Section>
   );
 }
 
-function IndicatorsPanel({ data }: { data: EnterpriseIntelligence }) {
-  if (data.indicators.length === 0) {
+function CategoryHeading({ label }: { label: string }) {
+  return <h3 className="text-xs font-semibold uppercase tracking-wide text-text-muted">{label}</h3>;
+}
+
+function ObservedPanel({ context }: { context: FieldIntelligenceContext }) {
+  const { observed } = context;
+  return (
+    <div>
+      <CategoryHeading label="Observed — what has actually happened" />
+      {observed.outcome === 'UNAVAILABLE' ? (
+        <p className="mt-2 text-sm text-text-muted">Observed data is unavailable{observed.unavailable_reason ? `: ${observed.unavailable_reason}` : '.'}</p>
+      ) : (
+        <div className="mt-2 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div className="rounded-lg border border-border bg-surface p-3.5">
+            <p className="text-xs font-medium uppercase tracking-wide text-text-muted">Recorded events</p>
+            <p className="mt-1 text-xl font-semibold text-text-primary">{observed.event_count}</p>
+          </div>
+          <div className="rounded-lg border border-border bg-surface p-3.5">
+            <p className="text-xs font-medium uppercase tracking-wide text-text-muted">Open findings</p>
+            <p className="mt-1 text-xl font-semibold text-text-primary">{observed.open_finding_count}</p>
+          </div>
+          {observed.actions && (
+            <>
+              <div className="rounded-lg border border-border bg-surface p-3.5">
+                <p className="text-xs font-medium uppercase tracking-wide text-text-muted">Open actions</p>
+                <p className="mt-1 text-xl font-semibold text-text-primary">{observed.actions.open_action_count}</p>
+              </div>
+              <div className="rounded-lg border border-border bg-surface p-3.5">
+                <p className="text-xs font-medium uppercase tracking-wide text-text-muted">High-priority actions</p>
+                <p className="mt-1 text-xl font-semibold text-text-primary">{observed.actions.high_priority_action_count}</p>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DeterministicPanel({
+  context,
+  detailTab,
+  onDetailTabChange,
+}: {
+  context: FieldIntelligenceContext;
+  detailTab: string;
+  onDetailTabChange: (value: string) => void;
+}) {
+  const det = context.deterministic;
+  return (
+    <div>
+      <CategoryHeading label="Deterministic — patterns, trends, and risk computed from recorded events" />
+      <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <div className="rounded-lg border border-border bg-surface p-4 shadow-xs">
+          <p className="text-xs font-medium uppercase tracking-wide text-text-muted">Risk score</p>
+          <p className="mt-1 text-2xl font-semibold text-text-primary">
+            {det.deterministic_risk.score !== null ? det.deterministic_risk.score.toFixed(1) : '—'}
+          </p>
+        </div>
+        <div className="rounded-lg border border-border bg-surface p-4">
+          <p className="text-xs font-medium uppercase tracking-wide text-text-muted">Risk classification</p>
+          <div className="mt-1.5">
+            <StatusBadge tone={riskClassificationTone(det.deterministic_risk.classification)} label={riskClassificationLabel(det.deterministic_risk.classification)} />
+          </div>
+        </div>
+        <div className="rounded-lg border border-border bg-surface p-4">
+          <p className="text-xs font-medium uppercase tracking-wide text-text-muted">Data sufficiency</p>
+          <div className="mt-1.5">
+            <StatusBadge tone={dataSufficiencyTone(det.data_sufficiency.status)} label={dataSufficiencyLabel(det.data_sufficiency.status)} />
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-border bg-surface p-4">
+        <p className="text-sm text-text-primary">
+          {det.trend.current_value} recorded, compared with {det.trend.previous_value} in the prior period
+          {det.trend.percentage_change !== null ? ` (${det.trend.percentage_change > 0 ? '+' : ''}${det.trend.percentage_change.toFixed(1)}%)` : ''}.
+        </p>
+        <StatusBadge tone={trendTone(det.trend.classification)} label={trendLabel(det.trend.classification)} />
+      </div>
+
+      <Tabs items={DETAIL_TABS} value={detailTab} onChange={onDetailTabChange} className="mt-4" />
+      {detailTab === 'indicators' && <IndicatorsPanel det={det} />}
+      {detailTab === 'anomalies' && <AnomaliesPanel det={det} />}
+      {detailTab === 'patterns' && <PatternsPanel det={det} />}
+      {detailTab === 'associations' && <AssociationsPanel det={det} />}
+    </div>
+  );
+}
+
+function IndicatorsPanel({ det }: { det: FieldIntelligenceContext['deterministic'] }) {
+  if (det.indicators.length === 0) {
     return <EmptyState title="No indicators available" description="No indicator values were computed for the current window." />;
   }
   return (
     <ul className="mt-3 flex flex-col gap-2">
-      {data.indicators.map((indicator) => (
+      {det.indicators.map((indicator) => (
         <li key={indicator.key} className="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface p-3.5">
           <div>
             <p className="text-sm font-medium text-text-primary">{indicator.label}</p>
@@ -215,13 +374,13 @@ function IndicatorsPanel({ data }: { data: EnterpriseIntelligence }) {
   );
 }
 
-function AnomaliesPanel({ data }: { data: EnterpriseIntelligence }) {
-  if (data.anomalies.length === 0) {
+function AnomaliesPanel({ det }: { det: FieldIntelligenceContext['deterministic'] }) {
+  if (det.anomalies.length === 0) {
     return <EmptyState title="No anomaly data available" description="No anomaly scan results were computed for the current window." />;
   }
   return (
     <ul className="mt-3 flex flex-col gap-2">
-      {data.anomalies.map((anomaly) => (
+      {det.anomalies.map((anomaly) => (
         <li key={anomaly.metric} className="flex flex-col gap-1.5 rounded-lg border border-border bg-surface p-3.5">
           <div className="flex items-center justify-between gap-3">
             <p className="text-sm font-medium text-text-primary">{anomaly.label}</p>
@@ -241,13 +400,13 @@ function AnomaliesPanel({ data }: { data: EnterpriseIntelligence }) {
   );
 }
 
-function PatternsPanel({ data }: { data: EnterpriseIntelligence }) {
-  if (data.patterns.length === 0) {
+function PatternsPanel({ det }: { det: FieldIntelligenceContext['deterministic'] }) {
+  if (det.patterns.length === 0) {
     return <EmptyState title="No recurring patterns" description="No recurring event patterns were detected for the current window." />;
   }
   return (
     <ul className="mt-3 flex flex-col gap-2">
-      {data.patterns.map((pattern) => (
+      {det.patterns.map((pattern) => (
         <li key={pattern.pattern_key} className="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface p-3.5">
           <div>
             <p className="text-sm font-medium text-text-primary">
@@ -265,13 +424,13 @@ function PatternsPanel({ data }: { data: EnterpriseIntelligence }) {
   );
 }
 
-function AssociationsPanel({ data }: { data: EnterpriseIntelligence }) {
-  if (data.associations.length === 0) {
+function AssociationsPanel({ det }: { det: FieldIntelligenceContext['deterministic'] }) {
+  if (det.associations.length === 0) {
     return <EmptyState title="No associations available" description="No metric associations were computed for the current window." />;
   }
   return (
     <ul className="mt-3 flex flex-col gap-2">
-      {data.associations.map((association) => (
+      {det.associations.map((association) => (
         <li key={`${association.metric_a}-${association.metric_b}`} className="flex items-center justify-between gap-3 rounded-lg border border-border bg-surface p-3.5">
           <div>
             <p className="text-sm font-medium text-text-primary">
@@ -286,5 +445,113 @@ function AssociationsPanel({ data }: { data: EnterpriseIntelligence }) {
         </li>
       ))}
     </ul>
+  );
+}
+
+function PredictivePanel({ context }: { context: FieldIntelligenceContext }) {
+  const { predictive } = context;
+  return (
+    <div>
+      <CategoryHeading label="Predictive — model-derived signal" />
+      {predictive.outcome === 'NOT_AVAILABLE' && (
+        <p className="mt-2 flex items-start gap-1.5 text-sm text-text-muted">
+          <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+          {context.entity_id
+            ? 'No prediction has been recorded for this site yet.'
+            : 'Predictive intelligence is evaluated per site — choose a site above to view it.'}
+        </p>
+      )}
+      {predictive.outcome === 'EXCLUDED_GENERATED_AFTER_AS_OF' && (
+        <p className="mt-2 flex items-start gap-1.5 text-sm text-text-muted">
+          <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+          A prediction exists but was generated after this view's cutoff — withheld to avoid presenting it as
+          contemporaneous.
+        </p>
+      )}
+      {predictive.outcome === 'AVAILABLE' && predictive.value && (
+        <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <div className="rounded-lg border border-border bg-surface p-3.5">
+            <p className="text-xs font-medium uppercase tracking-wide text-text-muted">Model-derived risk score</p>
+            <p className="mt-1 text-xl font-semibold text-text-primary">{predictive.value.risk_score ?? '—'}</p>
+          </div>
+          <div className="rounded-lg border border-border bg-surface p-3.5">
+            <p className="text-xs font-medium uppercase tracking-wide text-text-muted">Risk category</p>
+            <p className="mt-1 text-sm text-text-primary">{predictive.value.risk_category ?? 'Not available'}</p>
+          </div>
+          <div className="rounded-lg border border-border bg-surface p-3.5">
+            <p className="text-xs font-medium uppercase tracking-wide text-text-muted">Model version</p>
+            <p className="mt-1 text-sm text-text-primary">{predictive.value.model_version ?? 'Not available'}</p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function KnowledgePanel({ context }: { context: FieldIntelligenceContext }) {
+  const { knowledge } = context;
+  return (
+    <div>
+      <CategoryHeading label="Knowledge — retrieved organizational and documentary evidence" />
+      {knowledge.outcome === 'NOT_QUERIED' && (
+        <p className="mt-2 flex items-start gap-1.5 text-sm text-text-muted">
+          <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+          Knowledge and evidence retrieval has not been queried for this view.
+        </p>
+      )}
+      {knowledge.outcome === 'UNAVAILABLE' && (
+        <p className="mt-2 flex items-start gap-1.5 text-sm text-text-muted">
+          <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+          Knowledge retrieval is unavailable{knowledge.unavailable_reason ? `: ${knowledge.unavailable_reason}` : '.'}
+        </p>
+      )}
+      {knowledge.outcome === 'NO_RELEVANT_EVIDENCE' && (
+        <p className="mt-2 flex items-start gap-1.5 text-sm text-text-muted">
+          <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+          No relevant evidence was found for this query.
+        </p>
+      )}
+      {knowledge.outcome === 'RESULTS' && (
+        <ul className="mt-2 flex flex-col gap-2">
+          {knowledge.results.map((result) => (
+            <li key={result.rank} className="rounded-lg border border-border bg-surface p-3.5">
+              <p className="text-sm text-text-primary">{result.content}</p>
+              <p className="mt-1 text-xs text-text-muted">
+                {result.document} · {result.source}
+                {result.location ? ` · ${result.location}` : ''}
+              </p>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function OrganizationalMemoryPanel({ context }: { context: FieldIntelligenceContext }) {
+  const { organizational_memory: memory } = context;
+  return (
+    <div>
+      <CategoryHeading label="Organizational memory — governed knowledge from past learning" />
+      {memory.outcome === 'UNAVAILABLE' && (
+        <p className="mt-2 flex items-start gap-1.5 text-sm text-text-muted">
+          <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+          Organizational memory is unavailable{memory.unavailable_reason ? `: ${memory.unavailable_reason}` : '.'}
+        </p>
+      )}
+      {memory.outcome === 'OK' && memory.items.length === 0 && (
+        <p className="mt-2 flex items-start gap-1.5 text-sm text-text-muted">
+          <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+          No governed organizational memory applies to this scope right now.
+        </p>
+      )}
+      {memory.outcome === 'OK' && memory.items.length > 0 && (
+        <div className="mt-2 flex flex-col gap-2">
+          {memory.items.map((item) => (
+            <OrganizationalMemoryCard key={item.memory_id} memory={item} />
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
