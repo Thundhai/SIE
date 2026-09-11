@@ -14,6 +14,7 @@ from app.models.embedding import KnowledgeChunkEmbedding
 from app.models.enterprise_ingestion_batch import EnterpriseIngestionBatch
 from app.models.enterprise_ingestion_record import EnterpriseIngestionRecord
 from app.models.feature_snapshot import FeatureSnapshot
+from app.models.governing_standard import GoverningStandard, OrganizationGoverningStandard
 from app.models.hse_expert_review import HseExpertReview
 from app.models.idempotency_key import IdempotencyKey
 from app.models.identity import Identity
@@ -68,6 +69,7 @@ __all__ = [
     "EnterpriseIngestionBatch",
     "EnterpriseIngestionRecord",
     "FeatureSnapshot",
+    "GoverningStandard",
     "HseExpertReview",
     "IdempotencyKey",
     "Identity",
@@ -88,6 +90,7 @@ __all__ = [
     "ModelReviewFlag",
     "OntologyConcept",
     "Organization",
+    "OrganizationGoverningStandard",
     "OrganizationMembership",
     "OrganizationalMemory",
     "OrganizationalMemoryGovernanceDecision",
