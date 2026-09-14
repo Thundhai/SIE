@@ -8,8 +8,6 @@ response contract) lives in `tests/test_governing_standard_api.py`.
 
 from __future__ import annotations
 
-import uuid
-
 import pytest
 from fastapi import HTTPException
 
@@ -461,3 +459,68 @@ def test_seed_global_catalogue_is_idempotent_by_name(db_session):
     org = make_org(db_session)
     available = list_available_governing_standards(db_session, organization_id=org.id)
     assert len([s for s in available if s.name == "ISO 45001"]) == 1
+
+
+# --- Applicability boundary (spec §6, §15) -----------------------------------------------------
+# M43A must never claim operational applicability merely from selection --
+# proven here structurally (no applicability field/status/computation
+# exists anywhere in this milestone's model or service layer) rather than
+# only by docstring assertion, mirroring the static architectural-guard
+# technique already established for "no LLM"/"read-only" claims elsewhere
+# in this codebase (e.g. tests/test_memory_integration_service.py).
+
+
+def test_governing_standard_model_has_no_applicability_field():
+    """`GoverningStandard`/`OrganizationGoverningStandard` carry catalogue
+    metadata (regions/industry_sectors) and selection state (SELECTED/
+    RETIRED) only -- no `is_applicable`, `applicability_status`, or
+    similarly-named column exists on either model. Applicability to a
+    particular site/activity/hazard is explicitly a later milestone's
+    responsibility (M43B), never this one's."""
+    from app.models.governing_standard import GoverningStandard as _GoverningStandard
+    from app.models.governing_standard import OrganizationGoverningStandard as _OrganizationGoverningStandard
+
+    for model in (_GoverningStandard, _OrganizationGoverningStandard):
+        column_names = {c.name for c in model.__table__.columns}
+        assert not any("applicab" in name.lower() for name in column_names), (
+            f"{model.__name__} must not carry an applicability field -- found in {column_names}"
+        )
+
+
+def test_governing_standard_service_computes_no_applicability():
+    """No function in `governing_standard_service.py` computes or returns
+    an applicability verdict -- the module's own public surface is
+    catalogue (AVAILABLE) and selection (SELECTED) operations only. An
+    AST scan of every top-level function name and return-annotation
+    text, not a source-text grep, so a docstring explaining the boundary
+    (which necessarily mentions the word "applicable") can never
+    false-positive this check."""
+    import ast
+    import inspect
+
+    import app.services.governing_standard_service as module
+
+    tree = ast.parse(inspect.getsource(module))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef):
+            assert "applicab" not in node.name.lower(), f"unexpected applicability function: {node.name}"
+
+
+def test_active_governing_set_pairs_never_carry_an_applicability_verdict(db_session):
+    """The Active Governing Set (`list_active_governing_standards()`) is
+    exactly what spec's own "Final architectural boundary" describes:
+    catalogue entry + resolved selection event, nothing more. Confirms by
+    construction that the returned tuple shape carries no third,
+    applicability-flavored element."""
+    org = make_org(db_session)
+    standard = _make_global_standard(db_session, name="OSHA 1910")
+    select_governing_standard(
+        db_session, organization_id=org.id, standard_id=standard.id, effective_date=None, rationale=None,
+        configured_by_user_id=None, configured_by_api_client_id=None, request_id=None,
+    )
+    db_session.commit()
+
+    active = list_active_governing_standards(db_session, organization_id=org.id)
+    assert len(active) == 1
+    pair = active[0]
+    assert len(pair) == 2  # (GoverningStandard, OrganizationGoverningStandard) -- no third element
