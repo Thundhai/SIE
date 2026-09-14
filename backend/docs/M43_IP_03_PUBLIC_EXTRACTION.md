@@ -140,6 +140,43 @@ every other deleted module (§3's six reclassified files included)
 confirms this was the *only* such migration-time dependency this
 milestone's deletions touched.
 
+**Second corrective note (post-push):** CI caught a second, structurally
+identical gap: `scripts/seed_dev_environment.py` — dev tooling, not a
+test — imported `incident`/`near_miss`/`observation`/`inspection`/
+`training`/`scenario_b_emerging_risk` from `tests/fixtures/
+enterprise_scenarios.py` at runtime, and that file was deleted along
+with the rest of the intelligence-calibration test suite (it existed to
+calibrate the now-private anomaly-detection engine). The first grep that
+caught the migration-0017 dependency above only covered
+`migrations/versions/`; it did not extend to `scripts/`, so this second
+non-test-suite runtime dependency slipped through. A follow-up
+repository-wide AST scan (every non-`.venv` `.py` file, not just
+migrations) found exactly these two hits and no others.
+
+Unlike `risk_area_ontology_seed.py`, this one is **not** an irreducible
+tension: the generic parts of `enterprise_scenarios.py` (the
+`RawSafetyEventPayload` builder functions — no scoring, no aliasing, no
+calibration logic) are genuinely public and were moved, not
+reconstructed, into a new `scripts/dev_seed_events.py`; the curated
+`scenario_b_emerging_risk()` dataset was **not** carried over, since its
+entire purpose was calibrating the anomaly-detection engine this
+repository can no longer compute — recreating that shape for a feature
+that no longer exists here would itself have been a kind of fake
+extraction. `scripts/seed_dev_environment.py` now seeds a small,
+honestly-described representative event set instead, and creates its
+demo risk assessment with `generate_candidates=False` (that endpoint's
+`generate_candidates=True` path now correctly 501s per §4 above, so the
+script no longer asks for a capability it knows this repository can't
+provide). Re-verified: a repository-wide AST scan for imports of any
+deleted module now returns zero hits outside the already-disclosed
+migration-0017 case; `tests/test_seed_dev_environment.py`'s two tests
+pass against a real, freshly migrated local PostgreSQL database
+(previously the idempotency test failed with exactly the reported
+`ModuleNotFoundError`); the seed script itself was run twice end-to-end
+against `alembic upgrade head`, producing 33 accepted events and one
+submitted/approved risk assessment on the first run and the expected
+"already exists" refusal on the second.
+
 ## 5. Database boundary — deferred, not silently resolved
 
 **No SQLAlchemy model was removed, and no migration was touched.** The
