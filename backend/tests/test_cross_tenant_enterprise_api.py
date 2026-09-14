@@ -21,8 +21,8 @@ from app.services.api_client_service import api_client_service
 from app.services.permissions import Permission
 from tests.conftest import dev_auth_headers
 from tests.intelligence_test_helpers import make_org
+from tests.intelligence_test_helpers import make_authorized_user as _make_authorized_user
 from tests.test_ingestion_api import create_org, make_membership, make_user
-from tests.test_predictions_api import _deployed_model, _make_authorized_user
 
 
 def _bearer(credential) -> dict:
@@ -52,18 +52,23 @@ def test_org_a_cannot_query_org_bs_analytics_and_vice_versa(client, db_session):
     assert a_reading_b.status_code == 403
     assert b_reading_a.status_code == 403
 
-    # Each organization can, of course, read its own.
+    # M43-IP-03: analytics computation itself was extracted to Commercial
+    # Core -- even a caller reading their *own* organization's analytics
+    # now gets 501, not 200. Authorization (checked above, before the
+    # 501) is unaffected; this only asserts that the tenant-isolation
+    # check still runs first and still rejects the cross-org attempt
+    # with 403, not a 501 that would mask it.
     assert (
         client.get(
             f"/api/v1/intelligence/analytics/summary?organization_id={org_a.id}", headers=dev_auth_headers(member_a.id)
         ).status_code
-        == 200
+        == 501
     )
     assert (
         client.get(
             f"/api/v1/intelligence/analytics/summary?organization_id={org_b.id}", headers=dev_auth_headers(member_b.id)
         ).status_code
-        == 200
+        == 501
     )
 
 
@@ -203,30 +208,19 @@ def test_org_a_cannot_rag_query_org_bs_private_knowledge_and_vice_versa(client, 
 
 
 # --- Predictions ---------------------------------------------------------------------------
-
-
-def test_org_a_cannot_retrieve_org_bs_predictions(client, db_session):
-    _org_a, site, _model, _as_of = _deployed_model(db_session, seed=901)
-    org_b = make_org(db_session, "Org B")
-    member_b = _make_authorized_user(db_session, org_b.id)
-
-    response = client.get(
-        f"/api/v1/intelligence/predictions/{site.id}?organization_id={org_b.id}", headers=dev_auth_headers(member_b.id)
-    )
-    assert response.status_code == 404  # the site itself isn't org_b's, so it doesn't even resolve
-
-
-def test_org_a_cannot_request_a_prediction_for_org_bs_site(client, db_session):
-    _org_a, site, _model, _as_of = _deployed_model(db_session, seed=902)
-    org_b = make_org(db_session, "Org B")
-    member_b = _make_authorized_user(db_session, org_b.id)
-
-    response = client.post(
-        f"/api/v1/intelligence/predictions?organization_id={org_b.id}",
-        json={"entity_id": str(site.id)},
-        headers=dev_auth_headers(member_b.id),
-    )
-    assert response.status_code == 404
+#
+# M43-IP-03: the two cross-tenant predictions tests that used to live
+# here (`test_org_a_cannot_retrieve_org_bs_predictions`,
+# `test_org_a_cannot_request_a_prediction_for_org_bs_site`) relied on
+# `_deployed_model()` (a fixture from the now-deleted, private
+# `tests/test_predictions_api.py`) to prove a *resolved* cross-org
+# resource still 404s before any prediction is computed. Predictive
+# computation itself was extracted to Commercial Core and every
+# predictions endpoint now returns 501 unconditionally (see
+# `app/api/v1/predictions.py`) -- there is no longer a computation for a
+# resolved-vs-unresolved resource to be isolated *from*, so this
+# specific tenant-isolation property is no longer meaningful to test
+# here. See docs/M43_IP_03_PUBLIC_EXTRACTION.md.
 
 
 # --- Ingestion (safety events) -----------------------------------------------------------

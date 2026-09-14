@@ -36,13 +36,13 @@ Pillow==12.3.0
 pytest==8.3.4
 httpx==0.28.1
 
-# Gradient Boosting comparison baseline only (see
-# app/predictions/gradient_boosting.py) — a deliberate, milestone-directed
-# exception to this project's otherwise-consistent no-heavy-ML-dependency
-# policy (every other model in app/predictions/ is hand-rolled). Not used
-# anywhere else in the codebase; the Logistic Regression baseline
-# (app/predictions/logistic_regression.py) remains hand-rolled, pure
-# Python. numpy/scipy are scikit-learn's own required dependencies.
-scikit-learn==1.9.0
+# M43-IP-03: scikit-learn and scipy were only needed by
+# app/predictions/gradient_boosting.py (the Gradient Boosting comparison
+# baseline) -- that entire package was extracted to the private
+# Commercial Core repository, and neither dependency is imported by
+# anything remaining in this repository. Removed rather than left as
+# dead weight. numpy stays: it's still directly imported by
+# tests/sentence_transformers_support.py and
+# tests/test_sentence_transformer_provider.py, and is sentence-transformers'
+# own required dependency for app/embeddings/provider.py (kept, generic).
 numpy==2.5.2
-scipy==1.18.1

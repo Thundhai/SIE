@@ -58,7 +58,6 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.intelligence.enterprise_intelligence_service import EnterpriseIntelligenceResult, compute_enterprise_intelligence
 from app.models.knowledge_document import KnowledgeDocument
 from app.models.risk_assessment import RiskAssessment, RiskAssessmentControl, RiskAssessmentFinding
 from app.models.risk_assessment_control_evidence import RiskAssessmentControlEvidence
@@ -91,7 +90,6 @@ __all__ = [
     "audit_assessment_event",
     "calculate_and_set_inherent_risk",
     "calculate_and_set_residual_risk",
-    "compute_intelligence_context",
     "create_finding_action_relationship",
     "delete_finding_action_relationship",
     "get_finding_action_relationship",
@@ -408,36 +406,6 @@ def supersede_previous_version_if_any(
             comment=f"Superseded by version {assessment.version} (id={assessment.id}).",
         )
     return previous
-
-
-def compute_intelligence_context(
-    db: Session,
-    *,
-    organization_id: uuid.UUID,
-    scope: RiskAssessmentScope,
-    site_id: uuid.UUID | None,
-    as_of: datetime,
-    window_days: int,
-) -> EnterpriseIntelligenceResult:
-    """Item 26: read-only, computed fresh on every read from the
-    assessment's own persisted `organization_id`/`site_id`/`as_of` —
-    never stored, never mutated merely because an assessment was
-    created (an identical `as_of` always reproduces the identical
-    result, since every Milestone 22-24 computation is itself
-    point-in-time-correct and deterministic — see
-    `app/intelligence/enterprise_intelligence_service.py`'s own
-    docstring). `LOCATION` scope computes at organization scope (item
-    5's own "no first-class Location entity yet" — see
-    `RiskAssessmentScope`'s own docstring)."""
-    compute_scope = "site" if scope == RiskAssessmentScope.SITE else "organization"
-    return compute_enterprise_intelligence(
-        db,
-        organization_id=organization_id,
-        scope=compute_scope,
-        site_id=site_id if scope == RiskAssessmentScope.SITE else None,
-        as_of=normalize_as_utc(as_of),
-        window_days=window_days,
-    )
 
 
 def is_rated_finding(finding: RiskAssessmentFinding) -> bool:

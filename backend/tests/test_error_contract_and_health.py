@@ -29,7 +29,7 @@ def test_404_carries_the_standardized_resource_not_found_code(client, db_session
 
 
 def test_403_carries_the_standardized_authorization_denied_code(client, db_session):
-    from tests.test_predictions_api import _make_authorized_user
+    from tests.intelligence_test_helpers import make_authorized_user as _make_authorized_user
 
     org_a = make_org(db_session, "Org A")
     org_b = make_org(db_session, "Org B")

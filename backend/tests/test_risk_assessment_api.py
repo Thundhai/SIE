@@ -445,131 +445,6 @@ def test_no_fabricated_percentage_reduction_field_exists(client, db_session):
     assert not any("percent" in key.lower() or "reduction" in key.lower() for key in finding)
 
 
-# --- Findings: candidate lifecycle (item 28) ----------------------------------------------
-
-
-def test_candidate_findings_are_generated_from_a_recurring_pattern(client, db_session):
-    org = make_org(db_session)
-    site = make_site(db_session, org.id)
-    manager = make_org_member(db_session, org.id, role=OrganizationRole.HSE_MANAGER)
-    headers = dev_auth_headers(manager.id)
-
-    for i in range(3):
-        event = make_safety_event(
-            organization_id=org.id, site_id=site.id, event_type="INCIDENT",
-            event_time=AS_OF - timedelta(days=i), ingestion_time=AS_OF - timedelta(days=i),
-            source_record_id=str(uuid.uuid4()),
-        )
-        db_session.add(event)
-    db_session.commit()
-
-    response = client.post(
-        f"{_URL}?organization_id={org.id}",
-        json=_create_body(scope="SITE", site_id=str(site.id), generate_candidates=True),
-        headers=headers,
-    )
-    assert response.status_code == 201
-    findings = response.json()["findings"]
-    assert len(findings) >= 1
-    candidate = findings[0]
-    assert candidate["candidate_status"] == "IDENTIFIED"
-    assert candidate["likelihood"] is None  # never an approved risk on its own
-    assert candidate["source"] == "INTELLIGENCE_PATTERN"
-    assert candidate["originating_calculation_version"] is not None
-    assert len(candidate["evidence"]) >= 1
-
-
-def test_a_human_can_accept_a_candidate_and_supply_a_rating(client, db_session):
-    org = make_org(db_session)
-    site = make_site(db_session, org.id)
-    manager = make_org_member(db_session, org.id, role=OrganizationRole.HSE_MANAGER)
-    headers = dev_auth_headers(manager.id)
-    for i in range(3):
-        event = make_safety_event(
-            organization_id=org.id, site_id=site.id, event_type="INCIDENT",
-            event_time=AS_OF - timedelta(days=i), ingestion_time=AS_OF - timedelta(days=i),
-            source_record_id=str(uuid.uuid4()),
-        )
-        db_session.add(event)
-    db_session.commit()
-    assessment = client.post(
-        f"{_URL}?organization_id={org.id}",
-        json=_create_body(scope="SITE", site_id=str(site.id), generate_candidates=True),
-        headers=headers,
-    ).json()
-    candidate = assessment["findings"][0]
-
-    response = client.patch(
-        f"{_URL}/{assessment['id']}/findings/{candidate['id']}?organization_id={org.id}",
-        json={"candidate_status": "ACCEPTED", "likelihood": 3, "consequence": 3},
-        headers=headers,
-    )
-    assert response.status_code == 200
-    updated = response.json()
-    assert updated["candidate_status"] == "ACCEPTED"
-    assert updated["inherent_risk_score"] == 9
-
-
-def test_a_candidate_cannot_be_rated_before_being_accepted(client, db_session):
-    """Item 27's own architectural boundary: candidate != approved risk."""
-    org = make_org(db_session)
-    site = make_site(db_session, org.id)
-    manager = make_org_member(db_session, org.id, role=OrganizationRole.HSE_MANAGER)
-    headers = dev_auth_headers(manager.id)
-    for i in range(3):
-        event = make_safety_event(
-            organization_id=org.id, site_id=site.id, event_type="INCIDENT",
-            event_time=AS_OF - timedelta(days=i), ingestion_time=AS_OF - timedelta(days=i),
-            source_record_id=str(uuid.uuid4()),
-        )
-        db_session.add(event)
-    db_session.commit()
-    assessment = client.post(
-        f"{_URL}?organization_id={org.id}",
-        json=_create_body(scope="SITE", site_id=str(site.id), generate_candidates=True),
-        headers=headers,
-    ).json()
-    candidate = assessment["findings"][0]
-    assert candidate["candidate_status"] == "IDENTIFIED"
-
-    response = client.patch(
-        f"{_URL}/{assessment['id']}/findings/{candidate['id']}?organization_id={org.id}",
-        json={"likelihood": 3, "consequence": 3},
-        headers=headers,
-    )
-    assert response.status_code == 422
-
-
-def test_a_candidate_can_be_rejected(client, db_session):
-    org = make_org(db_session)
-    site = make_site(db_session, org.id)
-    manager = make_org_member(db_session, org.id, role=OrganizationRole.HSE_MANAGER)
-    headers = dev_auth_headers(manager.id)
-    for i in range(3):
-        event = make_safety_event(
-            organization_id=org.id, site_id=site.id, event_type="INCIDENT",
-            event_time=AS_OF - timedelta(days=i), ingestion_time=AS_OF - timedelta(days=i),
-            source_record_id=str(uuid.uuid4()),
-        )
-        db_session.add(event)
-    db_session.commit()
-    assessment = client.post(
-        f"{_URL}?organization_id={org.id}",
-        json=_create_body(scope="SITE", site_id=str(site.id), generate_candidates=True),
-        headers=headers,
-    ).json()
-    candidate = assessment["findings"][0]
-
-    response = client.patch(
-        f"{_URL}/{assessment['id']}/findings/{candidate['id']}?organization_id={org.id}",
-        json={"candidate_status": "REJECTED"},
-        headers=headers,
-    )
-    assert response.status_code == 200
-    assert response.json()["candidate_status"] == "REJECTED"
-    assert response.json()["likelihood"] is None
-
-
 def test_evidence_linkage_to_an_event(client, db_session):
     org = make_org(db_session)
     manager = make_org_member(db_session, org.id, role=OrganizationRole.HSE_MANAGER)
@@ -644,68 +519,13 @@ def test_evidence_anomaly_type_rejects_a_reference_id(client, db_session):
 
 
 # --- Temporal (item 28) -----------------------------------------------------------------
-
-
-def test_future_events_are_excluded_from_candidate_generation(client, db_session):
-    org = make_org(db_session)
-    site = make_site(db_session, org.id)
-    manager = make_org_member(db_session, org.id, role=OrganizationRole.HSE_MANAGER)
-    headers = dev_auth_headers(manager.id)
-    for i in range(3):
-        event = make_safety_event(
-            organization_id=org.id, site_id=site.id, event_type="INCIDENT",
-            event_time=AS_OF - timedelta(days=i), ingestion_time=AS_OF - timedelta(days=i),
-            source_record_id=str(uuid.uuid4()),
-        )
-        db_session.add(event)
-    future_event = make_safety_event(
-        organization_id=org.id, site_id=site.id, event_type="INCIDENT",
-        event_time=AS_OF + timedelta(days=5), ingestion_time=AS_OF + timedelta(days=5),
-        source_record_id=str(uuid.uuid4()),
-    )
-    db_session.add(future_event)
-    db_session.commit()
-
-    assessment = client.post(
-        f"{_URL}?organization_id={org.id}",
-        json=_create_body(scope="SITE", site_id=str(site.id), generate_candidates=True),
-        headers=headers,
-    ).json()
-    all_event_ids = {
-        eid for f in assessment["findings"] for ev in f["evidence"] for eid in [ev["reference_id"]] if eid
-    }
-    assert str(future_event.id) not in all_event_ids
-
-
-def test_future_ingestion_is_excluded_from_candidate_generation(client, db_session):
-    org = make_org(db_session)
-    site = make_site(db_session, org.id)
-    manager = make_org_member(db_session, org.id, role=OrganizationRole.HSE_MANAGER)
-    headers = dev_auth_headers(manager.id)
-    for i in range(3):
-        event = make_safety_event(
-            organization_id=org.id, site_id=site.id, event_type="INCIDENT",
-            event_time=AS_OF - timedelta(days=i), ingestion_time=AS_OF - timedelta(days=i),
-            source_record_id=str(uuid.uuid4()),
-        )
-        db_session.add(event)
-    backdated = make_safety_event(
-        organization_id=org.id, site_id=site.id, event_type="INCIDENT",
-        event_time=AS_OF - timedelta(days=1), ingestion_time=AS_OF + timedelta(days=1),
-        source_record_id=str(uuid.uuid4()),
-    )
-    db_session.add(backdated)
-    db_session.commit()
-
-    assessment = client.post(
-        f"{_URL}?organization_id={org.id}",
-        json=_create_body(scope="SITE", site_id=str(site.id), generate_candidates=True),
-        headers=headers,
-    ).json()
-    all_event_ids = {
-        eid for f in assessment["findings"] for ev in f["evidence"] for eid in [ev["reference_id"]] if eid
-    }
-    assert str(backdated.id) not in all_event_ids
+#
+# M43-IP-03: `test_future_events_are_excluded_from_candidate_generation`
+# and `test_future_ingestion_is_excluded_from_candidate_generation`
+# removed -- both required `generate_candidates=True` to actually
+# produce candidates, which now always 501s (the private candidate-
+# generation engine was extracted to Commercial Core). See
+# docs/M43_IP_03_PUBLIC_EXTRACTION.md.
 
 
 def test_actions_created_after_as_of_are_excluded_from_intelligence_context(client, db_session):
@@ -1024,11 +844,9 @@ def test_supersede_writes_an_audit_log_entry_for_the_new_version(client, db_sess
     assert any(e.action == "RISK_ASSESSMENT_CREATED" for e in entries)
 
 
-def test_risk_score_component_is_present_and_untouched_by_this_milestone(client, db_session):
-    """Item 1: enterprise-risk-v1 is an unmodified analytical input,
-    exposed read-only inside intelligence_context."""
-    org = make_org(db_session)
-    manager = make_org_member(db_session, org.id, role=OrganizationRole.HSE_MANAGER)
-    created = _create(client, dev_auth_headers(manager.id), org.id)
-    assert created["intelligence_context"]["deterministic_risk"]["version"] == "enterprise-risk-v1"
-    assert created["intelligence_context"]["calculation_versions"]["risk_score"] == "enterprise-risk-v1"
+
+# M43-IP-03: `test_risk_score_component_is_present_and_untouched_by_this_milestone`
+# removed -- it asserted a specific computed value inside
+# `intelligence_context`, which is always `None` now that the
+# enterprise-intelligence engine has been extracted to Commercial Core.
+# See docs/M43_IP_03_PUBLIC_EXTRACTION.md.

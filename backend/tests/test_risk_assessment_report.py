@@ -15,9 +15,8 @@ import pytest
 from sqlalchemy import event, select
 
 from app.models.audit_log import AuditLog  # noqa: F401 (kept for parity with sibling test files)
-from app.models.ontology_concept import OntologyConcept
+from app.models.ontology_concept import OntologyConcept, OntologyConceptStatus
 from app.models.safety_action import SafetyAction
-from app.services import ontology_governance_service as ogs
 from app.services.api_client_service import api_client_service
 from app.services.permissions import OrganizationRole, Permission
 from tests.conftest import dev_auth_headers, engine as _test_engine
@@ -577,11 +576,26 @@ def test_deprecated_ontology_concept_still_correctly_represented(client, db_sess
     admin = make_platform_admin_user(db_session)
     manager = make_org_member(db_session, org.id, role=OrganizationRole.HSE_MANAGER)
     headers = dev_auth_headers(manager.id)
-    concept = ogs.propose_concept(
-        db_session, layer="observation_topic", parent_domain="OBSERVATION", concept_key="M28_DEPRECATION_TEST",
-        definition="d", justification="j", acting_user_id=admin.id, is_risk_area_eligible=True,
+    # M43-IP-03: ontology_governance_service (propose/approve/deprecate)
+    # was extracted to Commercial Core; this fixture builds the row
+    # directly at the state the test needs instead -- see
+    # tests/intelligence_test_helpers.py::make_org_ontology_concept for
+    # the identical, shared pattern.
+    concept = OntologyConcept(
+        organization_id=None,
+        layer="observation_topic",
+        parent_domain="OBSERVATION",
+        concept_key="M28_DEPRECATION_TEST",
+        definition="d",
+        justification="j",
+        is_risk_area_eligible=True,
+        status=OntologyConceptStatus.APPROVED,
+        proposed_by_user_id=admin.id,
+        reviewer_user_id=admin.id,
+        ontology_version=1,
     )
-    ogs.approve_concept(db_session, concept_id=concept.id, acting_user_id=admin.id, ontology_version=1)
+    db_session.add(concept)
+    db_session.flush()
 
     assessment = _create(client, headers, org.id)
     finding = client.post(
@@ -591,7 +605,12 @@ def test_deprecated_ontology_concept_still_correctly_represented(client, db_sess
     )
     assert finding.status_code == 201
 
-    ogs.deprecate_concept(db_session, concept_id=concept.id, acting_user_id=admin.id, reason="No longer needed.")
+    # commit() (not flush()) -- the read that must observe this must cross
+    # into the app's own per-request session; see the identical note in
+    # tests/test_risk_assessment_ontology_taxonomy.py.
+    concept.status = OntologyConceptStatus.DEPRECATED
+    db_session.add(concept)
+    db_session.commit()
 
     report = _report(client, headers, org.id, assessment["id"])
     areas = {a["concept_key"]: a for a in report["risk_areas"]}

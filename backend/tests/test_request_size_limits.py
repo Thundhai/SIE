@@ -5,7 +5,7 @@ API v0.1, item 14, and abuse testing (item 40's "oversized request",
 from app.core.config import settings
 from tests.conftest import dev_auth_headers
 from tests.intelligence_test_helpers import make_org
-from tests.test_predictions_api import _make_authorized_user
+from tests.intelligence_test_helpers import make_authorized_user as _make_authorized_user
 
 
 def test_oversized_json_body_is_rejected_before_being_parsed(client, db_session, monkeypatch):
