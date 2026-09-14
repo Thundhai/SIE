@@ -101,15 +101,44 @@ no scoring, no taxonomy logic. It is a tenant-isolation and
 governance-*state* gate over a table (`OntologyConcept`) that stays public
 in this milestone's own current-DB-state (§5). **Reclassified PUBLIC.**
 Kept, unmodified in content. `risk_matrix.py` and `reporting.py` remain
-PUBLIC as M43-IP-02 already established. `candidate_generation.py` and
-`risk_area_ontology_seed.py` (proprietary risk-area taxonomy seed data)
-are deleted — both confirmed PRIVATE, and both already exist, working,
-in the Commercial Core repository per M43-IP-01. `app/services/risk_assessment_service.py`
+PUBLIC as M43-IP-02 already established. `candidate_generation.py` is
+deleted — confirmed PRIVATE (calls the private
+`compute_enterprise_intelligence`), and already exists, working, in the
+Commercial Core repository per M43-IP-01. `app/services/risk_assessment_service.py`
 is **not** deleted (it is overwhelmingly generic assessment/finding
 lifecycle, transaction, and audit-wiring code) — only its one function
 that called the private intelligence engine (`compute_intelligence_context`,
 which called `app.intelligence.enterprise_intelligence_service.compute_enterprise_intelligence`)
 was removed, along with its import.
+
+**Corrective note (post-push):** this milestone's first push also
+deleted `app/risk_assessment/risk_area_ontology_seed.py`, on the same
+reasoning as `candidate_generation.py` (proprietary risk-area taxonomy
+data, IP-classification rule 2, already vendored into Commercial Core).
+That was wrong in a way the migration-map re-verification in §2 should
+have caught and didn't: **Alembic migration `0017` (`migrations/versions/
+0017_sie_milestone_25a_governed_risk_area_taxonomy.py`) imports
+`RISK_AREA_SEED_CONCEPTS`/`RISK_AREA_SEED_ONTOLOGY_VERSION` from this
+module directly**, to seed/backfill `OntologyConcept` rows and existing
+`risk_assessment_findings.risk_area_concept_id` values during `alembic
+upgrade head` — a hard, permanent dependency of Public SIE's own
+migration chain, not merely of the deleted `candidate_generation.py` or
+of test fixtures. Deleting it broke `alembic upgrade head` for any fresh
+database (caught by CI). **Fixed:** the file is restored verbatim (`git
+show <pre-milestone-SHA>:backend/app/risk_assessment/risk_area_ontology_seed.py`),
+not reconstructed — its exact original 11-concept definitions/justifications
+matter for migration-history correctness, and a plausible-looking
+reconstruction (as a well-intentioned external bot's suggested fix did)
+would have been byte-different taxonomy data baked permanently into a
+past migration's applied history. This is the one file in this
+milestone's scope that is genuinely both (a) IP-classification-rule-2
+private *and* (b) a hard runtime dependency of Public SIE's own schema
+history — an irreducible tension, not an oversight to "resolve" further:
+it stays in Public SIE so migrations remain runnable, and this is that
+disclosure. A repository-wide grep of `migrations/versions/*.py` against
+every other deleted module (§3's six reclassified files included)
+confirms this was the *only* such migration-time dependency this
+milestone's deletions touched.
 
 ## 5. Database boundary — deferred, not silently resolved
 
