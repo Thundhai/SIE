@@ -188,6 +188,20 @@ OPENAPI_TAGS = [
             "rule (`intelligence:decision_write` to create/govern, `intelligence:read` to read)."
         ),
     },
+    {
+        "name": "governing-standards",
+        "description": (
+            "Organizational Standards & Governance Foundation — SIE Milestone 43A. Distinguishes "
+            "AVAILABLE (the `GoverningStandard` catalogue — GLOBAL entries such as ISO 45001/OSHA/IOGP, "
+            "plus an organization's own standards) from SELECTED (`OrganizationGoverningStandard`, an "
+            "append-only SELECTED/RETIRED event log — an organization's explicit governing set, never "
+            "inferred from mere availability). Does not reason about APPLICABILITY to any region, "
+            "industry, site, activity, or hazard — that remains a later milestone's job. An organization "
+            "with no selected standards is a valid state; nothing here recommends, infers, or "
+            "auto-selects a standard on an organization's behalf (`standards:read` to browse/read, "
+            "`standards:manage` to add an organization-specific standard or select/retire one)."
+        ),
+    },
 ]
 
 _MACHINE_BEARER_DESCRIPTION = (

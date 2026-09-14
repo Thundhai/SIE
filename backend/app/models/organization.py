@@ -42,6 +42,18 @@ class Organization(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         back_populates="organization",
         cascade="all, delete-orphan",
     )
+    # SIE Milestone 43A: this organization's own standards-catalogue
+    # entries (ORGANIZATION-scoped `GoverningStandard` rows only --
+    # GLOBAL catalogue entries have no `organization_id` to relate
+    # through) and its append-only selection/retirement event log.
+    governing_standards: Mapped[list["GoverningStandard"]] = relationship(  # noqa: F821
+        cascade="all, delete-orphan",
+        overlaps="organization",
+    )
+    governing_standard_selections: Mapped[list["OrganizationGoverningStandard"]] = relationship(  # noqa: F821
+        cascade="all, delete-orphan",
+        overlaps="organization",
+    )
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<Organization id={self.id!s} name={self.name!r}>"

@@ -194,6 +194,16 @@ class AuditAction:
     ORGANIZATIONAL_MEMORY_CREATED = "ORGANIZATIONAL_MEMORY_CREATED"
     ORGANIZATIONAL_MEMORY_GOVERNANCE_DECISION_RECORDED = "ORGANIZATIONAL_MEMORY_GOVERNANCE_DECISION_RECORDED"
 
+    # SIE Milestone 43A: Organizational Standards & Governance Foundation.
+    # GOVERNING_STANDARD_CREATED covers an organization introducing its
+    # own standard into the catalogue (spec §3); the SELECTED/RETIRED
+    # actions cover the append-only selection event log (spec §12: "SIE
+    # should be able to determine Organization X selected Standard Y at
+    # time Z through actor A, and similarly when retired").
+    GOVERNING_STANDARD_CREATED = "GOVERNING_STANDARD_CREATED"
+    GOVERNING_STANDARD_SELECTED = "GOVERNING_STANDARD_SELECTED"
+    GOVERNING_STANDARD_RETIRED = "GOVERNING_STANDARD_RETIRED"
+
 
 class AuditService:
     def log(

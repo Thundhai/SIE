@@ -7,6 +7,7 @@ from app.api.v1 import (
     data_ingestion,
     data_sources,
     events,
+    governing_standards,
     ingestion,
     intelligence,
     intelligence_decisions,
@@ -41,6 +42,7 @@ api_router.include_router(intelligence_decisions.router)
 api_router.include_router(intelligence_outcomes.router)
 api_router.include_router(intelligence_learning_candidates.router)
 api_router.include_router(organizational_memory.router)
+api_router.include_router(governing_standards.router)
 api_router.include_router(events.router)
 api_router.include_router(actions.router)
 api_router.include_router(predictions.router)

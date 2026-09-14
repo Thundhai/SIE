@@ -3922,3 +3922,98 @@ def test_organizational_memory_composite_foreign_key_rejects_cross_tenant_rows_a
             conn.rollback()
     finally:
         engine.dispose()
+
+
+@requires_postgres
+def test_organizational_standards_governance_migration_downgrade_then_reupgrade_round_trips_cleanly(monkeypatch):
+    """SIE Milestone 43A: Organizational Standards & Governance Foundation
+    (migration 0030). Downgrading to 0029 must remove `governing_standards`/
+    `organization_governing_standards` entirely, with `organizational_memories`/
+    `organizations`/`knowledge_sources` themselves (and their own native enum
+    types) untouched either way. Re-upgrading to head must recreate both
+    tables and their four native enum types identically."""
+    engine = _fresh_schema_engine()
+    try:
+        monkeypatch.setattr("app.core.config.settings.DATABASE_URL", PG_TEST_DATABASE_URL)
+        config = _alembic_config()
+
+        command.upgrade(config, "head")
+        command.downgrade(config, "0029")
+
+        with engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version == "0029"
+
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+                ).all()
+            }
+            assert "governing_standards" not in tables
+            assert "organization_governing_standards" not in tables
+            # Untouched by 0030's downgrade.
+            assert "organizational_memories" in tables
+            assert "knowledge_sources" in tables
+            assert "organizations" in tables
+
+            enum_types = {row[0] for row in conn.execute(text("SELECT typname FROM pg_type WHERE typtype = 'e'")).all()}
+            for name in (
+                "governing_standard_scope_type", "governing_standard_type",
+                "governing_standard_verification_status", "organization_governing_standard_status",
+            ):
+                assert name not in enum_types
+            # Not dropped/redefined by this migration's downgrade.
+            assert "knowledge_scope_type" in enum_types
+            assert "organizational_memory_type" in enum_types
+
+        command.upgrade(config, "head")
+
+        with engine.connect() as conn:
+            version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+            assert version == _current_head_revision(config)
+
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+                ).all()
+            }
+            assert "governing_standards" in tables
+            assert "organization_governing_standards" in tables
+
+            standard_columns = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = 'governing_standards'"
+                    )
+                ).all()
+            }
+            assert "scope_type" in standard_columns
+            assert "organization_id" in standard_columns
+            assert "standard_type" in standard_columns
+            assert "regions" in standard_columns
+            assert "industry_sectors" in standard_columns
+            assert "verification_status" in standard_columns
+            assert "knowledge_source_id" in standard_columns
+            assert "is_active" in standard_columns
+
+            selection_columns = {
+                row[0]
+                for row in conn.execute(
+                    text(
+                        "SELECT column_name FROM information_schema.columns "
+                        "WHERE table_schema = 'public' AND table_name = 'organization_governing_standards'"
+                    )
+                ).all()
+            }
+            assert "organization_id" in selection_columns
+            assert "standard_id" in selection_columns
+            assert "status" in selection_columns
+            assert "effective_date" in selection_columns
+            assert "retirement_date" in selection_columns
+            assert "decided_at" in selection_columns
+    finally:
+        engine.dispose()
