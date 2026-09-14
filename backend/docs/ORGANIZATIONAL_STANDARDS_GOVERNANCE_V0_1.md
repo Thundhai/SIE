@@ -93,6 +93,73 @@ as "applies everywhere," Rule 2), `version`, `publication_date`,
 `REJECTED`/`EXPIRED`/`SUPERSEDED`), `knowledge_source_id` (optional
 reference to the underlying `KnowledgeSource`, §5), and `is_active`.
 
+### 4.1 Populating the GLOBAL catalogue (M43A pre-merge audit correction, Finding 3 — operator action required)
+
+**This milestone ships zero GLOBAL catalogue entries.** No migration, no
+startup hook, and no script in this codebase calls
+`seed_global_catalogue()` automatically. Deliberately so — building a
+platform-administration UI/API surface to manage the catalogue was
+explicitly out of scope (§8, §16: "M43A does not need a
+platform-administration surface to satisfy its own acceptance test").
+But the practical consequence must be stated plainly, not left implicit:
+in every environment — dev, staging, production — `GET /governing-standards`
+returns **only** whatever ORGANIZATION-scoped standards individual
+organizations have created for themselves, until a platform operator
+explicitly populates the GLOBAL catalogue. Organizations cannot
+meaningfully select ISO 45001, OSHA, IOGP, or any other reference
+standard until that happens — "select" only ever operates over what
+`GET /governing-standards` (AVAILABLE) already returns.
+
+**Supported invocation path.** `seed_global_catalogue()` is a plain,
+idempotent (matched by `name`, case-sensitive) Python function — not an
+API endpoint, not a CLI command. A platform operator (or deployment
+tooling, e.g. a release-time job) invokes it directly against a real
+database session:
+
+```python
+from app.core.database import SessionLocal  # the app's own session factory
+from app.services.governing_standard_service import seed_global_catalogue
+
+GLOBAL_CATALOGUE_ENTRIES = [
+    {
+        "name": "ISO 45001",
+        "short_description": "Occupational health and safety management systems — requirements with guidance for use.",
+        "issuing_organization": "International Organization for Standardization",
+        "standard_type": "INTERNATIONAL_STANDARD",
+        "regions": [],  # global in scope; leave empty rather than guessing a jurisdiction list
+        "industry_sectors": [],
+        "verification_status": "VERIFIED",
+    },
+    {
+        "name": "OSHA 1910",
+        "short_description": "Occupational Safety and Health Standards for General Industry.",
+        "issuing_organization": "U.S. Occupational Safety and Health Administration",
+        "standard_type": "REGULATORY",
+        "regions": ["US"],
+        "industry_sectors": [],
+        "verification_status": "VERIFIED",
+    },
+    # ... additional entries, per the platform operator's own governance
+    # decision about what belongs in the shared knowledge universe —
+    # this list is illustrative, never hardcoded into application code.
+]
+
+with SessionLocal() as db:
+    created = seed_global_catalogue(db, GLOBAL_CATALOGUE_ENTRIES)
+    db.commit()
+    print(f"Added {len(created)} new GLOBAL catalogue entries.")
+```
+
+Re-running the same call with the same (or a superset of) entries is
+always safe — already-present names are skipped, never duplicated
+(`tests/test_governing_standard_service.py::
+test_seed_global_catalogue_is_idempotent_by_name` proves this). There is
+no deadline by which this must run relative to the migration — the
+catalogue and selection tables both function correctly (structurally)
+whether the catalogue is empty or populated; it is a product-readiness
+requirement, not a technical one, that this happen before organizations
+are asked to select their governing standards.
+
 ## 5. Organization-specific standards integrate with existing knowledge architecture
 
 ```
@@ -164,6 +231,39 @@ genuine, distinct governance action (re-adoption), not a duplicate.
 retire` — a new append-only `RETIRED` event, never a literal row
 deletion (mirrors every other governance-decision write path in this
 codebase: there is no `PUT`/`PATCH`/`DELETE` on this table).
+
+**Concurrency (M43A pre-merge audit correction, Finding 1).** Two
+concurrent first-time selection (or retirement) requests for the same
+`(organization_id, standard_id)` pair are serialized by a
+transaction-scoped PostgreSQL advisory lock (`pg_advisory_xact_lock`,
+keyed by `hashtext(organization_id)`/`hashtext(standard_id)`), acquired
+in `_lock_standard_selection()` at the start of both
+`select_governing_standard()` and `retire_governing_standard()` and
+released automatically at the enclosing transaction's commit or
+rollback. A plain database `UNIQUE(organization_id, standard_id)`
+constraint would have been the simpler fix, but is *incorrect* here —
+this table is append-only and a standard may legitimately be selected,
+retired, and re-selected many times, so a unique constraint would wrongly
+reject that legitimate history. The lock guarantees the "duplicate
+selection is prevented" property above actually holds under concurrent
+access, not merely under sequential single-request access — see
+`tests/test_governing_standard_concurrency.py` (PostgreSQL-only,
+genuine concurrent threads) for the regression tests, including a
+before/after demonstration that the race is real and reliably
+reproducible without the lock.
+
+**Inactive standards cannot be newly selected (M43A pre-merge audit
+correction, Finding 4 — explicit policy).** If a catalogue entry's own
+`is_active` is `False`, `select_governing_standard()` rejects any
+attempt to create a *new* `SELECTED` event for it (422) — whether a
+first-time selection or a re-selection after retirement. This does
+**not** retroactively affect an *existing* selection: deactivating a
+catalogue entry never automatically retires an organization's prior
+selection of it (that stays exactly as SELECTED as it was, fully
+queryable, and continues to appear in the Active Governing Set) — only
+an explicit `retire_governing_standard()` call ever changes that. The
+rule is scoped precisely to "no *new* selection event," never "no
+selection may exist."
 
 ## 7. The Active Governing Set
 

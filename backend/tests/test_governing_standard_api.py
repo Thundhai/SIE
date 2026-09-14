@@ -349,3 +349,136 @@ def test_organization_a_cannot_access_organization_bs_own_standard_document(clie
     # ...nor does it leak into org A's own available-standards listing.
     list_response = client.get(f"{_STANDARDS_URL}?organization_id={org_a.id}", headers=dev_auth_headers(member_a.id))
     assert b_standard.name not in {item["name"] for item in list_response.json()["items"]}
+
+
+# --- Idempotency-Key (M43A pre-merge audit correction, Finding 2) ----------------------------
+# Mirrors tests/test_organizational_memory_api.py's own established pair
+# per write endpoint: a duplicate Idempotency-Key with the *same* request
+# body must never repeat the underlying write (same response, same
+# resource, replayed); the *same* key with a *materially different*
+# request body must 409 (IDEMPOTENCY_CONFLICT), never silently apply
+# either request. All three of this milestone's write endpoints wire up
+# the identical `check_and_replay()`/`store_response()` machinery those
+# tests already prove correct elsewhere -- these tests prove it actually
+# works here too, not merely that it was wired up the same way.
+
+
+def test_duplicate_idempotency_key_standard_creation_does_not_create_a_duplicate(client, db_session):
+    org = make_org(db_session)
+    manager = make_org_member(db_session, org.id, role="HSE_MANAGER")
+    idem_headers = {**dev_auth_headers(manager.id), "Idempotency-Key": "standard-create-key-1"}
+    body = {
+        "name": "ABC Energy HSE Standard 2026",
+        "short_description": "ABC Energy's own internal HSE standard.",
+        "issuing_organization": "ABC Energy",
+        "standard_type": "ORGANIZATION_SPECIFIC",
+    }
+
+    first = client.post(f"{_STANDARDS_URL}?organization_id={org.id}", json=body, headers=idem_headers)
+    second = client.post(f"{_STANDARDS_URL}?organization_id={org.id}", json=body, headers=idem_headers)
+    assert first.status_code == 201, first.text
+    assert second.status_code == 201, second.text
+    assert first.json()["id"] == second.json()["id"]
+
+    listing = client.get(f"{_STANDARDS_URL}?organization_id={org.id}", headers=dev_auth_headers(manager.id))
+    assert len([i for i in listing.json()["items"] if i["name"] == body["name"]]) == 1
+
+
+def test_same_idempotency_key_with_a_different_standard_creation_body_conflicts(client, db_session):
+    org = make_org(db_session)
+    manager = make_org_member(db_session, org.id, role="HSE_MANAGER")
+    idem_headers = {**dev_auth_headers(manager.id), "Idempotency-Key": "standard-create-key-2"}
+    base_body = {
+        "short_description": "desc",
+        "issuing_organization": "ABC Energy",
+        "standard_type": "ORGANIZATION_SPECIFIC",
+    }
+
+    first = client.post(
+        f"{_STANDARDS_URL}?organization_id={org.id}", json={**base_body, "name": "Standard One"}, headers=idem_headers
+    )
+    assert first.status_code == 201, first.text
+    second = client.post(
+        f"{_STANDARDS_URL}?organization_id={org.id}", json={**base_body, "name": "Standard Two"}, headers=idem_headers
+    )
+    assert second.status_code == 409
+
+
+def test_duplicate_idempotency_key_selection_does_not_create_a_duplicate(client, db_session):
+    org = make_org(db_session)
+    manager = make_org_member(db_session, org.id, role="HSE_MANAGER")
+    standard = _make_global_standard(db_session)
+    idem_headers = {**dev_auth_headers(manager.id), "Idempotency-Key": "select-key-1"}
+    body = {"standard_id": str(standard.id), "rationale": "Adopted per contractual requirement."}
+
+    first = client.post(f"{_SELECTIONS_URL}?organization_id={org.id}", json=body, headers=idem_headers)
+    second = client.post(f"{_SELECTIONS_URL}?organization_id={org.id}", json=body, headers=idem_headers)
+    assert first.status_code == 201, first.text
+    assert second.status_code == 201, second.text
+    assert first.json()["id"] == second.json()["id"]
+
+    history = client.get(f"{_SELECTIONS_URL}/history?organization_id={org.id}", headers=dev_auth_headers(manager.id))
+    assert history.json()["total"] == 1
+
+
+def test_same_idempotency_key_with_a_different_selection_body_conflicts(client, db_session):
+    org = make_org(db_session)
+    manager = make_org_member(db_session, org.id, role="HSE_MANAGER")
+    iso = _make_global_standard(db_session, name="ISO 45001")
+    osha = _make_global_standard(db_session, name="OSHA 1910")
+    idem_headers = {**dev_auth_headers(manager.id), "Idempotency-Key": "select-key-2"}
+
+    first = client.post(
+        f"{_SELECTIONS_URL}?organization_id={org.id}", json={"standard_id": str(iso.id)}, headers=idem_headers
+    )
+    assert first.status_code == 201, first.text
+    second = client.post(
+        f"{_SELECTIONS_URL}?organization_id={org.id}", json={"standard_id": str(osha.id)}, headers=idem_headers
+    )
+    assert second.status_code == 409
+
+
+def test_duplicate_idempotency_key_retirement_does_not_create_a_duplicate(client, db_session):
+    org = make_org(db_session)
+    manager = make_org_member(db_session, org.id, role="HSE_MANAGER")
+    standard = _make_global_standard(db_session)
+    client.post(
+        f"{_SELECTIONS_URL}?organization_id={org.id}",
+        json={"standard_id": str(standard.id)},
+        headers=dev_auth_headers(manager.id),
+    )
+    idem_headers = {**dev_auth_headers(manager.id), "Idempotency-Key": "retire-key-1"}
+    body = {"rationale": "No longer applicable."}
+
+    first = client.post(f"{_SELECTIONS_URL}/{standard.id}/retire?organization_id={org.id}", json=body, headers=idem_headers)
+    second = client.post(f"{_SELECTIONS_URL}/{standard.id}/retire?organization_id={org.id}", json=body, headers=idem_headers)
+    assert first.status_code == 201, first.text
+    assert second.status_code == 201, second.text
+    assert first.json()["id"] == second.json()["id"]
+
+    history = client.get(f"{_SELECTIONS_URL}/history?organization_id={org.id}", headers=dev_auth_headers(manager.id))
+    retired = [h for h in history.json()["items"] if h["status"] == "RETIRED"]
+    assert len(retired) == 1
+
+
+def test_same_idempotency_key_with_a_different_retirement_body_conflicts(client, db_session):
+    org = make_org(db_session)
+    manager = make_org_member(db_session, org.id, role="HSE_MANAGER")
+    iso = _make_global_standard(db_session, name="ISO 45001")
+    osha = _make_global_standard(db_session, name="OSHA 1910")
+    for standard in (iso, osha):
+        client.post(
+            f"{_SELECTIONS_URL}?organization_id={org.id}",
+            json={"standard_id": str(standard.id)},
+            headers=dev_auth_headers(manager.id),
+        )
+    idem_headers = {**dev_auth_headers(manager.id), "Idempotency-Key": "retire-key-2"}
+
+    # The two requests target different standard_id path parameters --
+    # a materially different request under the identical key, exactly
+    # mirroring `_ENDPOINT_RETIRE_STANDARD`'s own request_hash, which
+    # folds `standard_id` into the hash precisely so this is detected.
+    first = client.post(f"{_SELECTIONS_URL}/{iso.id}/retire?organization_id={org.id}", json={}, headers=idem_headers)
+    assert first.status_code == 201, first.text
+    second = client.post(f"{_SELECTIONS_URL}/{osha.id}/retire?organization_id={org.id}", json={}, headers=idem_headers)
+    assert second.status_code == 409

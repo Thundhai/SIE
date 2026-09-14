@@ -67,7 +67,7 @@ from datetime import date, datetime
 from typing import Iterator
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.enums import ScopeType, VerificationStatus
@@ -277,6 +277,53 @@ def resolve_current_selection(
     ).scalar_one_or_none()
 
 
+def _lock_standard_selection(db: Session, *, organization_id: uuid.UUID, standard_id: uuid.UUID) -> None:
+    """Serializes the check-then-insert race in `select_governing_standard()`/
+    `retire_governing_standard()` (audit finding, M43A pre-merge review):
+    two concurrent first-time selection requests for the same
+    `(organization_id, standard_id)` pair can both read "no current
+    selection" under READ COMMITTED before either commits, producing two
+    redundant `SELECTED` events. A plain DB unique constraint cannot fix
+    this (unlike `IntelligenceLearningCandidate`'s own `UNIQUE(organization_id,
+    outcome_id)` precedent) because this table is deliberately append-only
+    and a standard may legitimately be selected, retired, and re-selected
+    many times -- a unique constraint on `(organization_id, standard_id)`
+    would incorrectly reject that legitimate history.
+
+    Uses a **transaction-scoped PostgreSQL advisory lock**
+    (`pg_advisory_xact_lock`) instead: acquired here, automatically
+    released at the enclosing transaction's `COMMIT`/`ROLLBACK` (this
+    function's caller always runs inside `selection_mutation_transaction()`),
+    never held past that boundary, and requires no schema change, no new
+    table, and no incorrect uniqueness constraint. `hashtext()` folds
+    both UUIDs into the two `int4` lock keys `pg_advisory_xact_lock(key1,
+    key2)` takes -- the standard, well-documented PostgreSQL pattern for a
+    composite advisory-lock key derived from string/UUID identifiers,
+    rather than inventing a single bigint from raw UUID bytes. A second
+    concurrent caller for the *same* pair blocks here until the first
+    transaction commits or rolls back, then proceeds with an
+    up-to-date `resolve_current_selection()` read -- exactly the
+    serialization the check-then-insert needs. A caller for a
+    *different* `(organization_id, standard_id)` pair is never blocked
+    (a different hash, a different lock) -- this is not a table-wide or
+    organization-wide lock.
+
+    **No-op on any non-PostgreSQL backend** (e.g. the SQLite `db_session`
+    fixture every non-Postgres test in this suite uses) -- advisory locks
+    are a PostgreSQL-specific mechanism, and a single-threaded SQLite test
+    session has no concurrent writer to serialize against in the first
+    place. Tenant isolation is unaffected either way: the lock key is
+    scoped to one `(organization_id, standard_id)` pair, so it can never
+    block, leak into, or otherwise affect a different organization's
+    request."""
+    bind = db.get_bind()
+    if bind.dialect.name != "postgresql":
+        return
+    db.execute(
+        select(func.pg_advisory_xact_lock(func.hashtext(str(organization_id)), func.hashtext(str(standard_id))))
+    )
+
+
 def select_governing_standard(
     db: Session,
     *,
@@ -301,12 +348,35 @@ def select_governing_standard(
     before any row is touched) -- an organization may only select a
     GLOBAL standard or its own ORGANIZATION-scoped one, never another
     organization's own standard (spec §8's own tenant-isolation
-    requirement)."""
-    resolve_governing_standard_reference(db, organization_id=organization_id, standard_id=standard_id)
+    requirement). `_lock_standard_selection()` then serializes the
+    check-then-insert below against any other concurrent writer for this
+    exact pair (see that function's own docstring).
+
+    **Inactive standards cannot be newly selected** (M43A pre-merge
+    review, Finding 4 -- explicit policy): if the resolved current state
+    is not already SELECTED (i.e. this call is about to create a *new*
+    SELECTED event, whether a first-time selection or a re-selection
+    after retirement) and the catalogue entry's own `is_active` is
+    `False`, this is rejected with 422. A repeat call while a standard is
+    *already* currently SELECTED still returns the existing event
+    unchanged regardless of `is_active` -- that is not a new selection,
+    it is the same idempotent no-op `created=False` path already
+    documented above, and an existing selection must never be silently
+    invalidated merely because the catalogue entry was later deactivated
+    (that is a separate, always-explicit retirement action -- see
+    `retire_governing_standard()`)."""
+    standard = resolve_governing_standard_reference(db, organization_id=organization_id, standard_id=standard_id)
+    _lock_standard_selection(db, organization_id=organization_id, standard_id=standard_id)
 
     current = resolve_current_selection(db, organization_id=organization_id, standard_id=standard_id)
     if current is not None and current.status == OrganizationGoverningStandardStatus.SELECTED:
         return current, False
+
+    if not standard.is_active:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="This standard is not currently active in the catalogue and cannot be newly selected.",
+        )
 
     selection = OrganizationGoverningStandard(
         organization_id=organization_id,
@@ -341,8 +411,13 @@ def retire_governing_standard(
     literal row deletion -- mirrors every other governance-decision
     write path in this codebase). 422 if this standard is not currently
     SELECTED (never selected at all, or already RETIRED) -- there is
-    nothing to retire."""
+    nothing to retire. `_lock_standard_selection()` serializes this
+    check-then-insert against `select_governing_standard()`'s own,
+    against the exact same lock key -- a concurrent select and retire
+    for the same pair are mutually excluded too, not only two
+    concurrent selects (see that function's own docstring)."""
     resolve_governing_standard_reference(db, organization_id=organization_id, standard_id=standard_id)
+    _lock_standard_selection(db, organization_id=organization_id, standard_id=standard_id)
 
     current = resolve_current_selection(db, organization_id=organization_id, standard_id=standard_id)
     if current is None or current.status != OrganizationGoverningStandardStatus.SELECTED:

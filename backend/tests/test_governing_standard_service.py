@@ -425,6 +425,122 @@ def test_selecting_another_organizations_own_standard_is_rejected(db_session):
     assert exc_info.value.status_code == 404
 
 
+# --- Inactive-standard selection policy (M43A pre-merge audit correction, Finding 4) ---------
+# Explicit policy: inactive governing standards cannot be *newly*
+# selected by an organization. An existing selection is never
+# automatically retired merely because the catalogue standard later
+# becomes inactive -- retirement remains an explicit, separate action
+# through retire_governing_standard() only.
+
+
+def test_new_selection_of_an_inactive_standard_is_rejected(db_session):
+    org = make_org(db_session)
+    standard = _make_global_standard(db_session, is_active=False)
+
+    with pytest.raises(HTTPException) as exc_info:
+        select_governing_standard(
+            db_session, organization_id=org.id, standard_id=standard.id, effective_date=None, rationale=None,
+            configured_by_user_id=None, configured_by_api_client_id=None, request_id=None,
+        )
+    assert exc_info.value.status_code == 422
+
+    # Nothing was written -- this organization still has no selections.
+    assert list_active_governing_standards(db_session, organization_id=org.id) == []
+
+
+def test_existing_selection_remains_queryable_after_the_standard_becomes_inactive(db_session):
+    org = make_org(db_session)
+    standard = _make_global_standard(db_session)  # is_active=True at selection time
+    with selection_mutation_transaction(db_session):
+        select_governing_standard(
+            db_session, organization_id=org.id, standard_id=standard.id, effective_date=None, rationale=None,
+            configured_by_user_id=None, configured_by_api_client_id=None, request_id=None,
+        )
+
+    # The catalogue entry is later deactivated -- not through this
+    # service (M43A exposes no public deactivation endpoint), but
+    # directly, exactly as an operator updating the catalogue would.
+    standard.is_active = False
+    db_session.commit()
+
+    # The existing selection is untouched -- still resolves as the
+    # organization's current, active governing standard.
+    active = list_active_governing_standards(db_session, organization_id=org.id)
+    assert len(active) == 1
+    assert active[0][0].id == standard.id
+    assert active[0][1].status == OrganizationGoverningStandardStatus.SELECTED
+
+    # A repeat "select" call while it is already SELECTED is the
+    # existing idempotent no-op path (spec §13) -- not a new selection,
+    # so it is never blocked by is_active either.
+    with selection_mutation_transaction(db_session):
+        row, created = select_governing_standard(
+            db_session, organization_id=org.id, standard_id=standard.id, effective_date=None, rationale=None,
+            configured_by_user_id=None, configured_by_api_client_id=None, request_id=None,
+        )
+    assert created is False
+    assert row.status == OrganizationGoverningStandardStatus.SELECTED
+
+
+def test_an_inactive_standards_existing_selection_still_requires_explicit_retirement(db_session):
+    org = make_org(db_session)
+    standard = _make_global_standard(db_session)
+    with selection_mutation_transaction(db_session):
+        select_governing_standard(
+            db_session, organization_id=org.id, standard_id=standard.id, effective_date=None, rationale=None,
+            configured_by_user_id=None, configured_by_api_client_id=None, request_id=None,
+        )
+
+    standard.is_active = False
+    db_session.commit()
+
+    # Deactivating the catalogue entry alone never retires the
+    # selection -- it is still active until an explicit retire() call.
+    assert len(list_active_governing_standards(db_session, organization_id=org.id)) == 1
+
+    with selection_mutation_transaction(db_session):
+        retirement = retire_governing_standard(
+            db_session, organization_id=org.id, standard_id=standard.id, retirement_date=None,
+            rationale="Deactivated in the catalogue; explicitly retiring our own selection.",
+            configured_by_user_id=None, configured_by_api_client_id=None, request_id=None,
+        )
+    assert retirement.status == OrganizationGoverningStandardStatus.RETIRED
+    assert list_active_governing_standards(db_session, organization_id=org.id) == []
+
+
+def test_re_selecting_a_retired_but_now_inactive_standard_is_rejected(db_session):
+    org = make_org(db_session)
+    standard = _make_global_standard(db_session)
+    with selection_mutation_transaction(db_session):
+        select_governing_standard(
+            db_session, organization_id=org.id, standard_id=standard.id, effective_date=None, rationale=None,
+            configured_by_user_id=None, configured_by_api_client_id=None, request_id=None,
+        )
+    with selection_mutation_transaction(db_session):
+        retire_governing_standard(
+            db_session, organization_id=org.id, standard_id=standard.id, retirement_date=None, rationale=None,
+            configured_by_user_id=None, configured_by_api_client_id=None, request_id=None,
+        )
+
+    standard.is_active = False
+    db_session.commit()
+
+    # Re-selection after retirement is a genuinely *new* SELECTED event
+    # (see test_re_selecting_a_retired_standard_creates_a_new_event_not_a_duplicate_error
+    # above) -- and a new event for a now-inactive standard is rejected,
+    # exactly like a first-time selection would be.
+    with pytest.raises(HTTPException) as exc_info:
+        select_governing_standard(
+            db_session, organization_id=org.id, standard_id=standard.id, effective_date=None, rationale="Re-adopted.",
+            configured_by_user_id=None, configured_by_api_client_id=None, request_id=None,
+        )
+    assert exc_info.value.status_code == 422
+
+    # The prior history (SELECTED, RETIRED) is untouched and still queryable.
+    history, total = list_selection_history(db_session, organization_id=org.id)
+    assert total == 2
+
+
 # --- No-standard state -----------------------------------------------------------------------
 
 
