@@ -515,6 +515,90 @@ def test_same_idempotency_key_with_a_different_body_conflicts(client, db_session
     assert second.status_code == 409
 
 
+# --- Auditability ---------------------------------------------------------------------------
+
+
+def test_outcome_creation_creates_an_audit_record(client, db_session):
+    from sqlalchemy import func, select
+
+    from app.models.audit_log import AuditLog
+
+    org, user, headers, decision = _setup_manager(client, db_session, "manager-outcome-audit1@example.com")
+    idem_headers = {**headers, "Idempotency-Key": "outcome-audit-test-key-1"}
+    body = _outcome_body(decision["id"])
+
+    before = db_session.execute(select(func.count()).select_from(AuditLog)).scalar_one()
+    response = client.post(f"/api/v1/intelligence/outcomes?organization_id={org['id']}", json=body, headers=idem_headers)
+    assert response.status_code == 201, response.text
+
+    after = db_session.execute(select(func.count()).select_from(AuditLog)).scalar_one()
+    assert after == before + 1
+    log_row = db_session.execute(
+        select(AuditLog).where(AuditLog.action == "INTELLIGENCE_OUTCOME_RECORDED")
+    ).scalar_one()
+    assert log_row.resource_type == "IntelligenceOutcome"
+    assert log_row.resource_id == uuid.UUID(response.json()["id"])
+    assert log_row.organization_id == uuid.UUID(org["id"])
+    assert log_row.user_id == user.id
+    assert log_row.event_metadata["decision_id"] == decision["id"]
+    assert log_row.event_metadata["classification"] == "EFFECTIVE"
+    assert "summary" not in log_row.event_metadata
+
+    # A replayed Idempotency-Key request must not reach record_outcome()/
+    # audit_service.log() a second time -- intelligence_outcomes.py's own
+    # `if lookup.is_replay: return ...` short-circuit happens before the
+    # outcome_mutation_transaction() block, so no duplicate AuditLog row
+    # should be produced.
+    replay = client.post(f"/api/v1/intelligence/outcomes?organization_id={org['id']}", json=body, headers=idem_headers)
+    assert replay.status_code == 201
+    assert replay.json()["id"] == response.json()["id"]
+    after_replay = db_session.execute(select(func.count()).select_from(AuditLog)).scalar_one()
+    assert after_replay == after
+
+
+def test_outcome_creation_audit_failure_leaves_no_partial_state(client, db_session, monkeypatch):
+    """Proves outcome_mutation_transaction()'s atomicity guarantee for
+    real, by fault injection, mirroring tests/test_actions_transaction_
+    integrity.py::test_create_action_audit_failure_leaves_no_partial_state
+    exactly: if the AuditLog write fails after record_outcome() has
+    already db.add()/db.flush()'d the IntelligenceOutcome row, the
+    whole transaction must roll back -- no outcome row left behind,
+    not merely no audit row -- rather than persisting an outcome with
+    no audit trail."""
+    from sqlalchemy import select
+    from starlette.testclient import TestClient
+
+    from app.main import app
+    from app.models.intelligence_outcome import IntelligenceOutcome
+
+    org, _, headers, decision = _setup_manager(client, db_session, "manager-outcome-audit-fail1@example.com")
+    body = _outcome_body(decision["id"])
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("simulated AuditLog write failure")
+
+    monkeypatch.setattr("app.services.audit_service.audit_service.log", _boom)
+
+    with TestClient(app, raise_server_exceptions=False) as unsafe_client:
+        failed = unsafe_client.post(
+            f"/api/v1/intelligence/outcomes?organization_id={org['id']}", json=body, headers=headers
+        )
+        assert failed.status_code == 500
+
+    db_session.expire_all()
+    persisted = db_session.execute(
+        select(IntelligenceOutcome).where(IntelligenceOutcome.organization_id == uuid.UUID(org["id"]))
+    ).scalars().all()
+    assert persisted == []
+
+    # Once the injected failure is gone, the identical request succeeds
+    # normally -- the failed attempt left nothing behind that could
+    # block or corrupt a subsequent one.
+    monkeypatch.undo()
+    retry = client.post(f"/api/v1/intelligence/outcomes?organization_id={org['id']}", json=body, headers=headers)
+    assert retry.status_code == 201
+
+
 # --- Tenant isolation --------------------------------------------------------------------------
 
 
