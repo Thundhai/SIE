@@ -555,6 +555,57 @@ def test_decision_creation_creates_an_audit_record(client, db_session):
     assert after_replay == after
 
 
+def test_decision_creation_audit_failure_leaves_no_partial_state(client, db_session, monkeypatch):
+    """Proves decision_mutation_transaction()'s atomicity guarantee for
+    real, by fault injection, mirroring tests/test_actions_transaction_
+    integrity.py::test_create_action_audit_failure_leaves_no_partial_state
+    exactly: if the AuditLog write fails after record_decision() has
+    already db.add()/db.flush()'d the IntelligenceDecision row, the
+    whole transaction must roll back -- no decision row left behind,
+    not merely no audit row -- rather than persisting a decision with
+    no audit trail."""
+    from sqlalchemy import select
+    from starlette.testclient import TestClient
+
+    from app.main import app
+    from app.models.intelligence_decision import IntelligenceDecision
+
+    org = create_org(client)
+    user = make_user(db_session, "manager-audit-fail1@example.com")
+    make_membership(db_session, user_id=user.id, organization_id=uuid.UUID(org["id"]), role="HSE_MANAGER")
+    from tests.conftest import dev_auth_headers
+
+    seed_risk_area_ontology_concepts(db_session)
+    _seed_incidents(db_session, uuid.UUID(org["id"]))
+    headers = dev_auth_headers(user.id)
+    attention = _get_attention(client, org["id"], headers)
+    body = _decision_body(attention, attention["items"][0])
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("simulated AuditLog write failure")
+
+    monkeypatch.setattr("app.services.audit_service.audit_service.log", _boom)
+
+    with TestClient(app, raise_server_exceptions=False) as unsafe_client:
+        failed = unsafe_client.post(
+            f"/api/v1/intelligence/decisions?organization_id={org['id']}", json=body, headers=headers
+        )
+        assert failed.status_code == 500
+
+    db_session.expire_all()
+    persisted = db_session.execute(
+        select(IntelligenceDecision).where(IntelligenceDecision.organization_id == uuid.UUID(org["id"]))
+    ).scalars().all()
+    assert persisted == []
+
+    # Once the injected failure is gone, the identical request succeeds
+    # normally -- the failed attempt left nothing behind that could
+    # block or corrupt a subsequent one.
+    monkeypatch.undo()
+    retry = client.post(f"/api/v1/intelligence/decisions?organization_id={org['id']}", json=body, headers=headers)
+    assert retry.status_code == 201
+
+
 # --- Tenant isolation --------------------------------------------------------------------------
 
 
