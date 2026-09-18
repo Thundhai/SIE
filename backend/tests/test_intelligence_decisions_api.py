@@ -506,6 +506,55 @@ def test_same_idempotency_key_with_a_different_body_conflicts(client, db_session
     assert second.status_code == 409
 
 
+# --- Auditability ---------------------------------------------------------------------------
+
+
+def test_decision_creation_creates_an_audit_record(client, db_session):
+    from sqlalchemy import func, select
+
+    from app.models.audit_log import AuditLog
+
+    org = create_org(client)
+    user = make_user(db_session, "manager13@example.com")
+    make_membership(db_session, user_id=user.id, organization_id=uuid.UUID(org["id"]), role="HSE_MANAGER")
+    from tests.conftest import dev_auth_headers
+
+    seed_risk_area_ontology_concepts(db_session)
+    _seed_incidents(db_session, uuid.UUID(org["id"]))
+    headers = {**dev_auth_headers(user.id), "Idempotency-Key": "audit-test-key-1"}
+    attention = _get_attention(client, org["id"], dev_auth_headers(user.id))
+    item = attention["items"][0]
+    body = _decision_body(attention, item)
+
+    before = db_session.execute(select(func.count()).select_from(AuditLog)).scalar_one()
+    response = client.post(f"/api/v1/intelligence/decisions?organization_id={org['id']}", json=body, headers=headers)
+    assert response.status_code == 201, response.text
+
+    after = db_session.execute(select(func.count()).select_from(AuditLog)).scalar_one()
+    assert after == before + 1
+    log_row = db_session.execute(
+        select(AuditLog).where(AuditLog.action == "INTELLIGENCE_DECISION_RECORDED")
+    ).scalar_one()
+    assert log_row.resource_type == "IntelligenceDecision"
+    assert log_row.resource_id == uuid.UUID(response.json()["id"])
+    assert log_row.organization_id == uuid.UUID(org["id"])
+    assert log_row.user_id == user.id
+    assert log_row.event_metadata["decision"] == "DO_NOT_ACT"
+    assert log_row.event_metadata["attention_reference"] == item["reference"]
+    assert "rationale" not in log_row.event_metadata
+
+    # A replayed Idempotency-Key request must not reach record_decision()/
+    # audit_service.log() a second time -- intelligence_decisions.py's own
+    # `if lookup.is_replay: return ...` short-circuit happens before the
+    # decision_mutation_transaction() block, so no duplicate AuditLog row
+    # should be produced.
+    replay = client.post(f"/api/v1/intelligence/decisions?organization_id={org['id']}", json=body, headers=headers)
+    assert replay.status_code == 201
+    assert replay.json()["id"] == response.json()["id"]
+    after_replay = db_session.execute(select(func.count()).select_from(AuditLog)).scalar_one()
+    assert after_replay == after
+
+
 # --- Tenant isolation --------------------------------------------------------------------------
 
 
