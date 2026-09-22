@@ -25,6 +25,7 @@ import { AttentionReviewDrawer } from './AttentionReviewDrawer';
 import { DecisionHistorySection } from './DecisionHistorySection';
 import { OrganizationalMemoryCard } from './OrganizationalMemoryCard';
 import { RecordOutcomeDrawer } from './RecordOutcomeDrawer';
+import { VerifyOutcomeDrawer } from './VerifyOutcomeDrawer';
 import {
   anomalyDirectionLabel,
   anomalyStatusLabel,
@@ -82,6 +83,7 @@ export function IntelligencePage() {
   const [detailTab, setDetailTab] = useState('indicators');
   const [reviewItem, setReviewItem] = useState<AttentionItem | null>(null);
   const [outcomeDecision, setOutcomeDecision] = useState<IntelligenceDecision | null>(null);
+  const [verifyTarget, setVerifyTarget] = useState<{ decision: IntelligenceDecision; outcome: IntelligenceOutcome } | null>(null);
 
   useEffect(() => {
     if (!auth.organization) return;
@@ -253,6 +255,7 @@ export function IntelligencePage() {
             refreshToken={decisionRefreshToken}
             outcomesByDecision={outcomesByDecision}
             onRecordOutcome={setOutcomeDecision}
+            onVerifyOutcome={(decision, outcome) => setVerifyTarget({ decision, outcome })}
           />
         </>
       )}
@@ -274,6 +277,25 @@ export function IntelligencePage() {
           decision={outcomeDecision}
           organizationId={auth.organization.id}
           onRecorded={() => setOutcomeRefreshToken((t) => t + 1)}
+        />
+      )}
+
+      {auth.organization && (
+        // Verification state for the outcome being reviewed is refetched
+        // by VerifyOutcomeDrawer itself (see its own `justVerified`-keyed
+        // effect) -- nothing here needs to change on success, since
+        // Decision History shows the outcome's own classification, never
+        // its verification status (no organization-wide verification-list
+        // endpoint exists to populate that in bulk without an N+1 fetch
+        // per row -- see docs/OUTCOME_VERIFICATION_V0_1.md's own read
+        // surface; inventing one is out of scope here).
+        <VerifyOutcomeDrawer
+          isOpen={verifyTarget !== null}
+          onClose={() => setVerifyTarget(null)}
+          outcome={verifyTarget?.outcome ?? null}
+          decision={verifyTarget?.decision ?? null}
+          organizationId={auth.organization.id}
+          onVerified={() => {}}
         />
       )}
     </PageContainer>

@@ -22,6 +22,11 @@ export interface DecisionHistorySectionProps {
    * identical pattern). */
   outcomesByDecision: Map<string, IntelligenceOutcome>;
   onRecordOutcome: (decision: IntelligenceDecision) => void;
+  /** Opens verification for the decision's own recorded outcome — only
+   * ever called from the "Verify outcome" action below, which itself
+   * only renders once `outcomesByDecision` has an entry for that
+   * decision (there is nothing to verify before an outcome exists). */
+  onVerifyOutcome: (decision: IntelligenceDecision, outcome: IntelligenceOutcome) => void;
 }
 
 /**
@@ -33,7 +38,7 @@ export interface DecisionHistorySectionProps {
  * signal it concerned, and the linked action where one exists — never
  * implying SIE itself decided anything.
  */
-export function DecisionHistorySection({ organizationId, refreshToken, outcomesByDecision, onRecordOutcome }: DecisionHistorySectionProps) {
+export function DecisionHistorySection({ organizationId, refreshToken, outcomesByDecision, onRecordOutcome, onVerifyOutcome }: DecisionHistorySectionProps) {
   const [state, setState] = useState<AsyncState<IntelligenceDecision[]>>({ status: 'loading' });
 
   useEffect(() => {
@@ -86,9 +91,16 @@ export function DecisionHistorySection({ organizationId, refreshToken, outcomesB
                   ) : (
                     <span className="text-xs text-text-muted">No outcome recorded yet</span>
                   )}
-                  <Button size="sm" variant="secondary" onClick={() => onRecordOutcome(record)}>
-                    Record outcome
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    {outcome && (
+                      <Button size="sm" variant="secondary" onClick={() => onVerifyOutcome(record, outcome)}>
+                        Verify outcome
+                      </Button>
+                    )}
+                    <Button size="sm" variant="secondary" onClick={() => onRecordOutcome(record)}>
+                      Record outcome
+                    </Button>
+                  </div>
                 </div>
               </li>
             );

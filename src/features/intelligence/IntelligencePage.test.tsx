@@ -26,6 +26,10 @@ vi.mock('../../services/api/outcomes', () => ({
   listOutcomes: vi.fn(),
   createOutcome: vi.fn(),
 }));
+vi.mock('../../services/api/verifications', () => ({
+  getVerificationState: vi.fn(),
+  createVerification: vi.fn(),
+}));
 vi.mock('../../services/api/sites', () => ({
   listSites: vi.fn(),
 }));
@@ -45,6 +49,7 @@ import {
 } from '../../services/api/fieldIntelligenceContext';
 import { getMemoryContext, type IntegratedMemory } from '../../services/api/memoryIntegration';
 import { listOutcomes, type IntelligenceOutcome } from '../../services/api/outcomes';
+import { getVerificationState, type IntelligenceOutcomeVerification, type VerificationState } from '../../services/api/verifications';
 import { listSites } from '../../services/api/sites';
 
 const ORGANIZATION = { id: 'org-1', name: 'Acme' };
@@ -227,12 +232,37 @@ function makeOutcome(overrides: Partial<IntelligenceOutcome> = {}): Intelligence
   };
 }
 
+function makeVerification(overrides: Partial<IntelligenceOutcomeVerification> = {}): IntelligenceOutcomeVerification {
+  return {
+    id: 'verification-1',
+    organization_id: 'org-1',
+    outcome_id: 'outcome-1',
+    status: 'INSUFFICIENT_EVIDENCE',
+    rationale: 'No supporting evidence was supplied.',
+    verified_at: '2026-06-06T00:00:00Z',
+    verified_by_user_id: 'user-1',
+    verified_by_api_client_id: null,
+    created_at: '2026-06-06T00:00:00Z',
+    updated_at: '2026-06-06T00:00:00Z',
+    ...overrides,
+  };
+}
+
 describe('IntelligencePage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(listSites).mockResolvedValue([]);
     vi.mocked(listDecisions).mockResolvedValue({ items: [], total: 0, page: 1, page_size: 100 });
     vi.mocked(listOutcomes).mockResolvedValue({ items: [], total: 0, page: 1, page_size: 100 });
+    vi.mocked(getVerificationState).mockResolvedValue({
+      outcome_id: 'outcome-1',
+      current_verification: null,
+      evidence_evaluation: {
+        evidence_count: 0, valid_evidence_count: 0, invalid_evidence_count: 0, future_evidence_count: 0,
+        evidence_status: 'NO_EVIDENCE', evidence_eligible_for_verification: false, reasons: [],
+      },
+      learning_eligibility: { eligible: false, reasons: [] },
+    });
     vi.mocked(getMemoryContext).mockResolvedValue({
       scope: 'organization', organization_id: 'org-1', entity_id: null, project_id: null,
       as_of: '2026-06-01T00:00:00Z', generated_at: '2026-06-01T00:00:00Z', items: [], total: 0, page: 1, page_size: 25,
@@ -481,6 +511,63 @@ describe('IntelligencePage', () => {
 
     await waitFor(() => expect(screen.getByText('Effective')).toBeInTheDocument());
     expect(screen.queryByText('No outcome recorded yet')).not.toBeInTheDocument();
+  });
+
+  // --- 3c. Outcome -> Verification: only available once an outcome exists, correct context, records ---
+
+  it('does not offer Verify outcome before an outcome has been recorded', async () => {
+    vi.mocked(getAttention).mockResolvedValue(makeAttentionResult());
+    vi.mocked(getFieldIntelligenceContext).mockResolvedValue(makeContext());
+    vi.mocked(listDecisions).mockResolvedValue({ items: [makeDecision()], total: 1, page: 1, page_size: 100 });
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('No outcome recorded yet')).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: 'Verify outcome' })).not.toBeInTheDocument();
+  });
+
+  it('offers Verify outcome once an outcome exists, with the correct outcome and decision context', async () => {
+    vi.mocked(getAttention).mockResolvedValue(makeAttentionResult());
+    vi.mocked(getFieldIntelligenceContext).mockResolvedValue(makeContext());
+    vi.mocked(listDecisions).mockResolvedValue({ items: [makeDecision()], total: 1, page: 1, page_size: 100 });
+    vi.mocked(listOutcomes).mockResolvedValue({ items: [makeOutcome()], total: 1, page: 1, page_size: 100 });
+    renderPage();
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Verify outcome' })).toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: 'Verify outcome' }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'Verify outcome' });
+    expect(within(dialog).getByText('Vehicle incidents above baseline')).toBeInTheDocument();
+    expect(within(dialog).getByText('Follow-up confirmed the intervention worked.')).toBeInTheDocument();
+  });
+
+  it('records a verification against the exact outcome being reviewed', async () => {
+    const { createVerification } = await import('../../services/api/verifications');
+    vi.mocked(getAttention).mockResolvedValue(makeAttentionResult());
+    vi.mocked(getFieldIntelligenceContext).mockResolvedValue(makeContext());
+    vi.mocked(listDecisions).mockResolvedValue({ items: [makeDecision()], total: 1, page: 1, page_size: 100 });
+    vi.mocked(listOutcomes).mockResolvedValue({ items: [makeOutcome()], total: 1, page: 1, page_size: 100 });
+    vi.mocked(createVerification).mockResolvedValue(makeVerification());
+    renderPage();
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Verify outcome' })).toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: 'Verify outcome' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Verify outcome' });
+
+    await userEvent.selectOptions(within(dialog).getByLabelText('Verification status'), 'INSUFFICIENT_EVIDENCE');
+    await userEvent.type(within(dialog).getByLabelText('Rationale'), 'No supporting evidence was supplied.');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Record verification' }));
+
+    await waitFor(() =>
+      expect(createVerification).toHaveBeenCalledWith(
+        expect.objectContaining({
+          organizationId: 'org-1',
+          outcomeId: 'outcome-1',
+          input: expect.objectContaining({ status: 'INSUFFICIENT_EVIDENCE' }),
+        }),
+        expect.any(String),
+      ),
+    );
+    await waitFor(() => expect(within(dialog).getByText('recorded.')).toBeInTheDocument());
   });
 
   // --- 4. Intelligence categories: truthful, never blurred ---------------------------------------

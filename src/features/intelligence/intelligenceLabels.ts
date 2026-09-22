@@ -304,6 +304,63 @@ export const OUTCOME_CLASSIFICATION_OPTIONS: { value: string; label: string }[] 
   { value: 'NO_OUTCOME_RECORDED', label: OUTCOME_CLASSIFICATION_LABEL.NO_OUTCOME_RECORDED },
 ];
 
+// --- Outcome verification status (SIE Milestone 38 IntelligenceOutcomeVerificationStatus) ------
+// The real, closed backend vocabulary — VERIFIED / INSUFFICIENT_EVIDENCE /
+// DISPUTED (`app/models/intelligence_outcome_verification_enums.py`). A
+// human's own governance judgment about whether a recorded outcome is
+// adequately supported — never a re-judgment of the original decision.
+
+const VERIFICATION_STATUS_LABEL: Record<string, string> = {
+  VERIFIED: 'Verified',
+  INSUFFICIENT_EVIDENCE: 'Insufficient evidence',
+  DISPUTED: 'Disputed',
+};
+
+const VERIFICATION_STATUS_TONE: Record<string, StatusTone> = {
+  VERIFIED: 'success',
+  INSUFFICIENT_EVIDENCE: 'informational',
+  DISPUTED: 'warning',
+};
+
+const VERIFICATION_STATUS_DESCRIPTION: Record<string, string> = {
+  VERIFIED: 'The outcome and its evidence have been reviewed and are accepted as trustworthy.',
+  INSUFFICIENT_EVIDENCE: 'The supplied evidence does not yet meet the bar to treat this outcome as verified.',
+  DISPUTED: 'A reviewer actively disagrees with the recorded outcome or its evidence.',
+};
+
+export function verificationStatusLabel(status: string): string {
+  return VERIFICATION_STATUS_LABEL[status] ?? formatCanonicalLabel(status);
+}
+
+export function verificationStatusTone(status: string): StatusTone {
+  return VERIFICATION_STATUS_TONE[status] ?? 'neutral';
+}
+
+export function verificationStatusDescription(status: string): string {
+  return VERIFICATION_STATUS_DESCRIPTION[status] ?? '';
+}
+
+export const VERIFICATION_STATUS_OPTIONS: { value: string; label: string }[] = [
+  { value: 'VERIFIED', label: VERIFICATION_STATUS_LABEL.VERIFIED },
+  { value: 'INSUFFICIENT_EVIDENCE', label: VERIFICATION_STATUS_LABEL.INSUFFICIENT_EVIDENCE },
+  { value: 'DISPUTED', label: VERIFICATION_STATUS_LABEL.DISPUTED },
+];
+
+// --- Evidence status (SIE Milestone 38 EvidenceStatus) -------------------------------------------
+// A deterministic, computed classification of an outcome's own supplied
+// evidence — never a score, never itself a verification judgment.
+
+const EVIDENCE_STATUS_LABEL: Record<string, string> = {
+  NO_EVIDENCE: 'No evidence supplied',
+  INVALID_EVIDENCE: 'Supplied evidence is invalid',
+  INSUFFICIENT_EVIDENCE: 'Evidence is mixed / incomplete',
+  VALID_EVIDENCE: 'Evidence is valid',
+};
+
+export function evidenceStatusLabel(status: string): string {
+  return EVIDENCE_STATUS_LABEL[status] ?? formatCanonicalLabel(status);
+}
+
 // --- Organizational memory (SIE Milestone 40/41 OrganizationalMemoryType/ApplicabilityBasis) ----
 
 const MEMORY_TYPE_LABEL: Record<string, string> = {
