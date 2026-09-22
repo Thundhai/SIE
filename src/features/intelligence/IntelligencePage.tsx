@@ -15,6 +15,8 @@ import type { IntelligenceDecision } from '../../services/api/decisions';
 import { listDecisions } from '../../services/api/decisions';
 import type { FieldIntelligenceContext } from '../../services/api/fieldIntelligenceContext';
 import { getFieldIntelligenceContext, getSiteFieldIntelligenceContext } from '../../services/api/fieldIntelligenceContext';
+import type { IntelligenceOutcome } from '../../services/api/outcomes';
+import { listOutcomes } from '../../services/api/outcomes';
 import { listSites, type Site } from '../../services/api/sites';
 import type { AsyncState } from '../../types/common';
 import { formatCanonicalLabel } from '../events/eventStatus';
@@ -22,6 +24,7 @@ import { AttentionList } from './AttentionList';
 import { AttentionReviewDrawer } from './AttentionReviewDrawer';
 import { DecisionHistorySection } from './DecisionHistorySection';
 import { OrganizationalMemoryCard } from './OrganizationalMemoryCard';
+import { RecordOutcomeDrawer } from './RecordOutcomeDrawer';
 import {
   anomalyDirectionLabel,
   anomalyStatusLabel,
@@ -72,10 +75,13 @@ export function IntelligencePage() {
   const [attentionState, setAttentionState] = useState<AsyncState<AttentionResult>>({ status: 'loading' });
   const [contextState, setContextState] = useState<AsyncState<FieldIntelligenceContext>>({ status: 'loading' });
   const [decisionsState, setDecisionsState] = useState<AsyncState<IntelligenceDecision[]>>({ status: 'loading' });
+  const [outcomesState, setOutcomesState] = useState<AsyncState<IntelligenceOutcome[]>>({ status: 'loading' });
   const [reloadToken, setReloadToken] = useState(0);
   const [decisionRefreshToken, setDecisionRefreshToken] = useState(0);
+  const [outcomeRefreshToken, setOutcomeRefreshToken] = useState(0);
   const [detailTab, setDetailTab] = useState('indicators');
   const [reviewItem, setReviewItem] = useState<AttentionItem | null>(null);
+  const [outcomeDecision, setOutcomeDecision] = useState<IntelligenceDecision | null>(null);
 
   useEffect(() => {
     if (!auth.organization) return;
@@ -150,6 +156,35 @@ export function IntelligencePage() {
     return map;
   }, [decisionsState]);
 
+  // Recent outcomes, fetched org-wide — correlated to decisions by
+  // `decision_id`, mirroring `decisionsByReference`'s identical pattern.
+  // `GET /intelligence/outcomes` already orders newest `outcome_at`
+  // first, so the first entry seen per `decision_id` is that decision's
+  // most recent outcome.
+  useEffect(() => {
+    if (!auth.organization) return;
+    const controller = new AbortController();
+    setOutcomesState({ status: 'loading' });
+    listOutcomes({ organizationId: auth.organization.id, pageSize: 100 }, controller.signal)
+      .then((result) => setOutcomesState({ status: 'success', data: result.items }))
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        setOutcomesState({ status: 'error', message: error instanceof Error ? error.message : 'Could not load outcomes.' });
+      });
+    return () => controller.abort();
+  }, [auth.organization, outcomeRefreshToken]);
+
+  const outcomesByDecision = useMemo(() => {
+    const map = new Map<string, IntelligenceOutcome>();
+    if (outcomesState.status !== 'success') return map;
+    for (const record of outcomesState.data) {
+      if (!map.has(record.decision_id)) {
+        map.set(record.decision_id, record); // newest first already
+      }
+    }
+    return map;
+  }, [outcomesState]);
+
   const isPermissionDenied =
     attentionState.status === 'error' &&
     attentionState.message.toLowerCase().includes('missing') &&
@@ -213,7 +248,12 @@ export function IntelligencePage() {
             onDetailTabChange={setDetailTab}
           />
 
-          <DecisionHistorySection organizationId={auth.organization.id} refreshToken={decisionRefreshToken} />
+          <DecisionHistorySection
+            organizationId={auth.organization.id}
+            refreshToken={decisionRefreshToken}
+            outcomesByDecision={outcomesByDecision}
+            onRecordOutcome={setOutcomeDecision}
+          />
         </>
       )}
 
@@ -224,6 +264,16 @@ export function IntelligencePage() {
           item={reviewItem}
           organizationId={auth.organization.id}
           onDecided={() => setDecisionRefreshToken((t) => t + 1)}
+        />
+      )}
+
+      {auth.organization && (
+        <RecordOutcomeDrawer
+          isOpen={outcomeDecision !== null}
+          onClose={() => setOutcomeDecision(null)}
+          decision={outcomeDecision}
+          organizationId={auth.organization.id}
+          onRecorded={() => setOutcomeRefreshToken((t) => t + 1)}
         />
       )}
     </PageContainer>

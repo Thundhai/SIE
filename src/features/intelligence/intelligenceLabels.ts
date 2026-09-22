@@ -260,6 +260,50 @@ export const DECISION_OPTIONS: { value: string; label: string }[] = [
   { value: 'NOT_RELEVANT', label: DECISION_LABEL.NOT_RELEVANT },
 ];
 
+// --- Outcome classification (SIE Milestone 37 IntelligenceOutcomeClassification) ---------------
+// The real, closed backend vocabulary — EFFECTIVE / PARTIALLY_EFFECTIVE /
+// INEFFECTIVE / NO_OUTCOME_RECORDED (`app/models/intelligence_outcome_enums.py`).
+
+const OUTCOME_CLASSIFICATION_LABEL: Record<string, string> = {
+  EFFECTIVE: 'Effective',
+  PARTIALLY_EFFECTIVE: 'Partially effective',
+  INEFFECTIVE: 'Ineffective',
+  NO_OUTCOME_RECORDED: 'No outcome could be established',
+};
+
+const OUTCOME_CLASSIFICATION_TONE: Record<string, StatusTone> = {
+  EFFECTIVE: 'success',
+  PARTIALLY_EFFECTIVE: 'informational',
+  INEFFECTIVE: 'warning',
+  NO_OUTCOME_RECORDED: 'neutral',
+};
+
+const OUTCOME_CLASSIFICATION_DESCRIPTION: Record<string, string> = {
+  EFFECTIVE: 'The intervention resolved the condition the decision concerned.',
+  PARTIALLY_EFFECTIVE: 'The intervention had some effect but did not fully resolve the condition.',
+  INEFFECTIVE: 'The intervention did not resolve the condition.',
+  NO_OUTCOME_RECORDED: 'An outcome could not be established (e.g. no follow-up was possible, or the evidence is inconclusive).',
+};
+
+export function outcomeClassificationLabel(classification: string): string {
+  return OUTCOME_CLASSIFICATION_LABEL[classification] ?? formatCanonicalLabel(classification);
+}
+
+export function outcomeClassificationTone(classification: string): StatusTone {
+  return OUTCOME_CLASSIFICATION_TONE[classification] ?? 'neutral';
+}
+
+export function outcomeClassificationDescription(classification: string): string {
+  return OUTCOME_CLASSIFICATION_DESCRIPTION[classification] ?? '';
+}
+
+export const OUTCOME_CLASSIFICATION_OPTIONS: { value: string; label: string }[] = [
+  { value: 'EFFECTIVE', label: OUTCOME_CLASSIFICATION_LABEL.EFFECTIVE },
+  { value: 'PARTIALLY_EFFECTIVE', label: OUTCOME_CLASSIFICATION_LABEL.PARTIALLY_EFFECTIVE },
+  { value: 'INEFFECTIVE', label: OUTCOME_CLASSIFICATION_LABEL.INEFFECTIVE },
+  { value: 'NO_OUTCOME_RECORDED', label: OUTCOME_CLASSIFICATION_LABEL.NO_OUTCOME_RECORDED },
+];
+
 // --- Organizational memory (SIE Milestone 40/41 OrganizationalMemoryType/ApplicabilityBasis) ----
 
 const MEMORY_TYPE_LABEL: Record<string, string> = {

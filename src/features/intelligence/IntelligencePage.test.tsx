@@ -22,6 +22,10 @@ vi.mock('../../services/api/memoryIntegration', () => ({
   getMemoryContext: vi.fn(),
   getSiteMemoryContext: vi.fn(),
 }));
+vi.mock('../../services/api/outcomes', () => ({
+  listOutcomes: vi.fn(),
+  createOutcome: vi.fn(),
+}));
 vi.mock('../../services/api/sites', () => ({
   listSites: vi.fn(),
 }));
@@ -40,6 +44,7 @@ import {
   type FieldIntelligenceContext,
 } from '../../services/api/fieldIntelligenceContext';
 import { getMemoryContext, type IntegratedMemory } from '../../services/api/memoryIntegration';
+import { listOutcomes, type IntelligenceOutcome } from '../../services/api/outcomes';
 import { listSites } from '../../services/api/sites';
 
 const ORGANIZATION = { id: 'org-1', name: 'Acme' };
@@ -200,11 +205,34 @@ function makeDecision(overrides: Partial<IntelligenceDecision> = {}): Intelligen
   };
 }
 
+function makeOutcome(overrides: Partial<IntelligenceOutcome> = {}): IntelligenceOutcome {
+  return {
+    id: 'outcome-1',
+    organization_id: 'org-1',
+    decision_id: 'dec-1',
+    decision: { id: 'dec-1', attention_reference: 'ref-anomaly-vehicle-incidents', decision: 'ACT' },
+    site_id: null,
+    site_label: null,
+    linked_action_id: null,
+    linked_action: null,
+    classification: 'EFFECTIVE',
+    summary: 'Follow-up confirmed the intervention worked.',
+    evidence_event_ids: [],
+    outcome_at: '2026-06-05T00:00:00Z',
+    recorded_by_user_id: 'user-1',
+    recorded_by_api_client_id: null,
+    created_at: '2026-06-05T00:00:00Z',
+    updated_at: '2026-06-05T00:00:00Z',
+    ...overrides,
+  };
+}
+
 describe('IntelligencePage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(listSites).mockResolvedValue([]);
     vi.mocked(listDecisions).mockResolvedValue({ items: [], total: 0, page: 1, page_size: 100 });
+    vi.mocked(listOutcomes).mockResolvedValue({ items: [], total: 0, page: 1, page_size: 100 });
     vi.mocked(getMemoryContext).mockResolvedValue({
       scope: 'organization', organization_id: 'org-1', entity_id: null, project_id: null,
       as_of: '2026-06-01T00:00:00Z', generated_at: '2026-06-01T00:00:00Z', items: [], total: 0, page: 1, page_size: 25,
@@ -397,6 +425,62 @@ describe('IntelligencePage', () => {
     // both are real, independently-fetched renderings of the same
     // decision, not a duplicate-rendering bug.
     expect(screen.getAllByText('Act').length).toBeGreaterThan(0);
+  });
+
+  // --- 3b. Decision -> Outcome: reachable from Decision History, existing endpoint, shown after --
+
+  it('offers Record outcome from Decision History for an existing decision', async () => {
+    vi.mocked(getAttention).mockResolvedValue(makeAttentionResult());
+    vi.mocked(getFieldIntelligenceContext).mockResolvedValue(makeContext());
+    vi.mocked(listDecisions).mockResolvedValue({ items: [makeDecision()], total: 1, page: 1, page_size: 100 });
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('No outcome recorded yet')).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'Record outcome' })).toBeInTheDocument();
+  });
+
+  it('records an outcome against the decision it was opened from and reflects it afterward', async () => {
+    const { createOutcome } = await import('../../services/api/outcomes');
+    vi.mocked(getAttention).mockResolvedValue(makeAttentionResult());
+    vi.mocked(getFieldIntelligenceContext).mockResolvedValue(makeContext());
+    vi.mocked(listDecisions).mockResolvedValue({ items: [makeDecision()], total: 1, page: 1, page_size: 100 });
+    vi.mocked(createOutcome).mockResolvedValue(makeOutcome());
+    renderPage();
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Record outcome' })).toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: 'Record outcome' }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'Record outcome' });
+    // The decision context shown is the actual decision this outcome will
+    // reference -- never a blank/re-derived one.
+    expect(within(dialog).getByText('Vehicle incidents above baseline')).toBeInTheDocument();
+    expect(within(dialog).getByText('Raising a corrective action.')).toBeInTheDocument();
+
+    await userEvent.selectOptions(within(dialog).getByLabelText('Classification'), 'EFFECTIVE');
+    await userEvent.type(within(dialog).getByLabelText('Summary'), 'Follow-up confirmed the intervention worked.');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Record outcome' }));
+
+    await waitFor(() =>
+      expect(createOutcome).toHaveBeenCalledWith(
+        expect.objectContaining({
+          organizationId: 'org-1',
+          input: expect.objectContaining({ decisionId: 'dec-1', classification: 'EFFECTIVE' }),
+        }),
+        expect.any(String),
+      ),
+    );
+    await waitFor(() => expect(within(dialog).getByText('recorded.')).toBeInTheDocument());
+  });
+
+  it('shows a previously recorded outcome next to its decision', async () => {
+    vi.mocked(getAttention).mockResolvedValue(makeAttentionResult());
+    vi.mocked(getFieldIntelligenceContext).mockResolvedValue(makeContext());
+    vi.mocked(listDecisions).mockResolvedValue({ items: [makeDecision()], total: 1, page: 1, page_size: 100 });
+    vi.mocked(listOutcomes).mockResolvedValue({ items: [makeOutcome()], total: 1, page: 1, page_size: 100 });
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('Effective')).toBeInTheDocument());
+    expect(screen.queryByText('No outcome recorded yet')).not.toBeInTheDocument();
   });
 
   // --- 4. Intelligence categories: truthful, never blurred ---------------------------------------

@@ -1,18 +1,27 @@
 import { useEffect, useState } from 'react';
 import { Section } from '../../components/layout/Section';
+import { Button } from '../../components/ui/Button';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { ErrorState } from '../../components/ui/ErrorState';
 import { LoadingState } from '../../components/ui/LoadingState';
 import { StatusBadge } from '../../components/ui/StatusBadge';
 import { listDecisions, type IntelligenceDecision } from '../../services/api/decisions';
+import type { IntelligenceOutcome } from '../../services/api/outcomes';
 import type { AsyncState } from '../../types/common';
-import { attentionCategoryLabel, decisionLabel, decisionTone } from './intelligenceLabels';
+import { attentionCategoryLabel, decisionLabel, decisionTone, outcomeClassificationLabel, outcomeClassificationTone } from './intelligenceLabels';
 
 export interface DecisionHistorySectionProps {
   organizationId: string;
   /** Bump this to force a reload (e.g. right after a new decision was
    * recorded elsewhere on the page). */
   refreshToken: number;
+  /** The most recent outcome recorded for each decision's own `id`, when
+   * one exists — built once from a real `GET /intelligence/outcomes`
+   * response (never inferred client-side; see `IntelligencePage`'s own
+   * `outcomesByDecision` construction, mirroring `decisionsByReference`'s
+   * identical pattern). */
+  outcomesByDecision: Map<string, IntelligenceOutcome>;
+  onRecordOutcome: (decision: IntelligenceDecision) => void;
 }
 
 /**
@@ -24,7 +33,7 @@ export interface DecisionHistorySectionProps {
  * signal it concerned, and the linked action where one exists — never
  * implying SIE itself decided anything.
  */
-export function DecisionHistorySection({ organizationId, refreshToken }: DecisionHistorySectionProps) {
+export function DecisionHistorySection({ organizationId, refreshToken, outcomesByDecision, onRecordOutcome }: DecisionHistorySectionProps) {
   const [state, setState] = useState<AsyncState<IntelligenceDecision[]>>({ status: 'loading' });
 
   useEffect(() => {
@@ -48,23 +57,42 @@ export function DecisionHistorySection({ organizationId, refreshToken }: Decisio
       )}
       {state.status === 'success' && state.data.length > 0 && (
         <ul className="flex flex-col gap-2">
-          {state.data.map((record) => (
-            <li key={record.id} className="flex flex-col gap-1.5 rounded-lg border border-border bg-surface p-3.5">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-sm font-medium text-text-primary">{record.attention_title}</p>
-                <StatusBadge tone={decisionTone(record.decision)} label={decisionLabel(record.decision)} />
-              </div>
-              <p className="text-xs text-text-muted">
-                {attentionCategoryLabel(record.attention_category)}
-                {record.site_label ? ` · ${record.site_label}` : ' · Organization-wide'}
-              </p>
-              <p className="text-sm text-text-secondary">{record.rationale}</p>
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-text-muted">
-                <span>{new Date(record.decided_at).toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
-                {record.linked_action && <span>· Linked action: {record.linked_action.title}</span>}
-              </div>
-            </li>
-          ))}
+          {state.data.map((record) => {
+            const outcome = outcomesByDecision.get(record.id);
+            return (
+              <li key={record.id} className="flex flex-col gap-1.5 rounded-lg border border-border bg-surface p-3.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm font-medium text-text-primary">{record.attention_title}</p>
+                  <StatusBadge tone={decisionTone(record.decision)} label={decisionLabel(record.decision)} />
+                </div>
+                <p className="text-xs text-text-muted">
+                  {attentionCategoryLabel(record.attention_category)}
+                  {record.site_label ? ` · ${record.site_label}` : ' · Organization-wide'}
+                </p>
+                <p className="text-sm text-text-secondary">{record.rationale}</p>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-text-muted">
+                  <span>{new Date(record.decided_at).toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+                  {record.linked_action && <span>· Linked action: {record.linked_action.title}</span>}
+                </div>
+                <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-2">
+                  {outcome ? (
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs text-text-muted">Outcome:</span>
+                      <StatusBadge tone={outcomeClassificationTone(outcome.classification)} label={outcomeClassificationLabel(outcome.classification)} />
+                      <span className="text-xs text-text-muted">
+                        {new Date(outcome.outcome_at).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
+                      </span>
+                    </div>
+                  ) : (
+                    <span className="text-xs text-text-muted">No outcome recorded yet</span>
+                  )}
+                  <Button size="sm" variant="secondary" onClick={() => onRecordOutcome(record)}>
+                    Record outcome
+                  </Button>
+                </div>
+              </li>
+            );
+          })}
         </ul>
       )}
     </Section>
