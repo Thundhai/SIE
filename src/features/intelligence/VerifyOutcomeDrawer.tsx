@@ -176,6 +176,14 @@ export function VerifyOutcomeDrawer({ isOpen, onClose, outcome, decision, organi
             {attentionCategoryLabel(decision.attention_category)}
             {decision.site_label ? ` · ${decision.site_label}` : ' · Organization-wide'}
           </p>
+          <p className="mt-2 text-sm text-text-secondary">{decision.rationale}</p>
+          <div className="mt-2.5 border-t border-border pt-2.5 text-xs text-text-muted">
+            <p>
+              Decided {new Date(decision.decided_at).toLocaleString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+              {' · '}
+              Signal reference <span className="font-mono">{decision.attention_reference}</span>
+            </p>
+          </div>
         </section>
 
         {/* --- Outcome being verified --------------------------------------------- */}

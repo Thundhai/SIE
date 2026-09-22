@@ -142,6 +142,16 @@ it('shows the decision and the outcome being verified, distinctly labeled', asyn
   expect(within(dialog).getByText(/Verification — has this outcome been adequately supported\?/)).toBeInTheDocument();
 });
 
+it('shows the decision rationale, decided-at timestamp, and signal reference so the reviewer has full context without leaving the drawer', async () => {
+  renderDrawer();
+  const dialog = await screen.findByRole('dialog');
+
+  expect(within(dialog).getByText('Raising a refresher training intervention.')).toBeInTheDocument();
+  expect(within(dialog).getByText(/Decided/)).toBeInTheDocument();
+  expect(within(dialog).getByText(/Signal reference/)).toBeInTheDocument();
+  expect(within(dialog).getByText('ref-ppe-recurring-pattern')).toBeInTheDocument();
+});
+
 it('shows the current verification state, including when none has been recorded yet', async () => {
   renderDrawer();
   const dialog = await screen.findByRole('dialog');
