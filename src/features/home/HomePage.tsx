@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
 import { PageContainer } from '../../components/layout/PageContainer';
 import { Section } from '../../components/layout/Section';
+import { Button } from '../../components/ui/Button';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { ErrorState } from '../../components/ui/ErrorState';
 import { LoadingState } from '../../components/ui/LoadingState';
@@ -17,10 +18,19 @@ import {
   riskClassificationTone,
 } from '../intelligence/intelligenceLabels';
 import { getAnalyticsSummary, type AnalyticsSummary, type RiskSignal } from '../../services/api/analytics';
+import { getAttention, type AttentionItem, type AttentionResult } from '../../services/api/attention';
+import { listDecisions, type IntelligenceDecision } from '../../services/api/decisions';
 import { listEvents, type EventSummaryResponse } from '../../services/api/events';
 import { getEnterpriseIntelligence, type EnterpriseIntelligence } from '../../services/api/intelligence';
 import { eventStatusLabel, eventStatusTone, formatCanonicalLabel } from '../events/eventStatus';
+import { AttentionList } from '../intelligence/AttentionList';
+import { AttentionReviewDrawer } from '../intelligence/AttentionReviewDrawer';
 import type { AsyncState, StatusTone } from '../../types/common';
+
+/** How many of the ranked attention items Home shows before pointing to
+ * the full Intelligence workspace for the rest — Home is a glance, not
+ * the deep workspace (see `IntelligencePage`'s own docstring). */
+const HOME_ATTENTION_LIMIT = 5;
 
 const SUFFICIENCY_LABEL: Record<string, string> = {
   SUFFICIENT_DATA: 'Sufficient data',
@@ -69,8 +79,12 @@ export function HomePage() {
   const navigate = useNavigate();
   const [analyticsState, setAnalyticsState] = useState<AsyncState<AnalyticsSummary>>({ status: 'loading' });
   const [intelligenceState, setIntelligenceState] = useState<AsyncState<EnterpriseIntelligence>>({ status: 'loading' });
+  const [attentionState, setAttentionState] = useState<AsyncState<AttentionResult>>({ status: 'loading' });
+  const [decisionsState, setDecisionsState] = useState<AsyncState<IntelligenceDecision[]>>({ status: 'loading' });
   const [eventsState, setEventsState] = useState<AsyncState<EventSummaryResponse[]>>({ status: 'loading' });
   const [reloadToken, setReloadToken] = useState(0);
+  const [decisionRefreshToken, setDecisionRefreshToken] = useState(0);
+  const [reviewItem, setReviewItem] = useState<AttentionItem | null>(null);
 
   useEffect(() => {
     if (!auth.organization) return;
@@ -111,6 +125,47 @@ export function HomePage() {
     return () => controller.abort();
   }, [auth.organization, reloadToken]);
 
+  // SIE Milestone 33's own ranked "what should I look at first?" list —
+  // replaces the flat "Needs attention" counts this section used to
+  // show (see git history) as the primary prioritization mechanism.
+  useEffect(() => {
+    if (!auth.organization) return;
+    const controller = new AbortController();
+    setAttentionState({ status: 'loading' });
+    getAttention({ organizationId: auth.organization.id }, controller.signal)
+      .then((result) => setAttentionState({ status: 'success', data: result }))
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        setAttentionState({ status: 'error', message: error instanceof Error ? error.message : 'Could not load attention.' });
+      });
+    return () => controller.abort();
+  }, [auth.organization, reloadToken]);
+
+  useEffect(() => {
+    if (!auth.organization) return;
+    const controller = new AbortController();
+    setDecisionsState({ status: 'loading' });
+    listDecisions({ organizationId: auth.organization.id, pageSize: 100 }, controller.signal)
+      .then((result) => setDecisionsState({ status: 'success', data: result.items }))
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        setDecisionsState({ status: 'error', message: error instanceof Error ? error.message : 'Could not load decisions.' });
+      });
+    return () => controller.abort();
+  }, [auth.organization, decisionRefreshToken]);
+
+  // Correlates two already-fetched real datasets by `attention_reference`
+  // — never a frontend-invented ranking (see `IntelligencePage`'s own
+  // identical construction).
+  const decisionsByReference = useMemo(() => {
+    const map = new Map<string, IntelligenceDecision>();
+    if (decisionsState.status !== 'success') return map;
+    for (const record of decisionsState.data) {
+      if (!map.has(record.attention_reference)) map.set(record.attention_reference, record);
+    }
+    return map;
+  }, [decisionsState]);
+
   return (
     <PageContainer>
       <div>
@@ -129,7 +184,13 @@ export function HomePage() {
         <>
           <EnterpriseRiskSection state={intelligenceState} onRetry={() => setReloadToken((t) => t + 1)} />
           <WhatIsChangingSection state={intelligenceState} />
-          <NeedsAttentionSection state={intelligenceState} />
+          <AttentionSection
+            state={attentionState}
+            decisionsByReference={decisionsByReference}
+            onRetry={() => setReloadToken((t) => t + 1)}
+            onReview={setReviewItem}
+            onViewAll={() => navigate('/intelligence')}
+          />
           <RecentEventsSection state={eventsState} onRetry={() => setReloadToken((t) => t + 1)} onOpenEvent={(id) => navigate(`/events/${id}`)} />
 
           {analyticsState.status === 'loading' && <LoadingState label="Loading your safety overview…" />}
@@ -138,6 +199,16 @@ export function HomePage() {
           )}
           {analyticsState.status === 'success' && <HomeSummary summary={analyticsState.data} />}
         </>
+      )}
+
+      {auth.organization && (
+        <AttentionReviewDrawer
+          isOpen={reviewItem !== null}
+          onClose={() => setReviewItem(null)}
+          item={reviewItem}
+          organizationId={auth.organization.id}
+          onDecided={() => setDecisionRefreshToken((t) => t + 1)}
+        />
       )}
     </PageContainer>
   );
@@ -210,30 +281,40 @@ function WhatIsChangingSection({ state }: { state: AsyncState<EnterpriseIntellig
   );
 }
 
-function NeedsAttentionSection({ state }: { state: AsyncState<EnterpriseIntelligence> }) {
-  if (state.status !== 'success') return null;
-  const { actions_context, anomalies, patterns } = state.data;
-  const anomalousCount = anomalies.filter((a) => a.status === 'ANOMALOUS').length;
-  const recurringCount = patterns.filter((p) => p.classification === 'RECURRING' || p.classification === 'HIGH_RECURRENCE').length;
-
-  const tiles: { label: string; value: number }[] = [];
-  if (actions_context) {
-    tiles.push({ label: 'Open actions', value: actions_context.open_action_count });
-    tiles.push({ label: 'High-priority actions', value: actions_context.high_priority_action_count });
-  }
-  tiles.push({ label: 'Anomalous indicators', value: anomalousCount });
-  tiles.push({ label: 'Recurring patterns', value: recurringCount });
-
+function AttentionSection({
+  state,
+  decisionsByReference,
+  onRetry,
+  onReview,
+  onViewAll,
+}: {
+  state: AsyncState<AttentionResult>;
+  decisionsByReference: Map<string, IntelligenceDecision>;
+  onRetry: () => void;
+  onReview: (item: AttentionItem) => void;
+  onViewAll: () => void;
+}) {
   return (
-    <Section title="Needs attention" description="Deterministic counts from actions and intelligence — nothing inferred beyond what is shown.">
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        {tiles.map((tile) => (
-          <div key={tile.label} className="rounded-lg border border-border bg-surface p-4">
-            <p className="text-xs font-medium uppercase tracking-wide text-text-muted">{tile.label}</p>
-            <p className="mt-1 text-2xl font-semibold text-text-primary">{tile.value}</p>
-          </div>
-        ))}
-      </div>
+    <Section
+      title="Attention"
+      description="What deserves attention first — SIE's own ranking, not a flat count."
+      action={
+        state.status === 'success' && state.data.items.length > HOME_ATTENTION_LIMIT ? (
+          <Button variant="ghost" size="sm" onClick={onViewAll}>
+            View all ({state.data.items.length})
+          </Button>
+        ) : undefined
+      }
+    >
+      {state.status === 'loading' && <LoadingState label="Loading attention…" />}
+      {state.status === 'error' && <ErrorState description={state.message} onRetry={onRetry} />}
+      {state.status === 'success' && (
+        <AttentionList
+          items={state.data.items.slice(0, HOME_ATTENTION_LIMIT)}
+          decisionsByReference={decisionsByReference}
+          onReview={onReview}
+        />
+      )}
     </Section>
   );
 }
