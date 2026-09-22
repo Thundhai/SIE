@@ -163,3 +163,229 @@ const CONCENTRATION_LABEL: Record<string, string> = {
 export function concentrationLabel(classification: string): string {
   return CONCENTRATION_LABEL[classification] ?? formatCanonicalLabel(classification);
 }
+
+// --- Attention priority (SIE Milestone 33 AttentionPriority) -----------------------------------
+// Mirrors `PriorityBadge`'s own low/medium/high/critical tone mapping —
+// kept separate since the backend's own vocabulary is
+// LOW/MODERATE/HIGH/CRITICAL, not low/medium/high/critical.
+
+const ATTENTION_PRIORITY_LABEL: Record<string, string> = {
+  LOW: 'Low',
+  MODERATE: 'Moderate',
+  HIGH: 'High',
+  CRITICAL: 'Critical',
+};
+
+const ATTENTION_PRIORITY_TONE: Record<string, StatusTone> = {
+  LOW: 'neutral',
+  MODERATE: 'informational',
+  HIGH: 'warning',
+  CRITICAL: 'critical',
+};
+
+export function attentionPriorityLabel(priority: string): string {
+  return ATTENTION_PRIORITY_LABEL[priority] ?? formatCanonicalLabel(priority);
+}
+
+export function attentionPriorityTone(priority: string): StatusTone {
+  return ATTENTION_PRIORITY_TONE[priority] ?? 'neutral';
+}
+
+// --- Attention category (SIE Milestone 33 AttentionCategory) -----------------------------------
+// Plain-language category names — never "AI flagged", always naming the
+// specific deterministic mechanism behind the item.
+
+const ATTENTION_CATEGORY_LABEL: Record<string, string> = {
+  DETERIORATING_TREND: 'Deteriorating trend',
+  SIGNIFICANT_ANOMALY: 'Deviation from baseline',
+  RECURRING_PATTERN: 'Recurring pattern',
+  ELEVATED_RISK: 'Elevated risk score',
+  PREDICTIVE_RISK: 'Model-derived risk signal',
+  UNRESOLVED_FINDING: 'Unresolved finding',
+  OVERDUE_ACTIONS: 'Overdue actions',
+  EVIDENCE_GAP: 'Evidence gap',
+};
+
+export function attentionCategoryLabel(category: string): string {
+  return ATTENTION_CATEGORY_LABEL[category] ?? formatCanonicalLabel(category);
+}
+
+// --- Human decision (SIE Milestone 34 IntelligenceDecisionType) --------------------------------
+// The real, closed backend vocabulary — ACT / DO_NOT_ACT / DEFER /
+// ALREADY_ADDRESSED / NOT_RELEVANT (`app/models/intelligence_decision_enums.py`).
+// Never the illustrative ACT/MONITOR/DISMISS naming used in some
+// milestone descriptions elsewhere.
+
+const DECISION_LABEL: Record<string, string> = {
+  ACT: 'Act',
+  DO_NOT_ACT: 'Reviewed — no action',
+  DEFER: 'Deferred — revisit later',
+  ALREADY_ADDRESSED: 'Already addressed',
+  NOT_RELEVANT: 'Not relevant',
+};
+
+const DECISION_TONE: Record<string, StatusTone> = {
+  ACT: 'warning',
+  DO_NOT_ACT: 'success',
+  DEFER: 'informational',
+  ALREADY_ADDRESSED: 'neutral',
+  NOT_RELEVANT: 'neutral',
+};
+
+const DECISION_DESCRIPTION: Record<string, string> = {
+  ACT: 'Raise or link an intervention in response to this signal.',
+  DO_NOT_ACT: 'Reviewed the signal and chosen not to act on it (e.g. an existing control is already effective).',
+  DEFER: 'Acknowledged for now — revisit this signal later.',
+  ALREADY_ADDRESSED: 'The underlying condition is already being handled elsewhere.',
+  NOT_RELEVANT: 'This signal does not warrant attention (e.g. a false positive, or context SIE could not see).',
+};
+
+export function decisionLabel(decision: string): string {
+  return DECISION_LABEL[decision] ?? formatCanonicalLabel(decision);
+}
+
+export function decisionTone(decision: string): StatusTone {
+  return DECISION_TONE[decision] ?? 'neutral';
+}
+
+export function decisionDescription(decision: string): string {
+  return DECISION_DESCRIPTION[decision] ?? '';
+}
+
+export const DECISION_OPTIONS: { value: string; label: string }[] = [
+  { value: 'ACT', label: DECISION_LABEL.ACT },
+  { value: 'DO_NOT_ACT', label: DECISION_LABEL.DO_NOT_ACT },
+  { value: 'DEFER', label: DECISION_LABEL.DEFER },
+  { value: 'ALREADY_ADDRESSED', label: DECISION_LABEL.ALREADY_ADDRESSED },
+  { value: 'NOT_RELEVANT', label: DECISION_LABEL.NOT_RELEVANT },
+];
+
+// --- Outcome classification (SIE Milestone 37 IntelligenceOutcomeClassification) ---------------
+// The real, closed backend vocabulary — EFFECTIVE / PARTIALLY_EFFECTIVE /
+// INEFFECTIVE / NO_OUTCOME_RECORDED (`app/models/intelligence_outcome_enums.py`).
+
+const OUTCOME_CLASSIFICATION_LABEL: Record<string, string> = {
+  EFFECTIVE: 'Effective',
+  PARTIALLY_EFFECTIVE: 'Partially effective',
+  INEFFECTIVE: 'Ineffective',
+  NO_OUTCOME_RECORDED: 'No outcome could be established',
+};
+
+const OUTCOME_CLASSIFICATION_TONE: Record<string, StatusTone> = {
+  EFFECTIVE: 'success',
+  PARTIALLY_EFFECTIVE: 'informational',
+  INEFFECTIVE: 'warning',
+  NO_OUTCOME_RECORDED: 'neutral',
+};
+
+const OUTCOME_CLASSIFICATION_DESCRIPTION: Record<string, string> = {
+  EFFECTIVE: 'The intervention resolved the condition the decision concerned.',
+  PARTIALLY_EFFECTIVE: 'The intervention had some effect but did not fully resolve the condition.',
+  INEFFECTIVE: 'The intervention did not resolve the condition.',
+  NO_OUTCOME_RECORDED: 'An outcome could not be established (e.g. no follow-up was possible, or the evidence is inconclusive).',
+};
+
+export function outcomeClassificationLabel(classification: string): string {
+  return OUTCOME_CLASSIFICATION_LABEL[classification] ?? formatCanonicalLabel(classification);
+}
+
+export function outcomeClassificationTone(classification: string): StatusTone {
+  return OUTCOME_CLASSIFICATION_TONE[classification] ?? 'neutral';
+}
+
+export function outcomeClassificationDescription(classification: string): string {
+  return OUTCOME_CLASSIFICATION_DESCRIPTION[classification] ?? '';
+}
+
+export const OUTCOME_CLASSIFICATION_OPTIONS: { value: string; label: string }[] = [
+  { value: 'EFFECTIVE', label: OUTCOME_CLASSIFICATION_LABEL.EFFECTIVE },
+  { value: 'PARTIALLY_EFFECTIVE', label: OUTCOME_CLASSIFICATION_LABEL.PARTIALLY_EFFECTIVE },
+  { value: 'INEFFECTIVE', label: OUTCOME_CLASSIFICATION_LABEL.INEFFECTIVE },
+  { value: 'NO_OUTCOME_RECORDED', label: OUTCOME_CLASSIFICATION_LABEL.NO_OUTCOME_RECORDED },
+];
+
+// --- Outcome verification status (SIE Milestone 38 IntelligenceOutcomeVerificationStatus) ------
+// The real, closed backend vocabulary — VERIFIED / INSUFFICIENT_EVIDENCE /
+// DISPUTED (`app/models/intelligence_outcome_verification_enums.py`). A
+// human's own governance judgment about whether a recorded outcome is
+// adequately supported — never a re-judgment of the original decision.
+
+const VERIFICATION_STATUS_LABEL: Record<string, string> = {
+  VERIFIED: 'Verified',
+  INSUFFICIENT_EVIDENCE: 'Insufficient evidence',
+  DISPUTED: 'Disputed',
+};
+
+const VERIFICATION_STATUS_TONE: Record<string, StatusTone> = {
+  VERIFIED: 'success',
+  INSUFFICIENT_EVIDENCE: 'informational',
+  DISPUTED: 'warning',
+};
+
+const VERIFICATION_STATUS_DESCRIPTION: Record<string, string> = {
+  VERIFIED: 'The outcome and its evidence have been reviewed and are accepted as trustworthy.',
+  INSUFFICIENT_EVIDENCE: 'The supplied evidence does not yet meet the bar to treat this outcome as verified.',
+  DISPUTED: 'A reviewer actively disagrees with the recorded outcome or its evidence.',
+};
+
+export function verificationStatusLabel(status: string): string {
+  return VERIFICATION_STATUS_LABEL[status] ?? formatCanonicalLabel(status);
+}
+
+export function verificationStatusTone(status: string): StatusTone {
+  return VERIFICATION_STATUS_TONE[status] ?? 'neutral';
+}
+
+export function verificationStatusDescription(status: string): string {
+  return VERIFICATION_STATUS_DESCRIPTION[status] ?? '';
+}
+
+export const VERIFICATION_STATUS_OPTIONS: { value: string; label: string }[] = [
+  { value: 'VERIFIED', label: VERIFICATION_STATUS_LABEL.VERIFIED },
+  { value: 'INSUFFICIENT_EVIDENCE', label: VERIFICATION_STATUS_LABEL.INSUFFICIENT_EVIDENCE },
+  { value: 'DISPUTED', label: VERIFICATION_STATUS_LABEL.DISPUTED },
+];
+
+// --- Evidence status (SIE Milestone 38 EvidenceStatus) -------------------------------------------
+// A deterministic, computed classification of an outcome's own supplied
+// evidence — never a score, never itself a verification judgment.
+
+const EVIDENCE_STATUS_LABEL: Record<string, string> = {
+  NO_EVIDENCE: 'No evidence supplied',
+  INVALID_EVIDENCE: 'Supplied evidence is invalid',
+  INSUFFICIENT_EVIDENCE: 'Evidence is mixed / incomplete',
+  VALID_EVIDENCE: 'Evidence is valid',
+};
+
+export function evidenceStatusLabel(status: string): string {
+  return EVIDENCE_STATUS_LABEL[status] ?? formatCanonicalLabel(status);
+}
+
+// --- Organizational memory (SIE Milestone 40/41 OrganizationalMemoryType/ApplicabilityBasis) ----
+
+const MEMORY_TYPE_LABEL: Record<string, string> = {
+  LESSON_LEARNED: 'Lesson learned',
+  EFFECTIVE_PRACTICE: 'Effective practice',
+  FAILED_APPROACH: 'Approach that did not work',
+  EARLY_WARNING_PATTERN: 'Early warning pattern',
+  CONTROL_INSIGHT: 'Control insight',
+};
+
+export function memoryTypeLabel(memoryType: string): string {
+  return MEMORY_TYPE_LABEL[memoryType] ?? formatCanonicalLabel(memoryType);
+}
+
+const MEMORY_APPLICABILITY_LABEL: Record<string, string> = {
+  ORGANIZATION_WIDE: 'Applies across the organization',
+  SITE_MATCH: 'Applies to this site',
+  PROJECT_SITE_MATCH: "Applies to a site associated with this project",
+  ORGANIZATION_SCOPE_ROLLUP: 'Applies to a site within the organization',
+};
+
+export function memoryApplicabilityLabel(basis: string): string {
+  return MEMORY_APPLICABILITY_LABEL[basis] ?? formatCanonicalLabel(basis);
+}
+
+export function memoryGovernanceTone(status: string): StatusTone {
+  return status === 'ACTIVE' ? 'success' : 'neutral';
+}
