@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../../services/api/errors';
 import { AuthProviderStub } from '../../test/authTestUtils';
 import { ActionDetailPage } from './ActionDetailPage';
@@ -14,8 +14,16 @@ vi.mock('../../services/api/actions', () => ({
 vi.mock('../../services/api/sites', () => ({
   listSites: vi.fn().mockResolvedValue([]),
 }));
+vi.mock('../../services/api/decisions', () => ({
+  listDecisions: vi.fn(),
+}));
+vi.mock('../../services/api/outcomes', () => ({
+  listOutcomes: vi.fn(),
+}));
 
 import { getAction, updateAction, updateActionStatus } from '../../services/api/actions';
+import { listDecisions, type IntelligenceDecision } from '../../services/api/decisions';
+import { listOutcomes, type IntelligenceOutcome } from '../../services/api/outcomes';
 
 const ORGANIZATION = { id: 'org-1', name: 'Acme' };
 
@@ -36,6 +44,64 @@ function renderAt(actionId: string, permissions: string[] = []) {
       </MemoryRouter>
     </AuthProviderStub>,
   );
+}
+
+beforeEach(() => {
+  vi.mocked(listDecisions).mockResolvedValue({ items: [], total: 0, page: 1, page_size: 50 });
+  vi.mocked(listOutcomes).mockResolvedValue({ items: [], total: 0, page: 1, page_size: 50 });
+});
+
+function makeDecision(overrides: Partial<IntelligenceDecision> = {}): IntelligenceDecision {
+  return {
+    id: 'dec-1',
+    organization_id: 'org-1',
+    site_id: null,
+    site_label: null,
+    scope: 'organization',
+    attention_reference: 'ref-ppe-recurring-pattern',
+    attention_category: 'RECURRING_PATTERN',
+    attention_priority: 'HIGH',
+    attention_title: 'Repeated PPE non-compliance',
+    attention_explanation: 'PPE non-compliance recurred across the last three inspections.',
+    intelligence_as_of: '2026-06-01T00:00:00Z',
+    intelligence_window_days: 90,
+    calculation_version: 'v1',
+    evidence_source: 'recurrence',
+    evidence_entity_ids: [],
+    evidence_event_ids: [],
+    decision: 'ACT',
+    rationale: 'Raising a refresher training intervention.',
+    linked_action_id: 'action-1',
+    linked_action: { id: 'action-1', title: 'Review reversing procedure', status: 'OPEN' },
+    decided_by_user_id: 'user-1',
+    decided_by_api_client_id: null,
+    decided_at: '2026-06-01T01:00:00Z',
+    created_at: '2026-06-01T01:00:00Z',
+    updated_at: '2026-06-01T01:00:00Z',
+    ...overrides,
+  };
+}
+
+function makeOutcome(overrides: Partial<IntelligenceOutcome> = {}): IntelligenceOutcome {
+  return {
+    id: 'outcome-1',
+    organization_id: 'org-1',
+    decision_id: 'dec-1',
+    decision: { id: 'dec-1', attention_reference: 'ref-ppe-recurring-pattern', decision: 'ACT' },
+    site_id: null,
+    site_label: null,
+    linked_action_id: 'action-1',
+    linked_action: { id: 'action-1', title: 'Review reversing procedure', status: 'OPEN' },
+    classification: 'PARTIALLY_EFFECTIVE',
+    summary: 'Some improvement observed, one repeat incident this week.',
+    evidence_event_ids: [],
+    outcome_at: '2026-06-05T00:00:00Z',
+    recorded_by_user_id: 'user-1',
+    recorded_by_api_client_id: null,
+    created_at: '2026-06-05T00:00:00Z',
+    updated_at: '2026-06-05T00:00:00Z',
+    ...overrides,
+  };
 }
 
 const DETAIL = {
@@ -192,5 +258,116 @@ describe('ActionDetailPage — real API path', () => {
 
     expect(within(breadcrumb).getByText('Review reversing procedure')).toBeInTheDocument();
     expect(within(breadcrumb).queryByText('action-1')).not.toBeInTheDocument();
+  });
+});
+
+describe('ActionDetailPage — Referenced by Intelligence (SIE Operational Linkage Audit finding #1)', () => {
+  it('1. shows no "Referenced by Intelligence" section when nothing references this action', async () => {
+    vi.mocked(getAction).mockResolvedValue(DETAIL);
+
+    renderAt('action-1');
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Review reversing procedure' })).toBeInTheDocument());
+    await waitFor(() => expect(listDecisions).toHaveBeenCalled());
+
+    expect(screen.queryByText('Referenced by Intelligence')).not.toBeInTheDocument();
+  });
+
+  it('2/6. renders one linked Intelligence Decision, with its signal, type, category, rationale and date', async () => {
+    vi.mocked(getAction).mockResolvedValue(DETAIL);
+    vi.mocked(listDecisions).mockResolvedValue({ items: [makeDecision()], total: 1, page: 1, page_size: 50 });
+
+    renderAt('action-1');
+    await waitFor(() => expect(screen.getByText('Repeated PPE non-compliance')).toBeInTheDocument());
+
+    expect(screen.getByText('Intelligence Decision')).toBeInTheDocument(); // singular
+    expect(screen.getByText('Act')).toBeInTheDocument();
+    expect(screen.getByText(/Recurring pattern/)).toBeInTheDocument();
+    expect(screen.getByText('Raising a refresher training intervention.')).toBeInTheDocument();
+    expect(screen.getByText(/Decided/)).toBeInTheDocument();
+
+    expect(vi.mocked(listDecisions)).toHaveBeenCalledWith(
+      expect.objectContaining({ organizationId: 'org-1', linkedActionId: 'action-1' }),
+      expect.any(AbortSignal),
+    );
+  });
+
+  it('3. renders multiple linked Intelligence Decisions, not just the first', async () => {
+    vi.mocked(getAction).mockResolvedValue(DETAIL);
+    vi.mocked(listDecisions).mockResolvedValue({
+      items: [
+        makeDecision({ id: 'dec-1', attention_title: 'Repeated PPE non-compliance' }),
+        makeDecision({ id: 'dec-2', attention_title: 'Second unrelated signal', rationale: 'A second, separate decision also referenced this action.' }),
+      ],
+      total: 2,
+      page: 1,
+      page_size: 50,
+    });
+
+    renderAt('action-1');
+    await waitFor(() => expect(screen.getByText('Intelligence Decisions')).toBeInTheDocument()); // plural
+
+    expect(screen.getByText('Repeated PPE non-compliance')).toBeInTheDocument();
+    expect(screen.getByText('Second unrelated signal')).toBeInTheDocument();
+  });
+
+  it('4/7. renders a linked Intelligence Outcome, with its classification, date and summary', async () => {
+    vi.mocked(getAction).mockResolvedValue(DETAIL);
+    vi.mocked(listOutcomes).mockResolvedValue({ items: [makeOutcome()], total: 1, page: 1, page_size: 50 });
+
+    renderAt('action-1');
+    await waitFor(() => expect(screen.getByText('Some improvement observed, one repeat incident this week.')).toBeInTheDocument());
+
+    expect(screen.getByText('Intelligence Outcome')).toBeInTheDocument(); // singular
+    expect(screen.getByText('Partially effective')).toBeInTheDocument();
+
+    expect(vi.mocked(listOutcomes)).toHaveBeenCalledWith(
+      expect.objectContaining({ organizationId: 'org-1', linkedActionId: 'action-1' }),
+      expect.any(AbortSignal),
+    );
+  });
+
+  it('5. renders both a linked Decision and a linked Outcome together', async () => {
+    vi.mocked(getAction).mockResolvedValue(DETAIL);
+    vi.mocked(listDecisions).mockResolvedValue({ items: [makeDecision()], total: 1, page: 1, page_size: 50 });
+    vi.mocked(listOutcomes).mockResolvedValue({ items: [makeOutcome()], total: 1, page: 1, page_size: 50 });
+
+    renderAt('action-1');
+    await waitFor(() => expect(screen.getByText('Repeated PPE non-compliance')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Partially effective')).toBeInTheDocument());
+
+    expect(screen.getByText('Intelligence Decision')).toBeInTheDocument();
+    expect(screen.getByText('Intelligence Outcome')).toBeInTheDocument();
+  });
+
+  it('8. an Intelligence lookup failure does not break the rest of the Action page', async () => {
+    vi.mocked(getAction).mockResolvedValue(DETAIL);
+    vi.mocked(listDecisions).mockRejectedValue(new ApiError('Could not reach the SIE API.', { status: 0 }));
+
+    renderAt('action-1', ['intervention:manage']);
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Review reversing procedure' })).toBeInTheDocument());
+
+    // The rest of the page is fully usable despite the failed lookup.
+    expect(screen.getByText('Jordan Blake')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText(/Linked Intelligence Decisions are unavailable right now/)).toBeInTheDocument());
+
+    // Core, unrelated workflows are untouched.
+    expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Change status to')).toBeInTheDocument();
+  });
+
+  it('9. existing ActionDetailPage behavior is unchanged when there is nothing to reference', async () => {
+    vi.mocked(getAction).mockResolvedValue(DETAIL);
+
+    renderAt('action-1', ['intervention:manage']);
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Review reversing procedure' })).toBeInTheDocument());
+    await waitFor(() => expect(listDecisions).toHaveBeenCalled());
+
+    // Every pre-existing section and control still renders exactly as before.
+    expect(screen.getByText('Jordan Blake')).toBeInTheDocument();
+    expect(screen.getByText('Follow up on the incident.')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'View source event' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Change status to')).toBeInTheDocument();
+    expect(screen.getByText('You do not have permission to reassign this action.')).toBeInTheDocument();
+    expect(screen.queryByText('Referenced by Intelligence')).not.toBeInTheDocument();
   });
 });

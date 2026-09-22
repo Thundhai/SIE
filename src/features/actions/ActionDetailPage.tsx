@@ -16,6 +16,7 @@ import { StatusBadge } from '../../components/ui/StatusBadge';
 import type { AsyncState } from '../../types/common';
 import type { ActionStatus, SafetyAction } from '../../types/actions';
 import { ActionFormDrawer } from './ActionFormDrawer';
+import { ActionIntelligenceReferences } from './ActionIntelligenceReferences';
 import {
   ACTION_TERMINAL_STATUSES,
   actionStatusLabel,
@@ -141,7 +142,7 @@ function ActionDetailContent({
   onEdit: () => void;
   onChanged: (updated: SafetyAction) => void;
 }) {
-  const { hasPermission } = useAuth();
+  const { hasPermission, organization } = useAuth();
   const canManage = hasPermission('intervention:manage');
   const canAssign = hasPermission('intervention:assign');
   const canClose = hasPermission('intervention:close');
@@ -232,6 +233,8 @@ function ActionDetailContent({
       <Section title="Assignment">
         <AssignmentControl action={action} canAssign={canAssign} onChanged={onChanged} />
       </Section>
+
+      <ActionIntelligenceReferences actionId={action.id} organizationId={organization?.id} />
     </>
   );
 }

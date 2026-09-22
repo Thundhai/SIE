@@ -82,6 +82,11 @@ export function listDecisions(
     siteId?: string;
     attentionReference?: string;
     decision?: IntelligenceDecisionType;
+    /** Reverse lookup: which Intelligence Decision(s) named this
+     * SafetyAction — mirrors the backend's own already-built
+     * `linked_action_id` query filter (SIE Operational Linkage Audit,
+     * finding #1). Used by `ActionIntelligenceReferences.tsx`. */
+    linkedActionId?: string;
   },
   signal?: AbortSignal,
 ): Promise<IntelligenceDecisionList> {
@@ -93,6 +98,7 @@ export function listDecisions(
       site_id: params.siteId,
       attention_reference: params.attentionReference,
       decision: params.decision,
+      linked_action_id: params.linkedActionId,
     },
     signal,
   });

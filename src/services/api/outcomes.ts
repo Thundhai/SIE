@@ -73,7 +73,17 @@ export interface CreateOutcomeInput {
 }
 
 export function listOutcomes(
-  params: { organizationId: string; decisionId?: string; page?: number; pageSize?: number },
+  params: {
+    organizationId: string;
+    decisionId?: string;
+    page?: number;
+    pageSize?: number;
+    /** Reverse lookup: which Intelligence Outcome(s) named this
+     * SafetyAction — mirrors the backend's own already-built
+     * `linked_action_id` query filter (SIE Operational Linkage Audit,
+     * finding #1). Used by `ActionIntelligenceReferences.tsx`. */
+    linkedActionId?: string;
+  },
   signal?: AbortSignal,
 ): Promise<IntelligenceOutcomeList> {
   return apiRequest<IntelligenceOutcomeList>('/intelligence/outcomes', {
@@ -82,6 +92,7 @@ export function listOutcomes(
       decision_id: params.decisionId,
       page: params.page,
       page_size: params.pageSize,
+      linked_action_id: params.linkedActionId,
     },
     signal,
   });
