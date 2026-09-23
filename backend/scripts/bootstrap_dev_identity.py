@@ -23,6 +23,8 @@ import sys
 import uuid
 from pathlib import Path
 
+from sqlalchemy import select
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.core.config import settings  # noqa: E402
@@ -65,30 +67,33 @@ def main() -> None:
             return
 
         print(f"Creating development organization {DEV_ORGANIZATION_ID} ...")
-        org = Organization(
-            id=DEV_ORGANIZATION_ID,
-            name=DEV_ORGANIZATION_NAME,
-            status="active",
+        db.add(
+            Organization(
+                id=DEV_ORGANIZATION_ID,
+                name=DEV_ORGANIZATION_NAME,
+                status="active",
+            )
         )
-        db.add(org)
 
         print(f"Creating development site {DEV_SITE_ID} ...")
-        site = Site(
-            id=DEV_SITE_ID,
-            organization_id=DEV_ORGANIZATION_ID,
-            name=DEV_SITE_NAME,
-            status="active",
+        db.add(
+            Site(
+                id=DEV_SITE_ID,
+                organization_id=DEV_ORGANIZATION_ID,
+                name=DEV_SITE_NAME,
+                status="active",
+            )
         )
-        db.add(site)
 
         print(f"Creating development user {DEV_USER_ID} ...")
-        user = User(
-            id=DEV_USER_ID,
-            name=DEV_USER_NAME,
-            email=DEV_USER_EMAIL,
-            organization_id=DEV_ORGANIZATION_ID,
+        db.add(
+            User(
+                id=DEV_USER_ID,
+                name=DEV_USER_NAME,
+                email=DEV_USER_EMAIL,
+                organization_id=DEV_ORGANIZATION_ID,
+            )
         )
-        db.add(user)
 
         db.commit()
 
@@ -101,10 +106,8 @@ def main() -> None:
             ),
         )
 
-        # Verify the membership exists before reporting success.
         membership = db.execute(
-            db.query(OrganizationMembership)
-            .filter(
+            select(OrganizationMembership).where(
                 OrganizationMembership.organization_id == DEV_ORGANIZATION_ID,
                 OrganizationMembership.user_id == DEV_USER_ID,
             )
