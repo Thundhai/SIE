@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     # see the README's "Identity architecture" section.
     DEV_MODE: bool = False
 
+    # Development/staging-only switch for the deterministic demo dataset bootstrap.
+    # This must never be enabled on a production deployment.
+    SIE_DEV_DEMO_DATA: bool = False
+
     # Production authentication (OIDC/OAuth2) -- SIE Milestone 20:
     # Production Authentication & Identity Foundation v0.1. See
     # app/services/oidc_verifier.py for the token-verification
