@@ -42,18 +42,12 @@ describe('AppShell', () => {
     expect(screen.getByRole('link', { name: 'Intelligence' })).toHaveAttribute('href', '/intelligence');
   });
 
-  it('renders Knowledge/Reports/Administration as disabled, non-navigating items (§9/§22) — SIE Milestone UI-01 promotes Intelligence and Risk Assessments to real routes', () => {
+  it('renders Knowledge, Reports, and Administration as real navigable links, not "Coming later" placeholders', () => {
     renderShell();
-    for (const label of ['Knowledge', 'Reports', 'Administration']) {
-      // Not a link/button — no navigation target exists for it this milestone.
-      expect(screen.queryByRole('link', { name: label })).not.toBeInTheDocument();
-      // Some group headings share their single item's label verbatim (e.g.
-      // "Knowledge"/"Administration" — the approved nav structure), so the
-      // item row itself (a <span>, not the group's <p> heading) is what's
-      // asserted here.
-      expect(screen.getByText(label, { selector: 'span' })).toBeInTheDocument();
-    }
-    expect(screen.getAllByText('Coming later')).toHaveLength(3);
+    expect(screen.getByRole('link', { name: 'Knowledge' })).toHaveAttribute('href', '/knowledge');
+    expect(screen.getByRole('link', { name: 'Reports' })).toHaveAttribute('href', '/reports');
+    expect(screen.getByRole('link', { name: 'Administration' })).toHaveAttribute('href', '/administration');
+    expect(screen.queryByText('Coming later')).not.toBeInTheDocument();
   });
 
   it('gives the active Intelligence link the teal intelligence accent (SIE Milestone UI-DESIGN-01)', () => {
