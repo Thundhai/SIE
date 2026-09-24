@@ -3,7 +3,7 @@ import { Drawer } from '../../components/ui/Drawer';
 import { Button } from '../../components/ui/Button';
 import { Input } from '../../components/ui/Input';
 import { ApiError } from '../../services/api/errors';
-import { createSite, type Site } from '../../services/api/administration';
+import { createSite, type Site } from '../../services/api/sites';
 
 export interface CreateSiteDrawerProps {
   isOpen: boolean;

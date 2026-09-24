@@ -19,45 +19,10 @@
 import { apiRequest } from './client';
 import type { OrganizationMembership } from './organizations';
 
-// --- Sites -------------------------------------------------------------------------------------
-
-export interface Site {
-  id: string;
-  organization_id: string;
-  name: string;
-  location: string | null;
-  country: string | null;
-  status: string;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface CreateSiteInput {
-  name: string;
-  location?: string;
-  country?: string;
-  /** Free text on the backend (`SiteBase.status`, default `"active"`) —
-   * no enum exists server-side, so this is never constrained to an
-   * invented fixed vocabulary. */
-  status?: string;
-}
-
-export function listSites(organizationId: string, signal?: AbortSignal) {
-  return apiRequest<Site[]>(`/organizations/${organizationId}/sites`, { signal });
-}
-
-export function createSite(organizationId: string, input: CreateSiteInput, signal?: AbortSignal) {
-  return apiRequest<Site>(`/organizations/${organizationId}/sites`, {
-    method: 'POST',
-    body: {
-      name: input.name,
-      location: input.location || null,
-      country: input.country || null,
-      status: input.status || undefined,
-    },
-    signal,
-  });
-}
+// Sites: `Site`/`listSites`/`createSite` already exist as
+// `services/api/sites.ts` (pre-existing, used by `ApiEventRepository`'s
+// site filter) — reused there rather than duplicated here. Administration
+// consumers import directly from `./sites`.
 
 // --- Users & Membership --------------------------------------------------------------------------
 

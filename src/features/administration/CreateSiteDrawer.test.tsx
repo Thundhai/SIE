@@ -3,13 +3,13 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { CreateSiteDrawer } from './CreateSiteDrawer';
 import { ApiError } from '../../services/api/errors';
-import type { Site } from '../../services/api/administration';
+import type { Site } from '../../services/api/sites';
 
-vi.mock('../../services/api/administration', () => ({
+vi.mock('../../services/api/sites', () => ({
   createSite: vi.fn(),
 }));
 
-import { createSite } from '../../services/api/administration';
+import { createSite } from '../../services/api/sites';
 
 /**
  * Sites has create-only backend support (`POST /organizations/{id}/sites`)

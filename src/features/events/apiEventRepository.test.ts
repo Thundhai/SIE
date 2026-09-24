@@ -164,7 +164,7 @@ describe('ApiEventRepository', () => {
 
   it('listSiteOptions() maps real sites to id/name option pairs', async () => {
     vi.mocked(listSites).mockResolvedValue([
-      { id: 'site-1', name: 'North Yard', location: null, country: null, status: 'active', organization_id: ORG_ID },
+      { id: 'site-1', name: 'North Yard', location: null, country: null, status: 'active', organization_id: ORG_ID, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:00Z' },
     ]);
 
     const options = await new ApiEventRepository(ORG_ID).listSiteOptions();

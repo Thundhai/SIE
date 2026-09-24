@@ -8,7 +8,7 @@ import { ErrorState } from '../../components/ui/ErrorState';
 import { LoadingState } from '../../components/ui/LoadingState';
 import { StatusBadge } from '../../components/ui/StatusBadge';
 import { getOrganization, listMembers, type Organization, type OrganizationMembership } from '../../services/api/organizations';
-import { listSites, type Site } from '../../services/api/administration';
+import { listSites, type Site } from '../../services/api/sites';
 import { ApiError } from '../../services/api/errors';
 import type { AsyncState } from '../../types/common';
 import { AddMemberDrawer } from './AddMemberDrawer';
