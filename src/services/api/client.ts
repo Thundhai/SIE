@@ -48,7 +48,7 @@ function buildUrl(path: string, query?: Record<string, QueryValue>): string {
   return url.toString();
 }
 
-function buildHeaders(hasBody: boolean, extraHeaders?: Record<string, string>): Headers {
+function buildHeaders(hasJsonBody: boolean, extraHeaders?: Record<string, string>): Headers {
   const headers = new Headers();
   // Caller-supplied headers are applied first, so none of them can ever
   // shadow the base headers set below (Content-Type/Accept/the request-
@@ -58,9 +58,13 @@ function buildHeaders(hasBody: boolean, extraHeaders?: Record<string, string>): 
       headers.set(key, value);
     }
   }
-  if (hasBody) {
+  if (hasJsonBody) {
     headers.set('Content-Type', 'application/json');
   }
+  // A FormData body (multipart upload, e.g. knowledge ingestion) never
+  // gets an explicit Content-Type here — the browser sets its own
+  // `multipart/form-data; boundary=...` value, which a manual header
+  // would break.
   headers.set('Accept', 'application/json');
   headers.set('X-Client-Request-Id', crypto.randomUUID());
 
@@ -87,14 +91,15 @@ function buildHeaders(hasBody: boolean, extraHeaders?: Record<string, string>): 
 export async function apiRequest<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
   const { method = 'GET', query, body, signal, headers: extraHeaders } = options;
   const url = buildUrl(path, query);
-  const headers = buildHeaders(body !== undefined, extraHeaders);
+  const isFormData = body instanceof FormData;
+  const headers = buildHeaders(body !== undefined && !isFormData, extraHeaders);
 
   let response: Response;
   try {
     response = await fetch(url, {
       method,
       headers,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      body: isFormData ? body : body !== undefined ? JSON.stringify(body) : undefined,
       signal,
     });
   } catch (cause) {
