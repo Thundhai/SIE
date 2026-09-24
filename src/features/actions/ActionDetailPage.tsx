@@ -26,6 +26,7 @@ import {
 } from './actionStatus';
 import type { ActionOption } from './actionRepository';
 import { useActionRepository } from './useActionRepository';
+import { ActionOutcomeLifecycle } from './ActionOutcomeLifecycle';
 
 function formatDateTime(value: string | null): string {
   if (!value) return '—';
@@ -232,6 +233,8 @@ function ActionDetailContent({
       <Section title="Assignment">
         <AssignmentControl action={action} canAssign={canAssign} onChanged={onChanged} />
       </Section>
+
+      <ActionOutcomeLifecycle action={action} />
     </>
   );
 }
