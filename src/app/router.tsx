@@ -10,6 +10,7 @@ import { RiskAssessmentDetailPage } from '../features/riskAssessments/RiskAssess
 import { RiskAssessmentsPage } from '../features/riskAssessments/RiskAssessmentsPage';
 import { KnowledgePage } from '../features/knowledge/KnowledgePage';
 import { ReportsPage } from '../features/reports/ReportsPage';
+import { AdministrationPage } from '../features/administration/AdministrationPage';
 
 /**
  * URL-based routing — replaces the legacy `currentScreen: AppScreen`
@@ -40,6 +41,7 @@ export function AppRoutes() {
         <Route path="intelligence" element={<IntelligencePage />} />
         <Route path="knowledge" element={<KnowledgePage />} />
         <Route path="reports" element={<ReportsPage />} />
+        <Route path="administration" element={<AdministrationPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>
