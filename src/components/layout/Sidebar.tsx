@@ -16,9 +16,8 @@ interface NavItem {
   href: string;
   icon: typeof Home;
   /** `false` items render as disabled, non-navigating rows with a
-   * "Coming later" note — never a fake page (§9/§22). Home, Events,
-   * Actions, Risk Assessments, and Intelligence are real routes;
-   * Knowledge/Reports/Administration are not built yet. */
+   * "Coming later" note — never a fake page (§9/§22). Every current
+   * information-architecture item is now a real, enabled route. */
   enabled: boolean;
   /** Which brand color the active state uses (SIE Milestone UI-DESIGN-01).
    * Teal is the SIE *intelligence* accent specifically — reserved for the
@@ -59,9 +58,8 @@ const NAV_GROUPS: NavGroup[] = [
  * SIE information architecture (Home / Work / Intelligence / Knowledge /
  * Reporting / Administration) with small, restrained uppercase group
  * headings — never a second visual system layered on top of the plain
- * link list. Home, Events, Actions, Risk Assessments, and Intelligence
- * are real links; Administration no longer renders as a disabled row with a "Coming later" label so the eventual information
- * architecture is visible without pretending those screens exist yet.
+ * link list. Every item (Home, Events, Actions, Risk Assessments,
+ * Intelligence, Knowledge, Reports, Administration) is a real link.
  *
  * SIE Milestone UI-DESIGN-01: a stronger `border-border-strong` right
  * edge gives the rail a clearer separation from the canvas than v0.1's
