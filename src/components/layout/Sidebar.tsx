@@ -50,7 +50,7 @@ const NAV_GROUPS: NavGroup[] = [
   { heading: 'Intelligence', items: [{ label: 'Intelligence', href: '/intelligence', icon: LineChart, enabled: true, accent: 'teal' }] },
   { heading: 'Knowledge', items: [{ label: 'Knowledge', href: '/knowledge', icon: ShieldCheck, enabled: true }] },
   { heading: 'Reporting', items: [{ label: 'Reports', href: '/reports', icon: FileBarChart2, enabled: true }] },
-  { heading: 'Administration', items: [{ label: 'Administration', href: '/administration', icon: Settings2, enabled: false }] },
+  { heading: 'Administration', items: [{ label: 'Administration', href: '/administration', icon: Settings2, enabled: true }] },
 ];
 
 /**
@@ -60,8 +60,7 @@ const NAV_GROUPS: NavGroup[] = [
  * Reporting / Administration) with small, restrained uppercase group
  * headings — never a second visual system layered on top of the plain
  * link list. Home, Events, Actions, Risk Assessments, and Intelligence
- * are real links; Knowledge/Reports/Administration render as disabled
- * rows with a "Coming later" label so the eventual information
+ * are real links; Administration no longer renders as a disabled row with a "Coming later" label so the eventual information
  * architecture is visible without pretending those screens exist yet.
  *
  * SIE Milestone UI-DESIGN-01: a stronger `border-border-strong` right
