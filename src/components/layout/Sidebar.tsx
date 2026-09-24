@@ -49,7 +49,7 @@ const NAV_GROUPS: NavGroup[] = [
   },
   { heading: 'Intelligence', items: [{ label: 'Intelligence', href: '/intelligence', icon: LineChart, enabled: true, accent: 'teal' }] },
   { heading: 'Knowledge', items: [{ label: 'Knowledge', href: '/knowledge', icon: ShieldCheck, enabled: true }] },
-  { heading: 'Reporting', items: [{ label: 'Reports', href: '/reports', icon: FileBarChart2, enabled: false }] },
+  { heading: 'Reporting', items: [{ label: 'Reports', href: '/reports', icon: FileBarChart2, enabled: true }] },
   { heading: 'Administration', items: [{ label: 'Administration', href: '/administration', icon: Settings2, enabled: false }] },
 ];
 
