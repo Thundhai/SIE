@@ -46,9 +46,9 @@ describe('AppRoutes', () => {
     expect(screen.getByRole('heading', { name: 'Home' })).toBeInTheDocument();
   });
 
-  it('does not route Knowledge/Reports/Administration to a fake page (§22) — falls back to Home', () => {
+  it('renders Knowledge at /knowledge, Reports at /reports, and Administration at /administration — all real routes', () => {
     renderAt('/knowledge');
-    expect(screen.getByRole('heading', { name: 'Home' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Knowledge' })).toBeInTheDocument();
   });
 
   it('renders Actions at /actions (SIE Milestone 18)', async () => {
