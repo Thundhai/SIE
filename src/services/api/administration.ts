@@ -50,11 +50,11 @@ export interface ApiClient {
 }
 
 export function listSites(organizationId: string, signal?: AbortSignal) {
-  return apiRequest<Site[]>(\`/organizations/\${organizationId}/sites\`, { signal });
+  return apiRequest<Site[]>(`/organizations/${organizationId}/sites`, { signal });
 }
 
 export function listMembers(organizationId: string, signal?: AbortSignal) {
-  return apiRequest<OrganizationMembership[]>(\`/organizations/\${organizationId}/members\`, { signal });
+  return apiRequest<OrganizationMembership[]>(`/organizations/${organizationId}/members`, { signal });
 }
 
 export function listActiveGoverningStandards(organizationId: string, signal?: AbortSignal) {
@@ -65,5 +65,5 @@ export function listActiveGoverningStandards(organizationId: string, signal?: Ab
 }
 
 export function listApiClients(organizationId: string, signal?: AbortSignal) {
-  return apiRequest<ApiClient[]>(\`/organizations/\${organizationId}/api-clients\`, { signal });
+  return apiRequest<ApiClient[]>(`/organizations/${organizationId}/api-clients`, { signal });
 }
