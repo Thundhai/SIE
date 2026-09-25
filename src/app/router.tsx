@@ -19,13 +19,10 @@ import { AdministrationPage } from '../features/administration/AdministrationPag
  * unrelated screens).
  *
  * Home, Events (+ Event Detail), Actions (+ Action Detail, SIE Milestone
- * 18), Intelligence, and Risk Assessments (+ detail, SIE Milestone UI-01)
- * are real routes. Knowledge/Reports/Administration are still NOT routed
- * — the Sidebar renders them as disabled, clearly-labeled "Coming later"
- * items rather than linking to placeholder pages (§9/§22: "do not create
- * fake pages for them simply to make navigation appear complete"). Any
- * unknown path redirects to Home rather than 404ing, since there is
- * nothing else to route to yet.
+ * 18), Intelligence, Risk Assessments (+ detail, SIE Milestone UI-01),
+ * Knowledge, Reports, and Administration are all real routes, each backed
+ * by real backend data (never a fake/placeholder page — §9/§22). Any
+ * unknown path redirects to Home rather than 404ing.
  */
 export function AppRoutes() {
   return (

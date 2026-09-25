@@ -33,27 +33,21 @@ function renderShell(initialPath = '/') {
 }
 
 describe('AppShell', () => {
-  it('renders Home, Events, Actions, Risk Assessments, and Intelligence as real navigable links', () => {
+  it('renders Home, Events, Actions, Risk Assessments, Intelligence, Knowledge, Reports, and Administration as real navigable links', () => {
     renderShell();
     expect(screen.getByRole('link', { name: 'Home' })).toHaveAttribute('href', '/');
     expect(screen.getByRole('link', { name: 'Events' })).toHaveAttribute('href', '/events');
     expect(screen.getByRole('link', { name: 'Actions' })).toHaveAttribute('href', '/actions');
     expect(screen.getByRole('link', { name: 'Risk Assessments' })).toHaveAttribute('href', '/risk-assessments');
     expect(screen.getByRole('link', { name: 'Intelligence' })).toHaveAttribute('href', '/intelligence');
+    expect(screen.getByRole('link', { name: 'Knowledge' })).toHaveAttribute('href', '/knowledge');
+    expect(screen.getByRole('link', { name: 'Reports' })).toHaveAttribute('href', '/reports');
+    expect(screen.getByRole('link', { name: 'Administration' })).toHaveAttribute('href', '/administration');
   });
 
-  it('renders Knowledge/Reports/Administration as disabled, non-navigating items (§9/§22) — SIE Milestone UI-01 promotes Intelligence and Risk Assessments to real routes', () => {
+  it('renders no disabled "Coming later" navigation items — every information-architecture item is a real route', () => {
     renderShell();
-    for (const label of ['Knowledge', 'Reports', 'Administration']) {
-      // Not a link/button — no navigation target exists for it this milestone.
-      expect(screen.queryByRole('link', { name: label })).not.toBeInTheDocument();
-      // Some group headings share their single item's label verbatim (e.g.
-      // "Knowledge"/"Administration" — the approved nav structure), so the
-      // item row itself (a <span>, not the group's <p> heading) is what's
-      // asserted here.
-      expect(screen.getByText(label, { selector: 'span' })).toBeInTheDocument();
-    }
-    expect(screen.getAllByText('Coming later')).toHaveLength(3);
+    expect(screen.queryByText('Coming later')).not.toBeInTheDocument();
   });
 
   it('gives the active Intelligence link the teal intelligence accent (SIE Milestone UI-DESIGN-01)', () => {
