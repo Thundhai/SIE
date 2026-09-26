@@ -38,6 +38,7 @@ _JSONType = GenericJSON().with_variant(JSONB(), "postgresql")
 
 class Prediction(Base, UUIDPrimaryKeyMixin, OrganizationScopedMixin):
     __tablename__ = "predictions"
+    __table_args__ = {"schema": "commercial_core"}
 
     entity_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     entity_id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), nullable=False, index=True)
@@ -53,12 +54,18 @@ class Prediction(Base, UUIDPrimaryKeyMixin, OrganizationScopedMixin):
     risk_category: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
     model_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("model_registry_entries.id", ondelete="SET NULL"), nullable=True, index=True
+        Uuid(as_uuid=True),
+        ForeignKey("commercial_core.model_registry_entries.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
     model_version: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
     feature_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("feature_snapshots.id", ondelete="SET NULL"), nullable=True, index=True
+        Uuid(as_uuid=True),
+        ForeignKey("commercial_core.feature_snapshots.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
 
     data_quality: Mapped[str] = mapped_column(String(20), nullable=False)

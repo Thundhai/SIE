@@ -24,9 +24,13 @@ _JSONType = GenericJSON().with_variant(JSONB(), "postgresql")
 
 class ModelApproval(UUIDPrimaryKeyMixin, OrganizationScopedMixin, Base):
     __tablename__ = "model_approvals"
+    __table_args__ = {"schema": "commercial_core"}
 
     model_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("model_registry_entries.id", ondelete="CASCADE"), nullable=False, index=True
+        Uuid(as_uuid=True),
+        ForeignKey("commercial_core.model_registry_entries.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True
     )
     model_version: Mapped[str] = mapped_column(String(20), nullable=False)
 
