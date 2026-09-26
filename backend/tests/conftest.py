@@ -6,6 +6,19 @@ This is safe because every model column uses SQLAlchemy's portable types
 PostgreSQL-specific dialect type, so the schema behaves identically. This
 keeps the test suite fast and dependency-free; PostgreSQL is still the
 target production database, exercised via Alembic + docker-compose.
+
+**Database Boundary Separation milestone.** Some models now declare a
+real PostgreSQL schema (`__table_args__ = {"schema": "commercial_core"}`,
+see backend/docs/DATABASE_BOUNDARY.md) -- SQLite has no equivalent
+concept, so the engine below sets `schema_translate_map` to collapse
+`commercial_core` back onto SQLite's own single default namespace at
+connection time. This is SQLAlchemy's own documented mechanism for
+exactly this case (see "schema_translate_map" in SQLAlchemy's
+Schema-level operations docs): the ORM layer, cross-schema foreign keys,
+and every existing test's queries are completely unaffected -- only the
+literal schema-qualified name is remapped, purely for SQLite's benefit.
+Real Postgres (Alembic, CI) uses the actual `commercial_core` schema
+unchanged.
 """
 
 from collections.abc import Generator
@@ -52,6 +65,7 @@ engine = create_engine(
     "sqlite+pysqlite:///:memory:",
     connect_args={"check_same_thread": False},
     poolclass=StaticPool,
+    execution_options={"schema_translate_map": {"commercial_core": None}},
 )
 TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 

@@ -248,8 +248,17 @@ class RiskAssessmentFinding(UUIDPrimaryKeyMixin, OrganizationScopedMixin, Timest
     # Governed ontology concept, not a closed enum (SIE Milestone 25A) --
     # see module docstring's own "Risk area is a governed ontology
     # concept" section.
+    # Database Boundary Separation milestone: ontology_concepts moved to
+    # the commercial_core schema (migration 0032) -- this FK string is
+    # now schema-qualified so a fresh Base.metadata-driven install and
+    # Alembic's own autogenerate agree with where the table actually
+    # lives. The RESTRICT guarantee itself is unaffected -- see that
+    # migration's own docstring.
     risk_area_concept_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("ontology_concepts.id", ondelete="RESTRICT"), nullable=False, index=True
+        Uuid(as_uuid=True),
+        ForeignKey("commercial_core.ontology_concepts.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
     )
     # Snapshot of OntologyConcept.ontology_version at the moment this
     # finding was created -- historical integrity (item 7); see module
