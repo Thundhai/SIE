@@ -44,11 +44,30 @@ def _current_head_revision(config: Config) -> str:
 def _fresh_schema_engine():
     """A genuinely empty `public` schema on `PG_TEST_DATABASE_URL` —
     dropped and recreated, not merely `DROP TABLE IF EXISTS`-cleaned, so
-    no leftover type/table from a previous run can mask a real failure."""
-    engine = create_engine(PG_TEST_DATABASE_URL)
+    no leftover type/table from a previous run can mask a real failure.
+    Also drops `commercial_core` (migration `0031`+, Database Boundary
+    Separation milestone) the same way, so a previous run's own tables
+    there cannot mask a real failure either.
+
+    **`search_path=public,commercial_core`.** This whole file's tests
+    predate the database-boundary separation and issue plenty of raw,
+    unqualified SQL (`INSERT INTO ontology_concepts ...`,
+    `'intelligence_decisions'::regclass`, etc.) written when every table
+    lived in `public`. Rather than schema-qualifying every one of those
+    pre-existing statements individually (a much larger, far less
+    reviewable diff for a mechanical rename), this connection's
+    `search_path` includes both schemas, so an unqualified name keeps
+    resolving correctly regardless of which schema a given migration has
+    moved that table into by the point in the chain a given statement
+    runs. This does not weaken any assertion: every explicit
+    `information_schema... WHERE table_schema = '...'` check in this
+    file still names the exact schema it means, unaffected by
+    `search_path`, which only governs *unqualified* name resolution."""
+    engine = create_engine(PG_TEST_DATABASE_URL, connect_args={"options": "-c search_path=public,commercial_core"})
     with engine.begin() as conn:
         conn.execute(text("DROP SCHEMA public CASCADE"))
         conn.execute(text("CREATE SCHEMA public"))
+        conn.execute(text("DROP SCHEMA IF EXISTS commercial_core CASCADE"))
     return engine
 
 
@@ -99,8 +118,11 @@ def test_fresh_postgres_database_migrates_through_head_with_no_manual_interventi
                 row[0]
                 for row in conn.execute(
                     text(
+                        # Database Boundary Separation milestone (migration
+                        # 0034): the predictive-modeling cluster is at head
+                        # here, so it now lives in commercial_core.
                         "SELECT table_name FROM information_schema.tables "
-                        "WHERE table_schema = 'public'"
+                        "WHERE table_schema IN ('public', 'commercial_core')"
                     )
                 ).all()
             }
@@ -458,8 +480,12 @@ def test_governance_migration_downgrade_then_reupgrade_round_trips_cleanly(monke
                 row[0]
                 for row in conn.execute(
                     text(
+                        # Database Boundary Separation milestone (migration 0034):
+                        # this cluster is at head here, so it now lives in
+                        # commercial_core, not public -- both schemas queried so
+                        # this assertion still means "does the table exist at all".
                         "SELECT table_name FROM information_schema.tables "
-                        "WHERE table_schema = 'public'"
+                        "WHERE table_schema IN ('public', 'commercial_core')"
                     )
                 ).all()
             }
@@ -473,7 +499,7 @@ def test_governance_migration_downgrade_then_reupgrade_round_trips_cleanly(monke
                 for row in conn.execute(
                     text(
                         "SELECT column_name FROM information_schema.columns "
-                        "WHERE table_schema = 'public' AND table_name = 'model_registry_entries'"
+                        "WHERE table_schema = 'commercial_core' AND table_name = 'model_registry_entries'"
                     )
                 ).all()
             }
@@ -798,8 +824,11 @@ def test_real_enterprise_terminology_ontology_calibration_migration_downgrade_th
                 row[0]
                 for row in conn.execute(
                     text(
+                        # Database Boundary Separation milestone (migration
+                        # 0035): this table is at head here, so it now lives
+                        # in commercial_core, not public.
                         "SELECT table_name FROM information_schema.tables "
-                        "WHERE table_schema = 'public'"
+                        "WHERE table_schema IN ('public', 'commercial_core')"
                     )
                 ).all()
             }
@@ -810,7 +839,7 @@ def test_real_enterprise_terminology_ontology_calibration_migration_downgrade_th
                 for row in conn.execute(
                     text(
                         "SELECT column_name FROM information_schema.columns "
-                        "WHERE table_schema = 'public' AND table_name = 'terminology_mapping_decisions'"
+                        "WHERE table_schema = 'commercial_core' AND table_name = 'terminology_mapping_decisions'"
                     )
                 ).all()
             }
@@ -873,8 +902,11 @@ def test_sie_enterprise_ontology_migration_downgrade_then_reupgrade_round_trips_
                 row[0]
                 for row in conn.execute(
                     text(
+                        # Database Boundary Separation milestone (migration
+                        # 0032): this table is at head here, so it now lives
+                        # in commercial_core, not public.
                         "SELECT table_name FROM information_schema.tables "
-                        "WHERE table_schema = 'public'"
+                        "WHERE table_schema IN ('public', 'commercial_core')"
                     )
                 ).all()
             }
@@ -885,7 +917,7 @@ def test_sie_enterprise_ontology_migration_downgrade_then_reupgrade_round_trips_
                 for row in conn.execute(
                     text(
                         "SELECT column_name FROM information_schema.columns "
-                        "WHERE table_schema = 'public' AND table_name = 'ontology_concepts'"
+                        "WHERE table_schema = 'commercial_core' AND table_name = 'ontology_concepts'"
                     )
                 ).all()
             }
@@ -908,7 +940,7 @@ def test_sie_enterprise_ontology_migration_downgrade_then_reupgrade_round_trips_
                 for row in conn.execute(
                     text(
                         "SELECT column_name, is_nullable FROM information_schema.columns "
-                        "WHERE table_schema = 'public' AND table_name = 'ontology_concepts' "
+                        "WHERE table_schema = 'commercial_core' AND table_name = 'ontology_concepts' "
                         "AND column_name = 'organization_id'"
                     )
                 ).all()
@@ -1236,8 +1268,10 @@ def test_risk_assessment_ontology_taxonomy_migration_downgrade_then_reupgrade_ro
                 row[0]
                 for row in conn.execute(
                     text(
+                        # Database Boundary Separation milestone (migration
+                        # 0032): commercial_core, not public, at head.
                         "SELECT column_name FROM information_schema.columns "
-                        "WHERE table_schema = 'public' AND table_name = 'ontology_concepts'"
+                        "WHERE table_schema = 'commercial_core' AND table_name = 'ontology_concepts'"
                     )
                 ).all()
             }
@@ -2136,7 +2170,12 @@ def test_intelligence_decision_migration_downgrade_then_reupgrade_round_trips_cl
             tables = {
                 row[0]
                 for row in conn.execute(
-                    text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+                    text(
+                        # Database Boundary Separation milestone (migration
+                        # 0035): commercial_core, not public, at head.
+                        "SELECT table_name FROM information_schema.tables "
+                        "WHERE table_schema IN ('public', 'commercial_core')"
+                    )
                 ).all()
             }
             assert "intelligence_decisions" in tables
@@ -2188,7 +2227,10 @@ def test_intelligence_decision_migration_downgrade_then_reupgrade_round_trips_cl
             tables = {
                 row[0]
                 for row in conn.execute(
-                    text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+                    text(
+                        "SELECT table_name FROM information_schema.tables "
+                        "WHERE table_schema IN ('public', 'commercial_core')"
+                    )
                 ).all()
             }
             assert "intelligence_decisions" in tables
@@ -2198,7 +2240,7 @@ def test_intelligence_decision_migration_downgrade_then_reupgrade_round_trips_cl
                 for row in conn.execute(
                     text(
                         "SELECT column_name FROM information_schema.columns "
-                        "WHERE table_schema = 'public' AND table_name = 'intelligence_decisions'"
+                        "WHERE table_schema = 'commercial_core' AND table_name = 'intelligence_decisions'"
                     )
                 ).all()
             }
@@ -2979,7 +3021,12 @@ def test_intelligence_outcome_migration_downgrade_then_reupgrade_round_trips_cle
             tables = {
                 row[0]
                 for row in conn.execute(
-                    text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+                    text(
+                        # Database Boundary Separation milestone (migration
+                        # 0035): commercial_core, not public, at head.
+                        "SELECT table_name FROM information_schema.tables "
+                        "WHERE table_schema IN ('public', 'commercial_core')"
+                    )
                 ).all()
             }
             assert "intelligence_outcomes" in tables
@@ -3051,7 +3098,10 @@ def test_intelligence_outcome_migration_downgrade_then_reupgrade_round_trips_cle
             tables = {
                 row[0]
                 for row in conn.execute(
-                    text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+                    text(
+                        "SELECT table_name FROM information_schema.tables "
+                        "WHERE table_schema IN ('public', 'commercial_core')"
+                    )
                 ).all()
             }
             assert "intelligence_outcomes" in tables
@@ -3061,7 +3111,7 @@ def test_intelligence_outcome_migration_downgrade_then_reupgrade_round_trips_cle
                 for row in conn.execute(
                     text(
                         "SELECT column_name FROM information_schema.columns "
-                        "WHERE table_schema = 'public' AND table_name = 'intelligence_outcomes'"
+                        "WHERE table_schema = 'commercial_core' AND table_name = 'intelligence_outcomes'"
                     )
                 ).all()
             }
@@ -3192,7 +3242,12 @@ def test_outcome_verification_migration_downgrade_then_reupgrade_round_trips_cle
             tables = {
                 row[0]
                 for row in conn.execute(
-                    text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+                    text(
+                        # Database Boundary Separation milestone (migration
+                        # 0035): commercial_core, not public, at head.
+                        "SELECT table_name FROM information_schema.tables "
+                        "WHERE table_schema IN ('public', 'commercial_core')"
+                    )
                 ).all()
             }
             assert "intelligence_outcome_verifications" in tables
@@ -3258,7 +3313,10 @@ def test_outcome_verification_migration_downgrade_then_reupgrade_round_trips_cle
             tables = {
                 row[0]
                 for row in conn.execute(
-                    text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+                    text(
+                        "SELECT table_name FROM information_schema.tables "
+                        "WHERE table_schema IN ('public', 'commercial_core')"
+                    )
                 ).all()
             }
             assert "intelligence_outcome_verifications" in tables
@@ -3268,7 +3326,7 @@ def test_outcome_verification_migration_downgrade_then_reupgrade_round_trips_cle
                 for row in conn.execute(
                     text(
                         "SELECT column_name FROM information_schema.columns "
-                        "WHERE table_schema = 'public' AND table_name = 'intelligence_outcome_verifications'"
+                        "WHERE table_schema = 'commercial_core' AND table_name = 'intelligence_outcome_verifications'"
                     )
                 ).all()
             }
@@ -3408,7 +3466,12 @@ def test_learning_candidate_migration_downgrade_then_reupgrade_round_trips_clean
             tables = {
                 row[0]
                 for row in conn.execute(
-                    text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+                    text(
+                        # Database Boundary Separation milestone (migration
+                        # 0035): commercial_core, not public, at head.
+                        "SELECT table_name FROM information_schema.tables "
+                        "WHERE table_schema IN ('public', 'commercial_core')"
+                    )
                 ).all()
             }
             assert "intelligence_learning_candidates" in tables
@@ -3482,7 +3545,10 @@ def test_learning_candidate_migration_downgrade_then_reupgrade_round_trips_clean
             tables = {
                 row[0]
                 for row in conn.execute(
-                    text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+                    text(
+                        "SELECT table_name FROM information_schema.tables "
+                        "WHERE table_schema IN ('public', 'commercial_core')"
+                    )
                 ).all()
             }
             assert "intelligence_learning_candidates" in tables
@@ -3493,7 +3559,7 @@ def test_learning_candidate_migration_downgrade_then_reupgrade_round_trips_clean
                 for row in conn.execute(
                     text(
                         "SELECT column_name FROM information_schema.columns "
-                        "WHERE table_schema = 'public' AND table_name = 'intelligence_learning_candidates'"
+                        "WHERE table_schema = 'commercial_core' AND table_name = 'intelligence_learning_candidates'"
                     )
                 ).all()
             }
@@ -3507,7 +3573,7 @@ def test_learning_candidate_migration_downgrade_then_reupgrade_round_trips_clean
                 row[0]
                 for row in conn.execute(
                     text(
-                        "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' "
+                        "SELECT column_name FROM information_schema.columns WHERE table_schema = 'commercial_core' "
                         "AND table_name = 'intelligence_learning_candidate_governance_decisions'"
                     )
                 ).all()
@@ -3674,7 +3740,12 @@ def test_organizational_memory_migration_downgrade_then_reupgrade_round_trips_cl
             tables = {
                 row[0]
                 for row in conn.execute(
-                    text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+                    text(
+                        # Database Boundary Separation milestone (migration
+                        # 0035): commercial_core, not public, at head.
+                        "SELECT table_name FROM information_schema.tables "
+                        "WHERE table_schema IN ('public', 'commercial_core')"
+                    )
                 ).all()
             }
             assert "organizational_memories" in tables
@@ -3753,7 +3824,10 @@ def test_organizational_memory_migration_downgrade_then_reupgrade_round_trips_cl
             tables = {
                 row[0]
                 for row in conn.execute(
-                    text("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
+                    text(
+                        "SELECT table_name FROM information_schema.tables "
+                        "WHERE table_schema IN ('public', 'commercial_core')"
+                    )
                 ).all()
             }
             assert "organizational_memories" in tables
@@ -3764,7 +3838,7 @@ def test_organizational_memory_migration_downgrade_then_reupgrade_round_trips_cl
                 for row in conn.execute(
                     text(
                         "SELECT column_name FROM information_schema.columns "
-                        "WHERE table_schema = 'public' AND table_name = 'organizational_memories'"
+                        "WHERE table_schema = 'commercial_core' AND table_name = 'organizational_memories'"
                     )
                 ).all()
             }
@@ -3781,7 +3855,7 @@ def test_organizational_memory_migration_downgrade_then_reupgrade_round_trips_cl
                 row[0]
                 for row in conn.execute(
                     text(
-                        "SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' "
+                        "SELECT column_name FROM information_schema.columns WHERE table_schema = 'commercial_core' "
                         "AND table_name = 'organizational_memory_governance_decisions'"
                     )
                 ).all()
