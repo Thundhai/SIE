@@ -101,7 +101,6 @@ from app.models.risk_assessment_enums import (
 from app.models.risk_assessment_finding_action import RiskAssessmentFindingAction
 from app.models.safety_action import SafetyAction
 from app.models.safety_action_enums import ActionStatus
-from app.risk_assessment.candidate_generation import generate_candidate_findings
 from app.risk_assessment.risk_area_resolution import resolve_risk_area_concept
 from app.schemas.enterprise_intelligence import (
     ConcentrationContributorRead,
@@ -159,7 +158,6 @@ from app.services.risk_assessment_service import (
     audit_assessment_event,
     calculate_and_set_inherent_risk,
     calculate_and_set_residual_risk,
-    compute_intelligence_context,
     create_control_evidence_link,
     create_finding_action_relationship,
     delete_control_evidence_link,
@@ -421,18 +419,19 @@ def _to_finding_read(finding: RiskAssessmentFinding) -> RiskAssessmentFindingRea
 
 
 def _to_detail_read(db: Session, assessment: RiskAssessment) -> RiskAssessmentDetailRead:
-    result = compute_intelligence_context(
-        db,
-        organization_id=assessment.organization_id,
-        scope=assessment.scope,
-        site_id=assessment.site_id,
-        as_of=assessment.as_of,
-        window_days=assessment.window_days,
-    )
+    """M43-IP-03: the computed enterprise-intelligence context this
+    response used to embed (`app/intelligence/enterprise_intelligence_service.py`
+    and everything it composed -- anomaly/trend/recurrence/concentration/
+    risk-score) has been extracted to the private Commercial Core
+    repository, along with the `compute_intelligence_context()` service
+    function that called it. Public SIE no longer computes this data and
+    the field is now honestly `None` rather than backed by a stub
+    implementation of the private algorithm -- see
+    `docs/M43_IP_03_PUBLIC_EXTRACTION.md`."""
     return RiskAssessmentDetailRead(
         **_assessment_fields(assessment),
         findings=[_to_finding_read(f) for f in assessment.findings],
-        intelligence_context=_to_intelligence_context_read(result),
+        intelligence_context=None,
     )
 
 
@@ -502,6 +501,28 @@ def create_assessment(
     request_id: str | None = Depends(get_request_id),
     db: Session = Depends(get_db),
 ) -> RiskAssessmentDetailRead:
+    if body.generate_candidates:
+        # M43-IP-03: `generate_candidate_findings()` (the deterministic
+        # bridge from the private enterprise-intelligence engine's
+        # anomalies/patterns into candidate findings) was extracted to
+        # the private Commercial Core repository along with the engine
+        # it read from. Public SIE cannot honor this flag today --
+        # rejecting explicitly rather than silently creating the
+        # assessment with no candidates, which would misrepresent what
+        # happened. A human-authored finding (`generate_candidates`
+        # omitted/false, then `POST .../findings`) is unaffected. See
+        # docs/M43_IP_03_PUBLIC_EXTRACTION.md.
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail=(
+                "generate_candidates is not available in this deployment: system-generated "
+                "candidate findings require the Commercial Core intelligence engine, which "
+                "this repository no longer contains. Create the assessment with "
+                "generate_candidates=false and add findings manually via POST "
+                ".../findings."
+            ),
+        )
+
     if body.site_id is not None:
         validate_site_reference(db, organization_id=organization_id, site_id=body.site_id)
     if body.assessor_user_id is not None:
@@ -578,54 +599,9 @@ def create_assessment(
             request_id=request_id,
         )
 
-        if body.generate_candidates:
-            compute_scope = "site" if assessment.scope == RiskAssessmentScope.SITE else "organization"
-            drafts = generate_candidate_findings(
-                db,
-                organization_id=organization_id,
-                scope=compute_scope,
-                site_id=assessment.site_id if assessment.scope == RiskAssessmentScope.SITE else None,
-                as_of=assessment.as_of,
-                window_days=assessment.window_days,
-            )
-            for draft in drafts:
-                finding = RiskAssessmentFinding(
-                    organization_id=organization_id,
-                    assessment_id=assessment.id,
-                    risk_area_concept_id=draft.risk_area_concept_id,
-                    risk_area_ontology_version=draft.risk_area_ontology_version,
-                    title=draft.title,
-                    description=draft.description,
-                    system_analysis_summary=draft.system_analysis_summary,
-                    source=FindingSource(draft.source),
-                    originating_calculation_version=draft.originating_calculation_version,
-                    occurrence_period_start=draft.occurrence_period_start,
-                    occurrence_period_end=draft.occurrence_period_end,
-                    candidate_status=RiskCandidateStatus.IDENTIFIED,
-                    candidate_generated_at=utcnow(),
-                )
-                db.add(finding)
-                db.flush()
-                for ev in draft.evidence:
-                    db.add(
-                        RiskAssessmentFindingEvidence(
-                            organization_id=organization_id,
-                            finding_id=finding.id,
-                            evidence_type=RiskEvidenceType(ev.evidence_type),
-                            reference_id=ev.reference_id,
-                            reference_label=ev.reference_label,
-                        )
-                    )
-                record_history(
-                    db,
-                    assessment=assessment,
-                    finding_id=finding.id,
-                    change_type=RiskAssessmentHistoryChangeType.FINDING_CREATED,
-                    changed_by_user_id=context.user_id,
-                    changed_by_api_client_id=context.api_client_id,
-                    request_id=request_id,
-                    comment=f"System-generated candidate ({finding.source.value}).",
-                )
+        # M43-IP-03: system-generated candidate findings are rejected
+        # up front (see the `generate_candidates` check above) before
+        # this transaction ever begins -- nothing to do here anymore.
 
         audit_assessment_event(
             db,
