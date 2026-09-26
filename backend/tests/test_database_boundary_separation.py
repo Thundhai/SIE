@@ -89,6 +89,35 @@ def test_risk_assessment_finding_fk_targets_commercial_core_ontology_concepts(pg
     assert row.column_name == "id"
 
 
+def _insert_approved_risk_area_concept(pg_session) -> uuid.UUID:
+    """Insert one APPROVED, risk-area-eligible `commercial_core.
+    ontology_concepts` row directly, matching the exact shape migration
+    0017 seeds (`VEHICLE_INCIDENT`, `event_subtype`, `INCIDENT` parent
+    domain — see app/risk_assessment/risk_area_ontology_seed.py).
+
+    `pg_session` (tests/conftest.py) builds its tables from
+    `Base.metadata.create_all()`, not by running the Alembic chain, so
+    migration 0017's own seed INSERT never runs against it — the same
+    reason every other `pg_session`-based test in this suite builds its
+    own minimal rows directly rather than assuming migration-seeded data
+    is present. `test_eleven_global_seed_concepts_present_after_fresh_migration`
+    below is the one test that actually proves migration 0017 seeds
+    these rows, using a real `alembic upgrade head` instead."""
+    concept_id = uuid.uuid4()
+    pg_session.execute(
+        text(
+            "INSERT INTO commercial_core.ontology_concepts "
+            "(id, organization_id, layer, parent_domain, concept_key, definition, justification, "
+            "status, ontology_version, is_risk_area_eligible, created_at, updated_at) "
+            "VALUES (:id, NULL, 'event_subtype', 'INCIDENT', 'VEHICLE_INCIDENT', "
+            "'test fixture concept', 'test fixture concept', 'APPROVED', 1, TRUE, now(), now())"
+        ),
+        {"id": concept_id},
+    )
+    pg_session.commit()
+    return concept_id
+
+
 @requires_postgres
 def test_restrict_still_prevents_deleting_a_referenced_concept(pg_session):
     """Test 4: ON DELETE RESTRICT still prevents deletion of a concept
@@ -101,12 +130,7 @@ def test_restrict_still_prevents_deleting_a_referenced_concept(pg_session):
         ),
         {"id": org_id},
     )
-    concept_id = pg_session.execute(
-        text(
-            "SELECT id FROM commercial_core.ontology_concepts "
-            "WHERE organization_id IS NULL AND concept_key = 'VEHICLE_INCIDENT'"
-        )
-    ).scalar_one()
+    concept_id = _insert_approved_risk_area_concept(pg_session)
     assessment_id = pg_session.execute(
         text(
             "INSERT INTO risk_assessments (id, organization_id, scope, title, assessment_type, status, "
@@ -159,12 +183,7 @@ def test_approved_risk_area_resolution_still_works(pg_session):
         {"id": org_id},
     )
     pg_session.commit()
-    concept_id = pg_session.execute(
-        text(
-            "SELECT id FROM commercial_core.ontology_concepts "
-            "WHERE organization_id IS NULL AND concept_key = 'VEHICLE_INCIDENT'"
-        )
-    ).scalar_one()
+    concept_id = _insert_approved_risk_area_concept(pg_session)
 
     resolved = resolve_risk_area_concept(pg_session, organization_id=org_id, concept_id=concept_id)
     assert resolved.id == concept_id
@@ -172,17 +191,37 @@ def test_approved_risk_area_resolution_still_works(pg_session):
 
 
 @requires_postgres
-def test_eleven_global_seed_concepts_present_after_fresh_migration(pg_session):
+def test_eleven_global_seed_concepts_present_after_fresh_migration(monkeypatch):
     """Test 6: the 11 GLOBAL seed concepts (migration 0017) are present,
     in commercial_core, after the full chain including the boundary
-    migrations."""
-    count = pg_session.execute(
-        text(
-            "SELECT count(*) FROM commercial_core.ontology_concepts "
-            "WHERE organization_id IS NULL AND is_risk_area_eligible = TRUE"
-        )
-    ).scalar_one()
-    assert count == 11
+    migrations.
+
+    Runs a real `alembic upgrade head` from an empty database rather
+    than using the `pg_session` fixture: `pg_session` (tests/conftest.py)
+    builds tables via `Base.metadata.create_all()`, which never executes
+    migration 0017's own seed `INSERT` -- only the real Alembic chain
+    does. This is the one test in this file whose entire point is
+    proving that seed step still runs and lands in `commercial_core`."""
+    engine = create_engine(PG_TEST_DATABASE_URL)
+    with engine.begin() as conn:
+        conn.execute(text("DROP SCHEMA public CASCADE"))
+        conn.execute(text("CREATE SCHEMA public"))
+        conn.execute(text("DROP SCHEMA IF EXISTS commercial_core CASCADE"))
+    try:
+        monkeypatch.setattr("app.core.config.settings.DATABASE_URL", PG_TEST_DATABASE_URL)
+        command.upgrade(_alembic_config(), "head")
+        with engine.connect() as conn:
+            count = conn.execute(
+                text(
+                    "SELECT count(*) FROM commercial_core.ontology_concepts "
+                    "WHERE organization_id IS NULL AND is_risk_area_eligible = TRUE"
+                )
+            ).scalar_one()
+        assert count == 11
+    finally:
+        with engine.begin() as conn:
+            conn.execute(text("DROP SCHEMA IF EXISTS commercial_core CASCADE"))
+        engine.dispose()
 
 
 @requires_postgres

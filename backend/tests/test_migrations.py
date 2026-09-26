@@ -405,12 +405,14 @@ def test_predictive_modeling_migration_downgrade_then_reupgrade_round_trips_clea
             version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
             assert version == _current_head_revision(config)
 
+            # At head, migration 0034 (Database Boundary Separation) has
+            # moved this cluster into commercial_core — not public.
             tables = {
                 row[0]
                 for row in conn.execute(
                     text(
                         "SELECT table_name FROM information_schema.tables "
-                        "WHERE table_schema = 'public'"
+                        "WHERE table_schema = 'commercial_core'"
                     )
                 ).all()
             }
