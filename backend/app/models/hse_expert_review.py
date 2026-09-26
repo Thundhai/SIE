@@ -64,6 +64,7 @@ REVIEW_OUTCOMES = ("CORRECT", "INCORRECT", "PARTIALLY_CORRECT", "NOT_ENOUGH_INFO
 
 class HseExpertReview(UUIDPrimaryKeyMixin, OrganizationScopedMixin, TimestampMixin, Base):
     __tablename__ = "hse_expert_reviews"
+    __table_args__ = {"schema": "commercial_core"}
 
     target_type: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
     target_reference: Mapped[str] = mapped_column(String(500), nullable=False)
