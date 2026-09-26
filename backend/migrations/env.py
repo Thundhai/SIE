@@ -36,8 +36,33 @@ _INCLUDE_SCHEMAS = True
 #: intentionally has no SQLAlchemy model here. Without this filter,
 #: autogenerate would see a table with no metadata counterpart and propose
 #: dropping it on every `alembic check`/`--autogenerate` run.
+#:
+#: The same migration also adds one additive, nullable
+#: `intelligence_decisions.recommendation_candidate_id` column (+ its FK
+#: and index) -- `intelligence_decisions` itself *does* have a model here
+#: (`app/models/intelligence_decision.py`), but that one column is left
+#: off it deliberately: giving it a real `ForeignKey("commercial_core.
+#: recommendation_candidates.id", ...)` would make `Base.metadata`
+#: reference a table with no `Table` object of its own, which breaks
+#: `Base.metadata.create_all()` (`NoReferencedTableError`) -- the same
+#: SQLite-backed helper every other test in this repository's suite
+#: relies on. Excluding the column (and its FK/index) from comparison
+#: here, the same way the table itself is excluded above, keeps
+#: `alembic check` honest without ever putting an unresolvable reference
+#: into the ORM's own metadata graph.
 def include_object(object_, name, type_, reflected, compare_to):
-    return not (type_ == "table" and name == "recommendation_candidates")
+    if type_ == "table" and name == "recommendation_candidates":
+        return False
+    if type_ == "column" and name == "recommendation_candidate_id" and object_.table.name == "intelligence_decisions":
+        return False
+    if (
+        type_ == "foreign_key_constraint"
+        and getattr(object_, "name", None) == "fk_intelligence_decisions_recommendation_candidate_id"
+    ):
+        return False
+    if type_ == "index" and name == "ix_intelligence_decisions_org_recommendation_candidate":
+        return False
+    return True
 
 
 def run_migrations_offline() -> None:
