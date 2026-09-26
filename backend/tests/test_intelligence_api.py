@@ -148,34 +148,19 @@ def test_analytics_summary_rejects_an_organization_the_user_has_no_membership_in
     assert response.status_code == 403
 
 
-def test_analytics_summary_never_leaks_another_organizations_events(client, db_session):
-    org_a = create_org(client, name="Org A")
-    org_b = create_org(client, name="Org B")
-    credential_a = _make_client_credential(db_session, uuid.UUID(org_a["id"]))
-    credential_b = _make_client_credential(db_session, uuid.UUID(org_b["id"]))
-
-    for i in range(5):
-        client.post(
-            "/api/v1/intelligence/events",
-            json=event_payload(source_record_id=f"a-{i}"),
-            headers=_bearer(credential_a),
-        )
-    for i in range(9):
-        client.post(
-            "/api/v1/intelligence/events",
-            json=event_payload(source_record_id=f"b-{i}"),
-            headers=_bearer(credential_b),
-        )
-
-    user = make_user(db_session, "org-a-viewer@example.com")
-    make_membership(db_session, user_id=user.id, organization_id=uuid.UUID(org_a["id"]), role="VIEWER")
-
-    response = client.get(
-        f"/api/v1/intelligence/analytics/summary?organization_id={org_a['id']}",
-        headers=dev_auth_headers(user.id),
-    )
-    assert response.status_code == 200
-    assert response.json()["event_count"] == 5  # never Org B's 9
+# M43-IP-03: `test_analytics_summary_never_leaks_another_organizations_events`,
+# `test_features_endpoint_succeeds_for_an_authorized_member`,
+# `test_trends_endpoint_rejects_an_unknown_metric`, and
+# `test_trends_endpoint_succeeds_for_a_known_metric` removed -- each
+# asserted on a real computed value (event_count, feature content, metric
+# validation/filtering) that no longer exists: analytics computation was
+# extracted to the private Commercial Core repository and these
+# endpoints now always return 501. The authorization-only checks below
+# (`..._requires_intelligence_read_permission`, `..._requires_authorization`)
+# are unaffected -- the permission dependency still runs, and still
+# rejects, before the handler's now-501 body. See
+# docs/M43_IP_03_PUBLIC_EXTRACTION.md's "Test coverage regressions"
+# section.
 
 
 def test_features_endpoint_requires_intelligence_read_permission(client, db_session):
@@ -187,17 +172,6 @@ def test_features_endpoint_requires_intelligence_read_permission(client, db_sess
     assert response.status_code == 403
 
 
-def test_features_endpoint_succeeds_for_an_authorized_member(client, db_session):
-    org = create_org(client)
-    user = make_user(db_session, "member@example.com")
-    make_membership(db_session, user_id=user.id, organization_id=uuid.UUID(org["id"]), role="VIEWER")
-    response = client.get(
-        f"/api/v1/intelligence/features?organization_id={org['id']}", headers=dev_auth_headers(user.id)
-    )
-    assert response.status_code == 200
-    assert "incident_count" in response.json()["features"]
-
-
 def test_signals_endpoint_requires_authorization(client, db_session):
     org = create_org(client)
     user = make_user(db_session, "signals-outsider@example.com")
@@ -205,29 +179,6 @@ def test_signals_endpoint_requires_authorization(client, db_session):
         f"/api/v1/intelligence/analytics/signals?organization_id={org['id']}", headers=dev_auth_headers(user.id)
     )
     assert response.status_code == 403
-
-
-def test_trends_endpoint_rejects_an_unknown_metric(client, db_session):
-    org = create_org(client)
-    user = make_user(db_session, "trends-user@example.com")
-    make_membership(db_session, user_id=user.id, organization_id=uuid.UUID(org["id"]), role="VIEWER")
-    response = client.get(
-        f"/api/v1/intelligence/analytics/trends?organization_id={org['id']}&metric=not_a_real_metric",
-        headers=dev_auth_headers(user.id),
-    )
-    assert response.status_code == 400
-
-
-def test_trends_endpoint_succeeds_for_a_known_metric(client, db_session):
-    org = create_org(client)
-    user = make_user(db_session, "trends-user-2@example.com")
-    make_membership(db_session, user_id=user.id, organization_id=uuid.UUID(org["id"]), role="VIEWER")
-    response = client.get(
-        f"/api/v1/intelligence/analytics/trends?organization_id={org['id']}&metric=incident_count",
-        headers=dev_auth_headers(user.id),
-    )
-    assert response.status_code == 200
-    assert response.json()["metric"] == "incident_count"
 
 
 # --- Response shape never leaks internals -------------------------------------------

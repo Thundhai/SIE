@@ -620,7 +620,15 @@ class RiskAssessmentDetailRead(RiskAssessmentRead):
     an unbounded-cost N+1, not a bounded, single-resource read."""
 
     findings: list[RiskAssessmentFindingRead]
-    intelligence_context: IntelligenceContextRead
+    intelligence_context: IntelligenceContextRead | None = None
+    """M43-IP-03: always `None` as of this milestone. The enterprise-
+    intelligence computation this field used to carry (deterministic
+    risk score, anomalies, patterns, associations, trend, concentration)
+    has been extracted from Public SIE into the private Commercial Core
+    repository -- this repository no longer computes it. The field
+    shape is kept (not deleted outright) only so existing clients do not
+    break on an unknown-field parse; it carries no data. See
+    `docs/M43_IP_03_PUBLIC_EXTRACTION.md`."""
 
 
 class RiskAssessmentListRead(BaseModel):

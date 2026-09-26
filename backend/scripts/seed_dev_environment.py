@@ -6,30 +6,44 @@ WHAT THIS DOES
 ---------------
 Creates one small, deterministic local-development organization/user/site
 and ingests a realistic event history through the REAL production
-ingestion pipeline, then creates one baseline risk assessment (with a
-backend-generated candidate finding and one manually-rated finding)
-through the REAL production risk-assessment API — so that
-`GET /api/v1/intelligence/enterprise` and `GET /api/v1/risk-assessments`
+ingestion pipeline, then creates one baseline risk assessment (with one
+manually-rated finding) through the REAL production risk-assessment API —
+so that `GET /api/v1/risk-assessments` and `GET /api/v1/intelligence/events`
 return genuinely meaningful, backend-computed data the very first time a
 developer points the frontend at a freshly migrated local database. No
 frontend fixture, no fabricated score, no invented conclusion anywhere:
 every number the UI ends up showing was computed by the same backend
 code a production deployment would run.
 
+M43-IP-03 NOTE
+----------------
+Prior to M43-IP-03 (Public SIE Extraction / Cleanup), this script reused
+`tests/fixtures/enterprise_scenarios.py::scenario_b_emerging_risk()` — a
+dataset curated to calibrate the Intelligence anomaly-detection engine —
+and created its risk assessment with `generate_candidates=True` (a
+backend-generated candidate finding derived from that engine). Both the
+anomaly-detection engine and risk-assessment candidate generation were
+extracted to the private Commercial Core repository by that milestone,
+and the test fixture the event history came from was deleted along with
+it — breaking this script (see docs/M43_IP_03_PUBLIC_EXTRACTION.md §4's
+corrective note). This script now seeds a small, generic, representative
+event set (`scripts/dev_seed_events.py::representative_demo_events()`,
+not a restoration of the deleted fixture) and creates its risk assessment
+with `generate_candidates=False`, since that computation is Commercial
+Core-only in this repository now.
+
 REUSE, NOT A SECOND SEED MODEL
 --------------------------------
-The event history comes from `tests/fixtures/enterprise_scenarios.py::
-scenario_b_emerging_risk()` — the exact same deterministic (seeded,
-`random.Random`-only), already-calibration-tested "emerging risk"
-dataset the backend's own test suite exercises (see
-tests/evaluation/calibration_harness.py). It is ingested through
-`app.intelligence.enterprise_ingestion.enterprise_ingestion_service`,
+The event history comes from `scripts/dev_seed_events.py::
+representative_demo_events()` — small, deterministic (seeded,
+`random.Random`-only) generic `RawSafetyEventPayload` generators, ingested
+through `app.intelligence.enterprise_ingestion.enterprise_ingestion_service`,
 the same real service `POST /api/v1/data-ingestion/events` uses — this
 script is a thin orchestration wrapper around existing, already-tested
-production/test code, not a new, competing data-generation mechanism.
-The risk assessment is created through the real, running FastAPI `app`
-object (in-process `TestClient`, no separate server needed) hitting the
-exact same `/api/v1/risk-assessments` routes a real HTTP client would.
+production code, not a new, competing data-generation mechanism. The risk
+assessment is created through the real, running FastAPI `app` object
+(in-process `TestClient`, no separate server needed) hitting the exact
+same `/api/v1/risk-assessments` routes a real HTTP client would.
 
 SAFETY — FAILS CLOSED
 ------------------------
@@ -75,10 +89,8 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-# Make both `app` and `tests` importable regardless of the caller's CWD —
-# this script deliberately lives in scripts/, not tests/, since it is
-# development tooling, not a test, but it reuses tests/fixtures/ code (see
-# module docstring's "reuse, not a second seed model").
+# Make `app` (and this script's own sibling `dev_seed_events` module)
+# importable regardless of the caller's CWD.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sqlalchemy import select  # noqa: E402
@@ -181,57 +193,25 @@ def _seed(db) -> None:
 
 
 def _ingest_events(db) -> None:
-    """Ingests `scenario_b_emerging_risk()` — see module docstring's
-    "reuse, not a second seed model" — through the real
-    `EnterpriseIngestionService`, then (a) backdates `ingestion_time` to
-    track each event's own `event_time` (mirroring
-    `tests/evaluation/calibration_harness.py::
-    _backdate_ingestion_time_near_event_time()` exactly, for the same
-    reason: a one-shot historical bulk load must not collapse every
-    point-in-time bucket into "just now"), and (b) attaches every
+    """Ingests `dev_seed_events.representative_demo_events()` — see
+    module docstring's "reuse, not a second seed model" and its M43-IP-03
+    note — through the real `EnterpriseIngestionService`, then (a)
+    backdates `ingestion_time` to track each event's own `event_time`
+    (mirroring the same reasoning `tests/evaluation/calibration_harness.py::
+    _backdate_ingestion_time_near_event_time()` used before that harness
+    was extracted: a one-shot historical bulk load must not collapse
+    every point-in-time bucket into "just now"), and (b) attaches every
     ingested row to the one development Site, for a more realistic demo
-    (the scenario builders themselves don't assign a site — see their
-    own module docstring)."""
-    import random
+    (the event builders themselves don't assign a site)."""
+    from dev_seed_events import representative_demo_events
 
     from app.intelligence.enterprise_ingestion import enterprise_ingestion_service
     from app.models.safety_event import SafetyEvent
-    from tests.fixtures.enterprise_scenarios import incident, inspection, near_miss, observation, scenario_b_emerging_risk, training
 
     base_time = datetime.now(timezone.utc)
-    dataset = scenario_b_emerging_risk(base_time)
+    all_events = representative_demo_events(base_time)
 
-    # `scenario_b_emerging_risk()` ships exactly 3 quiet baseline periods
-    # (90/60/30 days ago), one short of
-    # `settings.INTELLIGENCE_ANOMALY_MIN_BASELINE_PERIODS` (4 by default) --
-    # real, honest behavior (anomaly status reports INSUFFICIENT_DATA
-    # rather than guessing), but it means a fresh local seed would never
-    # show the ANOMALOUS status this milestone wants demonstrable through
-    # the UI. Rather than editing the shared scenario fixture (used by the
-    # backend's own calibration test suite, out of scope here) or inventing
-    # a new dataset, this adds one more quiet baseline period in the exact
-    # same shape as the scenario's own baseline periods, using the exact
-    # same builder functions imported from enterprise_scenarios.py -- a
-    # reuse-additive extension, not a second, competing generator. A
-    # distinct rng seed keeps its synthetic source_record_ids from
-    # colliding with the scenario's own.
-    rng = random.Random(90031002)
-    # Deliberately 180 (not 120) days ago: `_available_baseline_periods()`
-    # counts *complete* window_days-length periods between the earliest
-    # event and the START of the current 30-day window (not `as_of`
-    # itself), so a period merely 120 days back still lands one period
-    # short of the minimum. 180 clears it with a safety margin.
-    base_days = 6 * 30
-    extra_baseline_events = [
-        incident(rng, base_time, days_ago=base_days + 5, subtype="FIRST_AID_CASE"),
-        near_miss(rng, base_time, days_ago=base_days + 3, subtype="DROPPED_OBJECT"),
-        observation(rng, base_time, days_ago=base_days + 7, subtype="UNSAFE_ACT"),
-        inspection(rng, base_time, days_ago=base_days + 10, subtype="SITE_INSPECTION"),
-        *(training(rng, base_time, days_ago=base_days + i, canonical_status="COMPLETED") for i in range(8)),
-    ]
-    all_events = [*dataset.events, *extra_baseline_events]
-
-    print(f"Ingesting {len(all_events)} events ({dataset.name!r} scenario + 1 extra quiet baseline period) ...")
+    print(f"Ingesting {len(all_events)} events (representative local-development demo set) ...")
     result = enterprise_ingestion_service.ingest_batch(
         db, organization_id=DEV_ORGANIZATION_ID, source_id=None, payloads=all_events
     )
@@ -253,14 +233,20 @@ def _ingest_events(db) -> None:
 
 
 def _create_risk_assessment(db) -> None:
-    """Creates one APPROVED baseline risk assessment with a
-    backend-generated candidate finding (`generate_candidates=True`,
-    the endpoint's own default -- candidates are derived from the
-    intelligence just ingested above, never fabricated here) plus one
+    """Creates one APPROVED baseline risk assessment with one
     manually-authored, explicitly rated finding, through the real
     `/api/v1/risk-assessments` HTTP routes via an in-process
     `TestClient` — exactly the request shape a real browser session
-    would send, including the dev-mode identity header."""
+    would send, including the dev-mode identity header.
+
+    `generate_candidates=False`: backend-generated candidate findings
+    were derived from the Intelligence engine that M43-IP-03 extracted
+    to the private Commercial Core repository -- `POST
+    /api/v1/risk-assessments` now returns `501` for
+    `generate_candidates=True` in this repository (see
+    `app/api/v1/risk_assessments.py` and
+    docs/M43_IP_03_PUBLIC_EXTRACTION.md). This script never asks for a
+    capability it knows this repository can't provide."""
     from fastapi.testclient import TestClient
 
     from app.api.deps_auth import DEV_USER_HEADER
@@ -285,7 +271,7 @@ def _create_risk_assessment(db) -> None:
 
     now = datetime.now(timezone.utc)
     with TestClient(app) as client:
-        print("Creating baseline risk assessment (generate_candidates=True) ...")
+        print("Creating baseline risk assessment (generate_candidates=False) ...")
         create_response = client.post(
             f"/api/v1/risk-assessments{params}",
             json={
@@ -294,7 +280,7 @@ def _create_risk_assessment(db) -> None:
                 "assessment_type": "BASELINE",
                 "assessment_date": now.isoformat(),
                 "as_of": now.isoformat(),
-                "generate_candidates": True,
+                "generate_candidates": False,
             },
             headers=headers,
         )
@@ -303,15 +289,14 @@ def _create_risk_assessment(db) -> None:
             return
         assessment = create_response.json()
         assessment_id = assessment["id"]
-        print(f"Created assessment {assessment_id} with {len(assessment['findings'])} backend-generated candidate finding(s).")
+        print(f"Created assessment {assessment_id}.")
 
         finding_response = client.post(
             f"/api/v1/risk-assessments/{assessment_id}/findings{params}",
             json={
                 "risk_area_concept_id": str(concept.id),
                 "title": "Rising near-miss frequency in vehicle operations",
-                "description": "Deterministic pattern/anomaly detection flagged a sharp increase in "
-                "near misses and unsafe observations for vehicle operations in the current window.",
+                "description": "Manually-rated finding for local development demo purposes.",
                 "likelihood": 3,
                 "consequence": 3,
             },
