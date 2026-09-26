@@ -99,6 +99,7 @@ class IntelligenceDecision(UUIDPrimaryKeyMixin, OrganizationScopedMixin, Timesta
         # sites'/projects' own identical SIE Milestone 35A constraint.
         # See app/models/intelligence_outcome.py's own docstring.
         UniqueConstraint("id", "organization_id", name="uq_intelligence_decisions_id_organization_id"),
+        {"schema": "commercial_core"},
     )
 
     # --- Scope -----------------------------------------------------------------------------

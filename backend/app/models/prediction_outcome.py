@@ -30,9 +30,14 @@ _JSONType = GenericJSON().with_variant(JSONB(), "postgresql")
 
 class PredictionOutcome(UUIDPrimaryKeyMixin, OrganizationScopedMixin, Base):
     __tablename__ = "prediction_outcomes"
+    __table_args__ = {"schema": "commercial_core"}
 
     prediction_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("predictions.id", ondelete="CASCADE"), nullable=False, unique=True, index=True
+        Uuid(as_uuid=True),
+        ForeignKey("commercial_core.predictions.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
     )
 
     outcome_known: Mapped[bool] = mapped_column(nullable=False, default=False)

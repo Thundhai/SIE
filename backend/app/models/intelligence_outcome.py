@@ -181,10 +181,11 @@ class IntelligenceOutcome(UUIDPrimaryKeyMixin, OrganizationScopedMixin, Timestam
         # ON DELETE CASCADE, no SET NULL conflict).
         ForeignKeyConstraint(
             ["decision_id", "organization_id"],
-            ["intelligence_decisions.id", "intelligence_decisions.organization_id"],
+            ["commercial_core.intelligence_decisions.id", "commercial_core.intelligence_decisions.organization_id"],
             ondelete="CASCADE",
             name="fk_intelligence_outcomes_decision_id_organization_id",
         ),
+        {"schema": "commercial_core"},
     )
 
     # No inline `ForeignKey(...)` -- its reference is the composite

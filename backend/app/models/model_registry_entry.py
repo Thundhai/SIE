@@ -64,6 +64,7 @@ class ModelRegistryEntry(UUIDPrimaryKeyMixin, OrganizationScopedMixin, Timestamp
     __tablename__ = "model_registry_entries"
     __table_args__ = (
         UniqueConstraint("organization_id", "model_name", "model_version", name="uq_model_registry_name_version"),
+        {"schema": "commercial_core"},
     )
 
     model_name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
@@ -79,7 +80,10 @@ class ModelRegistryEntry(UUIDPrimaryKeyMixin, OrganizationScopedMixin, Timestamp
     horizon_days: Mapped[int] = mapped_column(nullable=False)
 
     dataset_version_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("dataset_versions.id", ondelete="SET NULL"), nullable=True, index=True
+        Uuid(as_uuid=True),
+        ForeignKey("commercial_core.dataset_versions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
 
     training_period_start: Mapped[date] = mapped_column(Date, nullable=False)

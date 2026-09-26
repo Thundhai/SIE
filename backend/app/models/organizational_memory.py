@@ -140,10 +140,14 @@ class OrganizationalMemory(UUIDPrimaryKeyMixin, OrganizationScopedMixin, Timesta
         # (safe here: ON DELETE CASCADE, no SET NULL conflict).
         ForeignKeyConstraint(
             ["learning_candidate_id", "organization_id"],
-            ["intelligence_learning_candidates.id", "intelligence_learning_candidates.organization_id"],
+            [
+                "commercial_core.intelligence_learning_candidates.id",
+                "commercial_core.intelligence_learning_candidates.organization_id",
+            ],
             ondelete="CASCADE",
             name="fk_organizational_memories_candidate_id_organization_id",
         ),
+        {"schema": "commercial_core"},
     )
 
     # No inline `ForeignKey(...)` -- its reference is the composite
@@ -238,10 +242,11 @@ class OrganizationalMemoryGovernanceDecision(UUIDPrimaryKeyMixin, OrganizationSc
         # migration.
         ForeignKeyConstraint(
             ["memory_id", "organization_id"],
-            ["organizational_memories.id", "organizational_memories.organization_id"],
+            ["commercial_core.organizational_memories.id", "commercial_core.organizational_memories.organization_id"],
             ondelete="CASCADE",
             name="fk_organizational_memory_gov_decisions_memory_id_org_id",
         ),
+        {"schema": "commercial_core"},
     )
 
     # No inline `ForeignKey(...)` -- its reference is the composite
