@@ -46,7 +46,16 @@ def test_no_prediction_or_governance_request_documents_a_client_supplied_outcome
     scoped to the predictive/governance request schemas item 49 is
     actually about (a generic field named e.g. `status` is legitimate
     elsewhere, such as registering a DataSource's own operational
-    status)."""
+    status).
+
+    M43-IP-03: `app/api/v1/predictions.py` and
+    `app/api/v1/model_governance.py` were replaced with thin 501 stubs
+    whose handlers take no typed request body -- their private
+    computation was extracted to Commercial Core, so most of these
+    schemas no longer exist in the OpenAPI document at all (nothing left
+    to check a forbidden field against). Checks only the schemas that
+    are still actually declared, rather than assuming all five always
+    exist. See docs/M43_IP_03_PUBLIC_EXTRACTION.md."""
     schema = app.openapi()
     forbidden_field_names = {"label", "risk_score", "probability", "approved", "is_approved", "calibration_validated"}
     predictive_request_schemas = {
@@ -56,11 +65,18 @@ def test_no_prediction_or_governance_request_documents_a_client_supplied_outcome
         "RejectModelRequest",
         "ValidateDatasetRequest",
     }
+    declared_schemas = schema["components"].get("schemas", {})
+    checked_any = False
     for schema_name in predictive_request_schemas:
-        definition = schema["components"]["schemas"][schema_name]
+        definition = declared_schemas.get(schema_name)
+        if definition is None:
+            continue
+        checked_any = True
         properties = set(definition.get("properties", {}).keys())
         overlap = properties & forbidden_field_names
         assert not overlap, f"{schema_name} exposes a client-writable field it must never have: {overlap}"
+    # Not asserting `checked_any` -- zero schemas present is the expected,
+    # correct state post-M43-IP-03 (see docstring above).
 
 
 def test_declared_paths_match_the_actual_registered_routes():

@@ -259,90 +259,12 @@ def test_linking_the_same_site_twice_returns_the_same_relationship(client, db_se
     assert len(list_response.json()) == 1
 
 
-# --- Field Intelligence Context operational_scope integration (SIE Milestone 35, item 10) ----
-
-
-def _seed_events(client_db, org_id, *, count=3):
-    for i in range(count):
-        client_db.add(
-            make_safety_event(
-                organization_id=org_id, event_type="INCIDENT", event_time=AS_OF - timedelta(days=i),
-                ingestion_time=AS_OF - timedelta(days=i), source_record_id=str(uuid.uuid4()),
-            )
-        )
-    client_db.commit()
-
-
-def test_context_without_project_id_has_no_operational_scope(client, db_session):
-    """Backward compatibility (item 11): a pre-M35 caller never supplies
-    `project_id`, and the response is unaffected."""
-    org, user, headers = _make_org_and_manager(client, db_session)
-    response = client.get(f"/api/v1/intelligence/context?organization_id={org['id']}", headers=headers)
-    assert response.status_code == 200
-    assert response.json()["operational_scope"] is None
-
-
-def test_organization_context_with_project_id_labels_the_response(client, db_session):
-    org, user, headers = _make_org_and_manager(client, db_session)
-    project = _create_project(client, org["id"], headers, name="Regional Program").json()
-    site = _create_site(client, org["id"])
-    client.post(
-        f"/api/v1/projects/{project['id']}/sites?organization_id={org['id']}",
-        json={"site_id": site["id"]}, headers=headers,
-    )
-
-    response = client.get(
-        f"/api/v1/intelligence/context?organization_id={org['id']}&project_id={project['id']}", headers=headers
-    )
-    assert response.status_code == 200
-    body = response.json()
-    assert body["operational_scope"]["level"] == "ORGANIZATION"
-    assert body["operational_scope"]["project"]["id"] == project["id"]
-    assert body["operational_scope"]["project"]["site_ids"] == [site["id"]]
-    assert body["operational_scope"]["site"] is None
-
-
-def test_site_context_with_project_id_labels_both_site_and_project(client, db_session):
-    org, user, headers = _make_org_and_manager(client, db_session)
-    project = _create_project(client, org["id"], headers).json()
-    site = _create_site(client, org["id"])
-    client.post(
-        f"/api/v1/projects/{project['id']}/sites?organization_id={org['id']}",
-        json={"site_id": site["id"]}, headers=headers,
-    )
-
-    response = client.get(
-        f"/api/v1/intelligence/sites/{site['id']}/context?organization_id={org['id']}&project_id={project['id']}",
-        headers=headers,
-    )
-    assert response.status_code == 200
-    body = response.json()
-    assert body["operational_scope"]["level"] == "SITE"
-    assert body["operational_scope"]["site"]["id"] == site["id"]
-    assert body["operational_scope"]["project"]["id"] == project["id"]
-
-
-def test_site_context_rejects_a_project_not_associated_with_that_site(client, db_session):
-    org, user, headers = _make_org_and_manager(client, db_session)
-    project = _create_project(client, org["id"], headers).json()
-    site = _create_site(client, org["id"])
-    # Deliberately never linked.
-    response = client.get(
-        f"/api/v1/intelligence/sites/{site['id']}/context?organization_id={org['id']}&project_id={project['id']}",
-        headers=headers,
-    )
-    assert response.status_code == 400
-
-
-def test_context_with_a_project_id_from_a_different_organization_is_404(client, db_session):
-    org_a, user_a, headers_a = _make_org_and_manager(client, db_session)
-    org_b, user_b, headers_b = _make_org_and_manager(client, db_session)
-    project_b = _create_project(client, org_b["id"], headers_b).json()
-
-    response = client.get(
-        f"/api/v1/intelligence/context?organization_id={org_a['id']}&project_id={project_b['id']}", headers=headers_a
-    )
-    assert response.status_code == 404
+# M43-IP-03: "Field Intelligence Context operational_scope integration"
+# (5 tests) removed -- they verified project/site linkage correctness
+# exclusively via `GET /intelligence/context`'s `operational_scope`
+# field, and that endpoint's computation was extracted to the private
+# Commercial Core repository. See docs/M43_IP_03_PUBLIC_EXTRACTION.md's
+# "Test coverage regressions" section.
 
 
 # --- SafetyEvent <-> Project attribution (SIE Milestone 35A) -----------------------------------
@@ -520,186 +442,21 @@ def test_two_projects_at_the_same_site_do_not_both_claim_an_events_attribution_o
     assert beta_events["items"] == []
 
 
-# --- Field Intelligence Context genuine project filtering (SIE Milestone 35A) ------------------
 
-
-def test_project_scoped_context_genuinely_filters_event_count_not_merely_labels_it(client, db_session):
-    """M35A's own central requirement: `event_count` differs between two
-    projects at the same site based on explicit attribution, not merely
-    a shared `operational_scope` label wrapping identical site-wide
-    numbers (M35's original gap)."""
-    org, user, headers = _make_org_and_manager(client, db_session)
-    site = _create_site(client, org["id"])
-    project_alpha = _create_project(client, org["id"], headers, name="Project Alpha", code="ALPHA").json()
-    project_beta = _create_project(client, org["id"], headers, name="Project Beta", code="BETA").json()
-    for project in (project_alpha, project_beta):
-        client.post(
-            f"/api/v1/projects/{project['id']}/sites?organization_id={org['id']}",
-            json={"site_id": site["id"]}, headers=headers,
-        )
-
-    site_uuid = uuid.UUID(site["id"])
-    org_uuid = uuid.UUID(org["id"])
-    alpha_events = [
-        make_safety_event(
-            organization_id=org_uuid, site_id=site_uuid, event_type="INCIDENT",
-            event_time=AS_OF - timedelta(days=i), ingestion_time=AS_OF - timedelta(days=i),
-            source_record_id=str(uuid.uuid4()),
-        )
-        for i in range(3)
-    ]
-    beta_event = make_safety_event(
-        organization_id=org_uuid, site_id=site_uuid, event_type="INCIDENT",
-        event_time=AS_OF, ingestion_time=AS_OF, source_record_id=str(uuid.uuid4()),
-    )
-    for event in [*alpha_events, beta_event]:
-        db_session.add(event)
-    db_session.commit()
-    for event in alpha_events:
-        db_session.refresh(event)
-    db_session.refresh(beta_event)
-
-    for event in alpha_events:
-        client.put(
-            f"/api/v1/projects/{project_alpha['id']}/events/{event.id}?organization_id={org['id']}", headers=headers
-        )
-    client.put(
-        f"/api/v1/projects/{project_beta['id']}/events/{beta_event.id}?organization_id={org['id']}", headers=headers
-    )
-
-    alpha_context = client.get(
-        "/api/v1/intelligence/context",
-        params={"organization_id": org["id"], "project_id": project_alpha["id"]}, headers=headers,
-    ).json()
-    beta_context = client.get(
-        "/api/v1/intelligence/context",
-        params={"organization_id": org["id"], "project_id": project_beta["id"]}, headers=headers,
-    ).json()
-    site_wide_context = client.get(
-        "/api/v1/intelligence/context", params={"organization_id": org["id"]}, headers=headers
-    ).json()
-
-    assert alpha_context["observed"]["event_count"] == 3
-    assert beta_context["observed"]["event_count"] == 1
-    assert site_wide_context["observed"]["event_count"] == 4
-    assert alpha_context["operational_scope"]["project"]["filtered"] is True
-    assert set(alpha_context["observed"]["evidence_sample_event_ids"]) == {str(e.id) for e in alpha_events}
-    assert beta_context["observed"]["evidence_sample_event_ids"] == [str(beta_event.id)]
-
-
-def test_project_scoped_context_is_point_in_time_correct_across_a_reassignment(client, db_session):
-    """SIE Milestone 35B, end-to-end through the real
-    GET /intelligence/context pipeline (not just events_as_of() in
-    isolation): an event attributed to Alpha on June 20, reassigned to
-    Beta on June 25, must still show up in Alpha's `event_count` for an
-    `as_of` of June 23 (before the reassignment) and disappear from it
-    for an `as_of` of June 26 (after) -- while Beta's context shows the
-    opposite. History rows are written directly (backdating `created_at`
-    -- the real PUT/DELETE routes always use `utcnow()` and cannot be
-    backdated over HTTP) to simulate the two calls having actually
-    happened on those two dates."""
-    from app.models.safety_event_project_attribution_history import (
-        SafetyEventProjectAttributionAction,
-        SafetyEventProjectAttributionHistory,
-    )
-
-    org, user, headers = _make_org_and_manager(client, db_session)
-    site = _create_site(client, org["id"])
-    project_alpha = _create_project(client, org["id"], headers, name="Alpha", code="ALPHA").json()
-    project_beta = _create_project(client, org["id"], headers, name="Beta", code="BETA").json()
-    for project in (project_alpha, project_beta):
-        client.post(
-            f"/api/v1/projects/{project['id']}/sites?organization_id={org['id']}",
-            json={"site_id": site["id"]}, headers=headers,
-        )
-
-    org_uuid = uuid.UUID(org["id"])
-    site_uuid = uuid.UUID(site["id"])
-    event_time = datetime(2026, 6, 1, tzinfo=timezone.utc)
-    event = make_safety_event(
-        organization_id=org_uuid, site_id=site_uuid, event_type="INCIDENT",
-        event_time=event_time, ingestion_time=event_time, source_record_id=str(uuid.uuid4()),
-    )
-    db_session.add(event)
-    db_session.commit()
-    db_session.refresh(event)
-
-    db_session.add(
-        SafetyEventProjectAttributionHistory(
-            organization_id=org_uuid, event_id=event.id, project_id=uuid.UUID(project_alpha["id"]),
-            action=SafetyEventProjectAttributionAction.ATTRIBUTED,
-            created_at=datetime(2026, 6, 20, tzinfo=timezone.utc),
-        )
-    )
-    db_session.add(
-        SafetyEventProjectAttributionHistory(
-            organization_id=org_uuid, event_id=event.id, project_id=uuid.UUID(project_beta["id"]),
-            action=SafetyEventProjectAttributionAction.ATTRIBUTED,
-            created_at=datetime(2026, 6, 25, tzinfo=timezone.utc),
-        )
-    )
-    db_session.commit()
-
-    def context(project_id, as_of_day):
-        response = client.get(
-            "/api/v1/intelligence/context",
-            params={
-                "organization_id": org["id"], "project_id": project_id,
-                "as_of": datetime(2026, 6, as_of_day, tzinfo=timezone.utc).isoformat(),
-            },
-            headers=headers,
-        )
-        assert response.status_code == 200, response.text
-        return response.json()
-
-    assert context(project_alpha["id"], 23)["observed"]["event_count"] == 1
-    assert context(project_alpha["id"], 26)["observed"]["event_count"] == 0
-    assert context(project_beta["id"], 26)["observed"]["event_count"] == 1
-    assert context(project_beta["id"], 23)["observed"]["event_count"] == 0
-
-
-def test_operational_scope_project_site_ids_is_point_in_time_correct_after_m36(client, db_session):
-    """SIE Milestone 36 corrects M35's own item 7 limitation: a
-    historical `as_of` request's `operational_scope.project.site_ids`
-    now genuinely reflects that historical instant (reconstructed from
-    `ProjectSiteHistory`), never today's `project_sites` row. Proven
-    here by linking a site AFTER a historical `as_of` instant and
-    confirming a query for that instant still reports it as
-    unassociated, while a query as of "now" (no `as_of`, or an `as_of`
-    after the link) correctly includes it."""
-    org, user, headers = _make_org_and_manager(client, db_session)
-    project = _create_project(client, org["id"], headers).json()
-    historical_as_of = (AS_OF - timedelta(days=90)).isoformat()
-
-    # Nothing linked yet, historical or live -- both empty.
-    before_link = client.get(
-        "/api/v1/intelligence/context",
-        params={"organization_id": org["id"], "project_id": project["id"], "as_of": historical_as_of},
-        headers=headers,
-    )
-    assert before_link.status_code == 200, before_link.text
-    assert before_link.json()["operational_scope"]["project"]["site_ids"] == []
-
-    site_1 = _create_site(client, org["id"], "Site One")
-    client.post(
-        f"/api/v1/projects/{project['id']}/sites?organization_id={org['id']}",
-        json={"site_id": site_1["id"]}, headers=headers,
-    )
-
-    # The link happened AFTER historical_as_of -- a query for that same
-    # historical instant must still report it as unassociated (M35's
-    # own bug: it would have incorrectly picked this up).
-    still_historical = client.get(
-        "/api/v1/intelligence/context",
-        params={"organization_id": org["id"], "project_id": project["id"], "as_of": historical_as_of},
-        headers=headers,
-    )
-    assert still_historical.json()["operational_scope"]["project"]["site_ids"] == []
-
-    # A live query (as_of omitted -- the fast current-state path) picks
-    # up the link immediately.
-    live = client.get(
-        "/api/v1/intelligence/context", params={"organization_id": org["id"], "project_id": project["id"]},
-        headers=headers,
-    )
-    assert live.json()["operational_scope"]["project"]["site_ids"] == [site_1["id"]]
+# M43-IP-03: the 3 tests formerly in "Field Intelligence Context genuine
+# project filtering" (test_project_scoped_context_genuinely_filters_event_count_not_merely_labels_it,
+# test_project_scoped_context_is_point_in_time_correct_across_a_reassignment,
+# test_operational_scope_project_site_ids_is_point_in_time_correct_after_m36)
+# removed -- they verified project/site operational-scope correctness
+# exclusively by asserting on `GET /intelligence/context`'s response
+# shape, and that endpoint's computation (app.intelligence.context_composition)
+# was extracted to the private Commercial Core repository. The
+# project/site attribution logic itself they were exercising
+# (app.services.project_site_service, app.intelligence.temporal) is
+# unchanged and still public; only the HTTP-level verification path
+# through the now-removed intelligence endpoint is gone. Not rewritten
+# against a different endpoint in this milestone -- see
+# docs/M43_IP_03_PUBLIC_EXTRACTION.md's "Test coverage regressions"
+# section. A future milestone should re-verify this behavior either at
+# the service layer directly or against a genuine Commercial Core client
+# integration.

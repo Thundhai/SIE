@@ -9,7 +9,7 @@ from app.core.rate_limit import LocalRateLimiter, get_rate_limiter
 from tests.conftest import dev_auth_headers
 from tests.intelligence_test_helpers import make_org
 from tests.test_intelligence_api import _bearer, _make_client_credential
-from tests.test_predictions_api import _make_authorized_user
+from tests.intelligence_test_helpers import make_authorized_user as _make_authorized_user
 
 
 def test_local_rate_limiter_allows_up_to_the_limit_then_blocks(monkeypatch):
@@ -126,7 +126,14 @@ def test_machine_client_rate_limit_is_scoped_to_its_own_client_id(client, db_ses
     credential_b = _make_client_credential(db_session, org.id, scopes=[Permission.INTELLIGENCE_READ])
     url = f"/api/v1/intelligence/analytics/summary?organization_id={org.id}"
 
-    assert client.get(url, headers=_bearer(credential_a)).status_code == 200
+    # M43-IP-03: this endpoint's own computation was extracted to
+    # Commercial Core and now always 501s -- but the rate-limit
+    # dependency (`require_rate_limit`) still runs before the handler
+    # body, so it is still the thing under test here: an allowed call
+    # reaches the (now-501) handler, a budget-exceeded call is still
+    # rejected by the limiter itself with 429, before ever reaching the
+    # handler.
+    assert client.get(url, headers=_bearer(credential_a)).status_code == 501
     assert client.get(url, headers=_bearer(credential_a)).status_code == 429
-    assert client.get(url, headers=_bearer(credential_b)).status_code == 200
+    assert client.get(url, headers=_bearer(credential_b)).status_code == 501
     get_rate_limiter().reset()

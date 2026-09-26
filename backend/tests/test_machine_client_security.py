@@ -179,11 +179,15 @@ def test_least_privilege_a_client_scoped_only_for_reads_cannot_write_events(clie
     credential = api_client_service.create(
         db_session, organization_id=org.id, name="Read-only client", scopes=[Permission.INTELLIGENCE_READ]
     )
+    # M43-IP-03: analytics computation was extracted to Commercial Core;
+    # an authorized read now reaches the (now-501) handler instead of a
+    # real 200 -- the scope check itself (this test's actual subject)
+    # still runs first and still allows it through.
     assert (
         client.get(
             f"/api/v1/intelligence/analytics/summary?organization_id={org.id}", headers=_bearer(credential)
         ).status_code
-        == 200
+        == 501
     )
     response = client.post(_EVENTS_URL, json=_event_payload(), headers=_bearer(credential))
     assert response.status_code == 403

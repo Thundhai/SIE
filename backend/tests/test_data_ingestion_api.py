@@ -329,23 +329,28 @@ def test_domain_level_dedup_still_works_without_any_idempotency_key(client, db_s
 # --- Intelligence-layer compatibility (item 18) ---------------------------------------------
 
 
-def test_an_ingested_event_flows_into_existing_analytics(client, db_session):
+def test_an_ingested_event_flows_into_the_canonical_safety_events_table(client, db_session):
+    """M43-IP-03: this used to verify ingested events "flow into
+    analytics" by reading them back through `GET /intelligence/analytics/summary`
+    -- that computation was extracted to the private Commercial Core
+    repository, so this now verifies the same underlying claim (ingested
+    records land in the canonical, generic `safety_events` table item 18
+    is actually about) directly against the database instead. See
+    docs/M43_IP_03_PUBLIC_EXTRACTION.md."""
     org = make_org(db_session)
     credential = api_client_service.create(
         db_session, organization_id=org.id, name="A", scopes=[Permission.SAFETY_DATA_WRITE]
     )
-    admin = _org_admin(db_session, org.id)
     now = datetime.now(timezone.utc).isoformat()
     records = [_record(source_record_id=f"analytics-{i}", event_time=now) for i in range(5)]
     ingest_response = client.post(_URL, json={"records": records}, headers=_bearer(credential))
     assert ingest_response.status_code == 201
     assert ingest_response.json()["accepted_records"] == 5
 
-    summary = client.get(
-        f"/api/v1/intelligence/analytics/summary?organization_id={org.id}", headers=dev_auth_headers(admin.id)
-    )
-    assert summary.status_code == 200
-    assert summary.json()["event_count"] == 5
+    from app.models.safety_event import SafetyEvent
+
+    count = db_session.query(SafetyEvent).filter(SafetyEvent.organization_id == org.id).count()
+    assert count == 5
 
 
 def test_an_ingested_events_temporal_and_provenance_fields_survive_into_the_existing_model(client, db_session):
