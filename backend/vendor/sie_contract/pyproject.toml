@@ -1,0 +1,19 @@
+[project]
+name = "sie-contract"
+version = "0.2.0"
+description = "SIE Shared Contract -- the versioned boundary between Public SIE and the Private Commercial Core. Contains DTOs and enums only: no algorithms, no internal models, no orchestration."
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.0,<3.0",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
