@@ -38,6 +38,7 @@ class FeatureSnapshot(UUIDPrimaryKeyMixin, OrganizationScopedMixin, Base):
             "organization_id", "entity_type", "entity_id", "as_of", "feature_set_version",
             name="uq_feature_snapshots_entity_as_of_version",
         ),
+        {"schema": "commercial_core"},
     )
 
     entity_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)

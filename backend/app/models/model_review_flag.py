@@ -23,9 +23,13 @@ from app.models.base import Base, OrganizationScopedMixin, UUIDPrimaryKeyMixin, 
 
 class ModelReviewFlag(UUIDPrimaryKeyMixin, OrganizationScopedMixin, Base):
     __tablename__ = "model_review_flags"
+    __table_args__ = {"schema": "commercial_core"}
 
     model_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("model_registry_entries.id", ondelete="CASCADE"), nullable=False, index=True
+        Uuid(as_uuid=True),
+        ForeignKey("commercial_core.model_registry_entries.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
 
     reason: Mapped[str] = mapped_column(String(50), nullable=False)  # e.g. PERFORMANCE_DRIFT, FEATURE_DRIFT, DATA_DRIFT

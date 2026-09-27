@@ -134,6 +134,7 @@ class TerminologyMappingDecision(UUIDPrimaryKeyMixin, OrganizationScopedMixin, T
             "organization_id", "source_system", "domain", "context", "source_term", "mapping_version",
             name="uq_terminology_mapping_decisions_scope_version",
         ),
+        {"schema": "commercial_core"},
     )
 
     # --- Scope key (item 7) ---------------------------------------------------------------
@@ -185,7 +186,7 @@ class TerminologyMappingDecision(UUIDPrimaryKeyMixin, OrganizationScopedMixin, T
     # read *from* that row (the reverse: this service *writes* a closing
     # outcome there once decided -- see terminology_calibration_service.py).
     hse_expert_review_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("hse_expert_reviews.id", ondelete="SET NULL"), nullable=True
+        Uuid(as_uuid=True), ForeignKey("commercial_core.hse_expert_reviews.id", ondelete="SET NULL"), nullable=True
     )
 
     # --- Provenance (item 14) ----------------------------------------------------------------

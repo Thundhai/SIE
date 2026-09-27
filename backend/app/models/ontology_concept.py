@@ -173,11 +173,27 @@ TERMINAL_STATUSES = (OntologyConceptStatus.APPROVED, OntologyConceptStatus.REJEC
 
 
 class OntologyConcept(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """**Database boundary (SIE Database Boundary Separation milestone).**
+    Commercial-Core-owned governance-controlled reference data -- see
+    backend/docs/DATABASE_BOUNDARY.md. Lives in the `commercial_core`
+    PostgreSQL schema (moved there from `public` by migration `0032`,
+    same physical database). Public SIE's own governance service for
+    this table (`ontology_governance_service.py`) was already removed by
+    M43-IP-03; this model stays here only because Public SIE's
+    risk-assessment feature has one real, FK-enforced read dependency on
+    it (`app/risk_assessment/risk_area_resolution.py`,
+    `RiskAssessmentFinding.risk_area_concept_id`) that this milestone
+    deliberately keeps a real cross-schema foreign key rather than an
+    application-level or contract-mediated check -- see that migration's
+    own docstring for why the `ON DELETE RESTRICT` guarantee survives the
+    schema move unchanged."""
+
     __tablename__ = "ontology_concepts"
     __table_args__ = (
         UniqueConstraint(
             "organization_id", "layer", "parent_domain", "concept_key", name="uq_ontology_concepts_scope"
         ),
+        {"schema": "commercial_core"},
     )
 
     # --- Scope key ---------------------------------------------------------------------------

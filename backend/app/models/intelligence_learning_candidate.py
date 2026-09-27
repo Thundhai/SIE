@@ -153,16 +153,20 @@ class IntelligenceLearningCandidate(UUIDPrimaryKeyMixin, OrganizationScopedMixin
         # SET NULL conflict).
         ForeignKeyConstraint(
             ["outcome_id", "organization_id"],
-            ["intelligence_outcomes.id", "intelligence_outcomes.organization_id"],
+            ["commercial_core.intelligence_outcomes.id", "commercial_core.intelligence_outcomes.organization_id"],
             ondelete="CASCADE",
             name="fk_learning_candidates_outcome_id_organization_id",
         ),
         ForeignKeyConstraint(
             ["verification_id", "organization_id"],
-            ["intelligence_outcome_verifications.id", "intelligence_outcome_verifications.organization_id"],
+            [
+                "commercial_core.intelligence_outcome_verifications.id",
+                "commercial_core.intelligence_outcome_verifications.organization_id",
+            ],
             ondelete="CASCADE",
             name="fk_learning_candidates_verification_id_organization_id",
         ),
+        {"schema": "commercial_core"},
     )
 
     # No inline `ForeignKey(...)` on either -- their references are the
@@ -247,10 +251,14 @@ class IntelligenceLearningCandidateGovernanceDecision(UUIDPrimaryKeyMixin, Organ
         # organization_id) constraint, added in this same migration.
         ForeignKeyConstraint(
             ["candidate_id", "organization_id"],
-            ["intelligence_learning_candidates.id", "intelligence_learning_candidates.organization_id"],
+            [
+                "commercial_core.intelligence_learning_candidates.id",
+                "commercial_core.intelligence_learning_candidates.organization_id",
+            ],
             ondelete="CASCADE",
             name="fk_learning_candidate_gov_decisions_candidate_id_org_id",
         ),
+        {"schema": "commercial_core"},
     )
 
     # No inline `ForeignKey(...)` -- its reference is the composite

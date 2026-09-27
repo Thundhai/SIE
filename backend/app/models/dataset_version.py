@@ -41,6 +41,7 @@ class DatasetVersion(UUIDPrimaryKeyMixin, OrganizationScopedMixin, Base):
     __tablename__ = "dataset_versions"
     __table_args__ = (
         UniqueConstraint("organization_id", "dataset_id", "dataset_version", name="uq_dataset_versions_id_version"),
+        {"schema": "commercial_core"},
     )
 
     dataset_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)  # human-chosen label, e.g. "ORG-A-SAFETY"
