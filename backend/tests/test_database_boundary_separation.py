@@ -21,8 +21,11 @@ that file's own per-revision tests don't already make.
 
 from __future__ import annotations
 
+import logging
+import logging.config
 import uuid
 
+import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, text
@@ -32,6 +35,38 @@ from tests.postgres_support import PG_TEST_DATABASE_URL, requires_postgres
 
 def _alembic_config() -> Config:
     return Config("alembic.ini")
+
+
+@pytest.fixture
+def _restore_logger_disabled_state():
+    """A real `alembic.command.upgrade`/`downgrade` call re-execs
+    `migrations/env.py`, which calls `logging.config.fileConfig(...)`
+    (see that file) with Python's default `disable_existing_loggers=True`.
+    `alembic.ini`'s own `[loggers]` section only names `root`/`sqlalchemy`/
+    `alembic` -- every *other* already-instantiated logger in the process
+    (e.g. `app.embeddings.embedding_service`, created at import time via
+    `logging.getLogger(__name__)`) gets `.disabled = True` set as a side
+    effect, and it stays disabled for the rest of this pytest process,
+    since Python's logging module is process-global.
+
+    Only the two tests below that invoke a real Alembic command need
+    this: they are what triggers `fileConfig`, not anything else in this
+    file (the `pg_session`-based tests build tables via
+    `Base.metadata.create_all()`, never touching `env.py`). Snapshot every
+    currently-registered logger's `.disabled` flag before the test body
+    runs and restore it after, so this test's own use of Alembic doesn't
+    silently disable unrelated application loggers (breaking, e.g.,
+    tests/test_embedding_security.py's log-content assertions) for every
+    test that happens to run later in the same process."""
+    manager = logging.Logger.manager
+    previous = {name: lg.disabled for name, lg in manager.loggerDict.items() if isinstance(lg, logging.Logger)}
+    root_previous = logging.root.disabled
+    yield
+    for name, disabled in previous.items():
+        lg = manager.loggerDict.get(name)
+        if isinstance(lg, logging.Logger):
+            lg.disabled = disabled
+    logging.root.disabled = root_previous
 
 
 @requires_postgres
@@ -191,7 +226,7 @@ def test_approved_risk_area_resolution_still_works(pg_session):
 
 
 @requires_postgres
-def test_eleven_global_seed_concepts_present_after_fresh_migration(monkeypatch):
+def test_eleven_global_seed_concepts_present_after_fresh_migration(monkeypatch, _restore_logger_disabled_state):
     """Test 6: the 11 GLOBAL seed concepts (migration 0017) are present,
     in commercial_core, after the full chain including the boundary
     migrations.
@@ -252,7 +287,9 @@ def test_commercial_core_can_still_read_governing_standards(pg_session):
 
 
 @requires_postgres
-def test_boundary_migrations_upgrade_from_pre_boundary_state_and_downgrade_cleanly(monkeypatch):
+def test_boundary_migrations_upgrade_from_pre_boundary_state_and_downgrade_cleanly(
+    monkeypatch, _restore_logger_disabled_state
+):
     """Tests 7 & 8: upgrading from the pre-boundary state (0030) through
     the boundary migrations (0031-0035) converges on the same schema a
     fresh install reaches, and downgrading back to 0030 reverses every
@@ -296,6 +333,33 @@ def test_boundary_migrations_upgrade_from_pre_boundary_state_and_downgrade_clean
         with engine.begin() as conn:
             conn.execute(text("DROP SCHEMA IF EXISTS commercial_core CASCADE"))
         engine.dispose()
+
+
+def test_real_alembic_env_disables_unrelated_loggers_without_isolation_fixture(_restore_logger_disabled_state):
+    """Regression test pinning the exact mechanism `_restore_logger_disabled_state`
+    (above) exists to contain, and why the two real-Alembic-command tests
+    in this file request that fixture. `migrations/env.py` calls
+    `logging.config.fileConfig("alembic.ini")` on every real Alembic
+    command, with Python's default `disable_existing_loggers=True`.
+    `alembic.ini`'s own `[loggers]` section only names
+    `root`/`sqlalchemy`/`alembic` -- every other already-registered
+    logger in the process (e.g. `app.embeddings.embedding_service`) gets
+    `.disabled` set to `True` as an undocumented side effect that
+    survives for the rest of this pytest process unless something
+    restores it. Exercises `fileConfig` directly, not a full `alembic
+    upgrade`, so this test needs no live database and stays cheap.
+
+    Requests `_restore_logger_disabled_state` itself (not just a
+    try/finally around one probe logger): calling `fileConfig` directly
+    disables *every* unrelated already-registered logger in the process
+    (including `app.embeddings.embedding_service`), not only this test's
+    own probe -- the fixture is what undoes that collateral damage after
+    this test returns, exactly as it does for the two tests above."""
+    probe_name = "tests._fileconfig_disables_unrelated_loggers_probe"
+    probe = logging.getLogger(probe_name)
+    assert probe.disabled is False
+    logging.config.fileConfig("alembic.ini")
+    assert probe.disabled is True
 
 
 def test_no_proprietary_commercial_core_application_code_in_public_sie():
