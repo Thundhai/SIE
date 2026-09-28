@@ -193,6 +193,28 @@ class HttpCommercialCoreClient(CommercialCoreClient):
     `reject_tenant_override()` can verify-and-reject on mismatch against
     its authenticated credential's bound organization -- defense in
     depth, not a second source of truth.
+
+    **Known architectural constraint, inherited from Task 01C, not solved
+    here.** Commercial Core's Credential A
+    (`cc_service/auth/config.py::ServiceAuthSettings` in
+    Thundhai/SIE-Commercial-Core) is, by that module's own explicit
+    design, "single-credential... bound to exactly one organization, per
+    deployed instance" -- there is no mechanism today for one Commercial
+    Core deployment to serve more than one organization's Attention data.
+    Since `COMMERCIAL_CORE_CLIENT_ID`/`COMMERCIAL_CORE_CLIENT_SECRET` are
+    configured once, process-wide, for this Public SIE deployment, a
+    request whose authorized `organization_id` is *not* the one
+    Commercial Core's credential is bound to will be rejected by
+    cc_service's own `reject_tenant_override()` with `TENANT_MISMATCH`
+    (mapped, like every other `CommercialCoreAuthorizationError`, to a
+    503 `MODEL_NOT_AVAILABLE` here -- see
+    `app/api/v1/intelligence.py::_map_commercial_core_attention_error()`).
+    Public SIE itself remains multi-tenant; a given Commercial Core
+    deployment, as built today, does not extend that across arbitrary
+    Public SIE organizations. This is not addressed by this class and
+    must not be read as solved by it -- extending Commercial Core to a
+    real multi-tenant credential/authorization model is out of scope
+    here and belongs to a future Commercial Core milestone.
     """
 
     def __init__(self, *, base_url: str, client_id: str, client_secret: str, timeout_seconds: float) -> None:

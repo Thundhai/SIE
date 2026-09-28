@@ -63,6 +63,7 @@ from app.core.request_id import get_request_id
 from app.integrations.commercial_core import (
     CommercialCoreIntegrationError,
     CommercialCoreUnavailable,
+    CommercialCoreValidationError,
     commercial_core_client,
     get_commercial_core_client,
 )
@@ -87,19 +88,39 @@ def _not_available() -> HTTPException:
     return commercial_core_client.unavailable("Enterprise intelligence analytics/attention/context")
 
 
-def _attention_unavailable(exc: CommercialCoreIntegrationError) -> ApiError:
-    """Maps every `CommercialCoreIntegrationError` subclass (auth,
-    authorization, validation, dependency-unavailable, timeout,
-    connection, malformed-response, unexpected-status -- see that
-    module's own docstrings) onto Public SIE's existing `ErrorCode.
-    MODEL_NOT_AVAILABLE` convention. Deliberately one outcome for all of
-    them: none of these failure modes are the calling Public SIE user's
-    or machine client's own fault (they were already authenticated and
-    authorized by Public SIE itself before this client was ever
-    invoked), so none should be presented to them as if their own
-    request were invalid or unauthorized. `str(exc)` is always one of
-    this module's own fixed, safe messages -- never a Commercial Core
-    stack trace, credential, or URL."""
+def _map_commercial_core_attention_error(exc: CommercialCoreIntegrationError) -> ApiError:
+    """Maps a `CommercialCoreIntegrationError` onto Public SIE's existing
+    error vocabulary (`app.core.errors.ErrorCode`) -- no new error code
+    introduced.
+
+    `CommercialCoreValidationError` (cc_service's own 422 -- the request
+    body it received, built entirely from already-validated Public SIE
+    inputs, still failed the Domain Service's own validation) is mapped
+    to `ErrorCode.VALIDATION_ERROR` at 422, matching this codebase's own
+    existing status-code convention (`app.core.errors._STATUS_CODE_DEFAULTS`
+    already treats 422 as `VALIDATION_ERROR`) and preserving the contract's
+    own `retryable=False` semantics for this case: unlike a transient
+    dependency outage, resubmitting the exact same request will not
+    succeed by simply waiting and retrying.
+
+    Every other subclass (auth, authorization, dependency-unavailable,
+    timeout, connection, malformed-response, unexpected-status -- see
+    that module's own docstrings) maps to `ErrorCode.MODEL_NOT_AVAILABLE`
+    at 503. Deliberately one outcome for all of *those*: none of them are
+    the calling Public SIE user's or machine client's own fault (they
+    were already authenticated and authorized by Public SIE itself before
+    this client was ever invoked), so none should be presented to them as
+    if their own request were invalid or unauthorized.
+
+    `str(exc)` is always one of `app/integrations/commercial_core.py`'s
+    own fixed, safe messages -- never a Commercial Core stack trace,
+    credential, or URL, for either branch."""
+    if isinstance(exc, CommercialCoreValidationError):
+        return ApiError(
+            status_code=422,
+            code=ErrorCode.VALIDATION_ERROR,
+            message=str(exc),
+        )
     return ApiError(
         status_code=503,
         code=ErrorCode.MODEL_NOT_AVAILABLE,
@@ -327,7 +348,7 @@ def organization_attention(
     except CommercialCoreUnavailable:
         raise
     except CommercialCoreIntegrationError as exc:
-        raise _attention_unavailable(exc) from exc
+        raise _map_commercial_core_attention_error(exc) from exc
 
 
 @router.get(
@@ -358,4 +379,4 @@ def site_attention(
     except CommercialCoreUnavailable:
         raise
     except CommercialCoreIntegrationError as exc:
-        raise _attention_unavailable(exc) from exc
+        raise _map_commercial_core_attention_error(exc) from exc

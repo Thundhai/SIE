@@ -340,6 +340,59 @@ def test_attention_maps_a_client_integration_error_to_503_model_not_available(cl
     assert body["error"]["code"] == "MODEL_NOT_AVAILABLE"
 
 
+def test_attention_maps_a_commercial_core_validation_error_to_422_validation_error(
+    client, db_session, monkeypatch
+):
+    """Follow-up to Task 01D-B: a CommercialCoreValidationError (cc_service's
+    own 422 -- see sie_contract.KnownErrorCode.VALIDATION_ERROR /
+    retryable=False) must surface as Public SIE's existing 422
+    VALIDATION_ERROR, not the generic 503 MODEL_NOT_AVAILABLE every other
+    CommercialCoreIntegrationError subclass maps to -- collapsing it into
+    503 would incorrectly imply the request might succeed by simply
+    retrying."""
+    from app.integrations.commercial_core import CommercialCoreValidationError
+
+    org = create_org(client)
+    org_id = uuid.UUID(org["id"])
+    credential = _make_client_credential(db_session, org_id, scopes=[Permission.INTELLIGENCE_READ])
+    fake_client = _FakeAttentionClient(
+        error=CommercialCoreValidationError("Commercial Core rejected the request as invalid.")
+    )
+    monkeypatch.setattr("app.api.v1.intelligence.get_commercial_core_client", lambda: fake_client)
+
+    response = client.get(
+        f"/api/v1/intelligence/attention?organization_id={org['id']}", headers=_bearer(credential)
+    )
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_site_attention_also_maps_a_commercial_core_validation_error_to_422(client, db_session, monkeypatch):
+    """Same mapping, exercised on the sibling site_attention route -- both
+    routes call the same _map_commercial_core_attention_error() helper,
+    but each has its own try/except, so each is worth locking in."""
+    from app.integrations.commercial_core import CommercialCoreValidationError
+
+    org = create_org(client)
+    org_id = uuid.UUID(org["id"])
+    site_id = uuid.uuid4()
+    credential = _make_client_credential(db_session, org_id, scopes=[Permission.INTELLIGENCE_READ])
+    fake_client = _FakeAttentionClient(
+        error=CommercialCoreValidationError("Commercial Core rejected the request as invalid.")
+    )
+    monkeypatch.setattr("app.api.v1.intelligence.get_commercial_core_client", lambda: fake_client)
+
+    response = client.get(
+        f"/api/v1/intelligence/sites/{site_id}/attention?organization_id={org['id']}",
+        headers=_bearer(credential),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
 def test_attention_tenant_security_a_machine_credential_cannot_reach_a_different_organization(
     client, db_session, monkeypatch
 ):
