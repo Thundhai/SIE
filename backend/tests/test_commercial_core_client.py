@@ -344,10 +344,17 @@ def test_timeout_maps_to_a_typed_error(monkeypatch):
         raise httpx.ReadTimeout("timed out")
 
     client = _client(monkeypatch, fake_post)
-    with pytest.raises(CommercialCoreTimeoutError):
+    with pytest.raises(CommercialCoreTimeoutError) as exc_info:
         client.get_attention(
             organization_id=_ORG_ID, scope="organization", site_id=None, as_of=None, window_days=None, request_id=None
         )
+    # A real httpx.TimeoutException carries `.request` (headers, including
+    # the real Authorization value this method just sent) -- __context__
+    # must be severed entirely, not merely display-suppressed via
+    # `from None` alone (verified: `from None` sets __suppress_context__
+    # but leaves __context__ pointing at the original exception object).
+    assert exc_info.value.__context__ is None
+    assert exc_info.value.__cause__ is None
 
 
 def test_connection_failure_maps_to_a_typed_error(monkeypatch):
@@ -355,10 +362,12 @@ def test_connection_failure_maps_to_a_typed_error(monkeypatch):
         raise httpx.ConnectError("could not connect")
 
     client = _client(monkeypatch, fake_post)
-    with pytest.raises(CommercialCoreConnectionError):
+    with pytest.raises(CommercialCoreConnectionError) as exc_info:
         client.get_attention(
             organization_id=_ORG_ID, scope="organization", site_id=None, as_of=None, window_days=None, request_id=None
         )
+    assert exc_info.value.__context__ is None
+    assert exc_info.value.__cause__ is None
 
 
 # --- Protocol: malformed JSON / DTO validation failure / unexpected status -----------

@@ -31,9 +31,8 @@ import uuid
 from datetime import datetime
 from functools import lru_cache
 
-from fastapi import HTTPException, status
-
 import sie_contract
+from fastapi import HTTPException, status
 from sie_contract import AttentionResultDTO, ErrorResponse, KnownErrorCode
 
 from app.core.config import settings
@@ -237,6 +236,17 @@ class HttpCommercialCoreClient(CommercialCoreClient):
         # Deliberately a single attempt, no automatic retry -- mirrors
         # Task 01C's own domain_client, which has none by design (see
         # this task's own "Do NOT implement automatic retries" instruction).
+        # Caught and re-raised outside this try/except (never `raise ... from
+        # exc` or a bare `raise` inside the handler) so the new exception's
+        # `__context__` is never set at all -- not merely display-suppressed.
+        # A real httpx.TimeoutException/TransportError carries `.request`,
+        # including the real `Authorization` header this method just sent;
+        # `from None` alone stops it appearing in a standard traceback, but
+        # leaves the original exception object (and that header) reachable
+        # via `__context__` to anything that walks the chain directly rather
+        # than through traceback formatting (e.g. some error-tracking SDKs) --
+        # verified empirically, not merely theoretical.
+        transport_failure: CommercialCoreIntegrationError | None = None
         try:
             response = httpx.post(
                 f"{self._base_url}{_ATTENTION_PATH}",
@@ -246,10 +256,12 @@ class HttpCommercialCoreClient(CommercialCoreClient):
             )
         except httpx.TimeoutException:
             logger.warning("commercial_core.attention.timeout", extra=log_fields)
-            raise CommercialCoreTimeoutError("Commercial Core did not respond in time.") from None
+            transport_failure = CommercialCoreTimeoutError("Commercial Core did not respond in time.")
         except httpx.TransportError:
             logger.warning("commercial_core.attention.connection_failed", extra=log_fields)
-            raise CommercialCoreConnectionError("Could not reach Commercial Core.") from None
+            transport_failure = CommercialCoreConnectionError("Could not reach Commercial Core.")
+        if transport_failure is not None:
+            raise transport_failure
 
         if response.status_code == 200:
             logger.info("commercial_core.attention.response_received", extra=log_fields)
