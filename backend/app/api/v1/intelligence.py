@@ -20,9 +20,16 @@ computation actually lives now. Public SIE no longer contains it.
 
     human OR machine caller -> GET .../analytics/summary | .../analytics/trends |
         .../analytics/signals | .../features | .../enterprise | .../context |
-        .../memory-context | .../attention
+        .../memory-context
         -> HTTP 501 (Commercial Core client integration not yet wired -- see
            docs/M43_IP_03_PUBLIC_EXTRACTION.md)
+
+    human OR machine caller -> GET .../attention | .../sites/{site_id}/attention
+        -> Task 01D-B: CommercialCoreClient -> cc_service (Thundhai/SIE-Commercial-Core)
+           POST /internal/v1/attention -> sie_contract.AttentionResultDTO
+        -> still HTTP 501 (the existing NotConfiguredCommercialCoreClient
+           fallback) whenever this deployment has no Commercial Core
+           configured -- see app/integrations/commercial_core.py.
 
 These reads are not deleted outright (the route, its path, and its
 authorization requirement all still exist) because removing the route
@@ -37,18 +44,31 @@ Extraction" rule.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sie_contract import AttentionResultDTO
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
-from app.api.deps_context import RequestContext, require_context_permission
+from app.api.deps_context import (
+    RequestContext,
+    require_context_permission,
+    resolve_authorized_organization_id,
+)
 from app.api.deps_machine_auth import MachineClientContext, require_scope
 from app.api.deps_rate_limit import RateLimitClass, require_rate_limit
+from app.core.errors import ApiError, ErrorCode
+from app.core.request_id import get_request_id
+from app.integrations.commercial_core import (
+    CommercialCoreIntegrationError,
+    CommercialCoreUnavailable,
+    commercial_core_client,
+    get_commercial_core_client,
+)
 from app.intelligence.adapters import GenericJSONAdapter
 from app.intelligence.ingestion_service import safety_event_ingestion_service
 from app.intelligence.schemas import RawSafetyEventPayload
-from app.integrations.commercial_core import commercial_core_client
 from app.schemas.intelligence import (
     BatchIngestionRead,
     IngestionIssueRead,
@@ -65,6 +85,26 @@ _adapter = GenericJSONAdapter()
 
 def _not_available() -> HTTPException:
     return commercial_core_client.unavailable("Enterprise intelligence analytics/attention/context")
+
+
+def _attention_unavailable(exc: CommercialCoreIntegrationError) -> ApiError:
+    """Maps every `CommercialCoreIntegrationError` subclass (auth,
+    authorization, validation, dependency-unavailable, timeout,
+    connection, malformed-response, unexpected-status -- see that
+    module's own docstrings) onto Public SIE's existing `ErrorCode.
+    MODEL_NOT_AVAILABLE` convention. Deliberately one outcome for all of
+    them: none of these failure modes are the calling Public SIE user's
+    or machine client's own fault (they were already authenticated and
+    authorized by Public SIE itself before this client was ever
+    invoked), so none should be presented to them as if their own
+    request were invalid or unauthorized. `str(exc)` is always one of
+    this module's own fixed, safe messages -- never a Commercial Core
+    stack trace, credential, or URL."""
+    return ApiError(
+        status_code=503,
+        code=ErrorCode.MODEL_NOT_AVAILABLE,
+        message=str(exc),
+    )
 
 
 def _to_raw_payload(body: SafetyEventCreate) -> RawSafetyEventPayload:
@@ -260,20 +300,62 @@ def site_memory_context(
     raise _not_available()
 
 
-@router.get("/attention", dependencies=[Depends(require_rate_limit(RateLimitClass.READ))])
+@router.get(
+    "/attention",
+    response_model=AttentionResultDTO,
+    dependencies=[Depends(require_rate_limit(RateLimitClass.READ))],
+)
 def organization_attention(
+    request: Request,
     organization_id: uuid.UUID = Query(...),
+    window_days: int | None = Query(default=None, ge=1, le=3650),
+    as_of: datetime | None = Query(default=None),
     context: RequestContext = Depends(require_context_permission(Permission.INTELLIGENCE_READ)),
     db: Session = Depends(get_db),
-):
-    raise _not_available()
+    request_id: str | None = Depends(get_request_id),
+) -> AttentionResultDTO:
+    try:
+        client = get_commercial_core_client()
+        return client.get_attention(
+            organization_id=resolve_authorized_organization_id(context, organization_id),
+            scope="organization",
+            site_id=None,
+            as_of=as_of,
+            window_days=window_days,
+            request_id=request_id,
+        )
+    except CommercialCoreUnavailable:
+        raise
+    except CommercialCoreIntegrationError as exc:
+        raise _attention_unavailable(exc) from exc
 
 
-@router.get("/sites/{site_id}/attention", dependencies=[Depends(require_rate_limit(RateLimitClass.READ))])
+@router.get(
+    "/sites/{site_id}/attention",
+    response_model=AttentionResultDTO,
+    dependencies=[Depends(require_rate_limit(RateLimitClass.READ))],
+)
 def site_attention(
     site_id: uuid.UUID,
+    request: Request,
     organization_id: uuid.UUID = Query(...),
+    window_days: int | None = Query(default=None, ge=1, le=3650),
+    as_of: datetime | None = Query(default=None),
     context: RequestContext = Depends(require_context_permission(Permission.INTELLIGENCE_READ)),
     db: Session = Depends(get_db),
-):
-    raise _not_available()
+    request_id: str | None = Depends(get_request_id),
+) -> AttentionResultDTO:
+    try:
+        client = get_commercial_core_client()
+        return client.get_attention(
+            organization_id=resolve_authorized_organization_id(context, organization_id),
+            scope="site",
+            site_id=site_id,
+            as_of=as_of,
+            window_days=window_days,
+            request_id=request_id,
+        )
+    except CommercialCoreUnavailable:
+        raise
+    except CommercialCoreIntegrationError as exc:
+        raise _attention_unavailable(exc) from exc

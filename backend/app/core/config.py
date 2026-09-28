@@ -548,6 +548,27 @@ class Settings(BaseSettings):
     # enterprise intelligence endpoints' own.
     RISK_ASSESSMENT_DEFAULT_WINDOW_DAYS: int = 30
 
+    # Task 01D-B: Public SIE Commercial Core Attention Client (see
+    # app/integrations/commercial_core.py). Configures the authenticated
+    # HTTP boundary from Public SIE to Commercial Core's `cc_service` --
+    # never a direct database or domain_service connection. All four are
+    # optional and default to unset so importing Settings/starting the
+    # app never fails merely because Commercial Core is not yet
+    # configured (the existing NotConfiguredCommercialCoreClient 501
+    # fallback stays available) -- see
+    # app/integrations/commercial_core.py::build_commercial_core_client()
+    # for the "all or nothing" check this deliberately defers to first
+    # real use, the same fail-closed-at-first-use shape
+    # app/services/oidc_verifier.py::get_oidc_verifier() already
+    # established for OIDC_ISSUER/OIDC_AUDIENCE/OIDC_JWKS_URL.
+    COMMERCIAL_CORE_BASE_URL: str | None = None
+    # Commercial Core Credential A (see cc_service/auth/credentials.py in
+    # Thundhai/SIE-Commercial-Core) -- sent as `Authorization: Bearer
+    # <client_id>:<secret>`. Never committed, never logged.
+    COMMERCIAL_CORE_CLIENT_ID: str | None = None
+    COMMERCIAL_CORE_CLIENT_SECRET: str | None = None
+    COMMERCIAL_CORE_TIMEOUT_SECONDS: float = 5.0
+
     @property
     def sqlalchemy_database_uri(self) -> str:
         if self.DATABASE_URL:
