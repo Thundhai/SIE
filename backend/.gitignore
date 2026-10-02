@@ -5,6 +5,7 @@ __pycache__/
 .env
 *.db
 *.sqlite3
+*.egg-info/
 
 # Local filesystem StorageProvider root (app/ingestion/storage.py) —
 # uploaded file bytes, never committed.

@@ -46,3 +46,15 @@ httpx==0.28.1
 # tests/test_sentence_transformer_provider.py, and is sentence-transformers'
 # own required dependency for app/embeddings/provider.py (kept, generic).
 numpy==2.5.2
+
+# Task 01D-A: the Shared Contract (sie_contract) -- a controlled, vendored
+# copy of Thundhai/SIE-Commercial-Core's sie-contract/ package (see
+# vendor/sie_contract/PROVENANCE.md for exact source commit/version and
+# vendor/sie_contract/PROVENANCE.json for the drift-check record this
+# needs no private-repository access to install: it's a local editable
+# install of a copy already committed to this repository, not a git or
+# registry dependency reaching into Thundhai/SIE-Commercial-Core. Not yet
+# imported by any runtime code -- see backend/app/integrations/
+# commercial_core.py's own docstring for why a real CommercialCoreClient
+# is a separate, later step.
+-e ./vendor/sie_contract
