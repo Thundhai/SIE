@@ -588,6 +588,62 @@ def test_analytics_summary_succeeds_with_a_configured_client_and_reshapes_indica
     assert fake_client.calls[0]["window_days"] == 30
 
 
+def test_analytics_summary_response_contains_every_field_homepage_reads(client, db_session, monkeypatch):
+    """Task 01D-F2 review fix: `window_days` lives on `AnalyticsSummaryDTO.
+    as_of.window_days` in the shared contract (never a sibling field of
+    `AnalyticsSummaryDTO` itself -- see `sie_contract.common.AsOfWindow`),
+    and is flattened back out to a top-level `window_days` key only by
+    `_analytics_summary_response()` at this API layer. No prior test
+    asserted on the *response body's* `window_days` at all (only on the
+    outbound *request* sent to the CommercialCoreClient) -- this closes
+    that gap, and does the same for every other field
+    `src/features/home/HomePage.tsx` actually dereferences from
+    `getAnalyticsSummary()`'s result: `window_days`, `event_count`,
+    `data_sufficiency`, `signals` (`.length`, `.signal_type`, `.severity`,
+    `.observed_period_start/end`), and `indicators` (`.category`, `.name`,
+    `.feature.value`)."""
+    from sie_contract import AnalyticsIndicatorDTO
+
+    org = create_org(client)
+    org_id = uuid.UUID(org["id"])
+    credential = _make_client_credential(db_session, org_id, scopes=[Permission.INTELLIGENCE_READ])
+    indicator = AnalyticsIndicatorDTO(name="incident_count", category="LAGGING", value=5.0)
+    signal = _analytics_signal_dto(signal_type="OVERDUE_ACTION_SURGE", severity="HIGH")
+    fake_client = _FakeAnalyticsClient(
+        result=_analytics_summary_result(
+            org_id, event_count=12, data_sufficiency="SUFFICIENT_DATA", indicators=[indicator], signals=[signal]
+        )
+    )
+    monkeypatch.setattr("app.api.v1.intelligence.get_commercial_core_client", lambda: fake_client)
+
+    response = client.get(
+        f"/api/v1/intelligence/analytics/summary?organization_id={org['id']}&window_days=30",
+        headers=_bearer(credential),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+
+    # HomePage.tsx's "At a glance" section: `Based on the last
+    # ${summary.window_days} days.` -- the exact field this review fix
+    # targets.
+    assert "window_days" in body
+    assert body["window_days"] == 30
+
+    # Every other field HomePage.tsx's analytics-summary rendering path
+    # actually reads.
+    assert body["event_count"] == 12
+    assert body["data_sufficiency"] == "SUFFICIENT_DATA"
+    assert len(body["signals"]) == 1
+    assert body["signals"][0]["signal_type"] == "OVERDUE_ACTION_SURGE"
+    assert body["signals"][0]["severity"] == "HIGH"
+    assert "observed_period_start" in body["signals"][0]
+    assert "observed_period_end" in body["signals"][0]
+    assert body["indicators"][0]["category"] == "LAGGING"
+    assert body["indicators"][0]["name"] == "incident_count"
+    assert body["indicators"][0]["feature"]["value"] == 5.0
+
+
 def test_analytics_summary_site_scope_sets_entity_type_site(client, db_session, monkeypatch):
     org = create_org(client)
     org_id = uuid.UUID(org["id"])

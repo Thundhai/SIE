@@ -159,7 +159,24 @@ def _analytics_summary_response(dto: AnalyticsSummaryDTO) -> dict:
     `entity_type` is synthesized, not fabricated: it is exactly what
     `entity_id`'s own presence already means, by this DTO's own field
     documentation ("the site_id when site-scoped; None when
-    organization-scoped")."""
+    organization-scoped").
+
+    **`window_days` is deliberately NOT a sibling field of
+    `AnalyticsSummaryDTO` in the shared contract** -- it lives on
+    `dto.as_of.window_days` (`sie_contract.common.AsOfWindow`'s own
+    field), the same place every other temporal-scoped contract DTO
+    carries it (e.g. `AttentionResultDTO.as_of.window_days`). Adding a
+    second, sibling `window_days` directly to `AnalyticsSummaryDTO`
+    would duplicate that value in two places on the same object, with
+    no guarantee the adapter ever keeps them in sync. This function is
+    the one, explicit place that value is flattened back out to a
+    top-level `window_days` key -- because `src/services/api/
+    analytics.ts`'s existing `AnalyticsSummary` TypeScript type (and
+    `HomePage.tsx`'s own `` Based on the last ${summary.window_days}
+    days. `` text) expects it there, flat, not nested under `as_of`.
+    See `tests/test_intelligence_api.py::
+    test_analytics_summary_response_contains_every_field_homepage_reads`
+    for the regression proof that this flattening actually happens."""
     as_of = dto.as_of
     return {
         "organization_id": str(dto.organization_id),
