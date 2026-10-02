@@ -5,6 +5,18 @@ documentation, versioning policy, and what this package must never
 contain.
 """
 
+from sie_contract.analytics import (
+    AnalyticsDataSufficiency,
+    AnalyticsIndicatorCategory,
+    AnalyticsIndicatorDTO,
+    AnalyticsSignalDTO,
+    AnalyticsSignalSeverity,
+    AnalyticsSignalsResultDTO,
+    AnalyticsSummaryDTO,
+    AnalyticsTrendDTO,
+    AnalyticsTrendDirection,
+    AnalyticsTrendPeriodDTO,
+)
 from sie_contract.attention import (
     AttentionCategoryStatus,
     AttentionCategoryStatusDTO,
@@ -47,6 +59,17 @@ __all__ = [
     "AttentionPriority",
     "AttentionResultDTO",
     "AttentionScope",
+    # analytics
+    "AnalyticsDataSufficiency",
+    "AnalyticsIndicatorCategory",
+    "AnalyticsIndicatorDTO",
+    "AnalyticsSignalDTO",
+    "AnalyticsSignalSeverity",
+    "AnalyticsSignalsResultDTO",
+    "AnalyticsSummaryDTO",
+    "AnalyticsTrendDTO",
+    "AnalyticsTrendDirection",
+    "AnalyticsTrendPeriodDTO",
     # intelligence context
     "IntelligenceContextCategoryStatus",
     "IntelligenceContextCategoryStatusDTO",

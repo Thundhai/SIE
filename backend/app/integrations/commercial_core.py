@@ -33,13 +33,16 @@ from functools import lru_cache
 
 import sie_contract
 from fastapi import HTTPException, status
-from sie_contract import AttentionResultDTO, ErrorResponse, KnownErrorCode
+from sie_contract import AnalyticsSignalsResultDTO, AnalyticsSummaryDTO, AnalyticsTrendDTO, AttentionResultDTO, ErrorResponse, KnownErrorCode
 
 from app.core.config import settings
 
 logger = logging.getLogger("sie.integrations.commercial_core")
 
 _ATTENTION_PATH = "/internal/v1/attention"
+_ANALYTICS_SUMMARY_PATH = "/internal/v1/analytics/summary"
+_ANALYTICS_TRENDS_PATH = "/internal/v1/analytics/trends"
+_ANALYTICS_SIGNALS_PATH = "/internal/v1/analytics/signals"
 
 
 class CommercialCoreUnavailable(HTTPException):
@@ -148,6 +151,40 @@ class CommercialCoreClient:
     ) -> AttentionResultDTO:
         raise NotImplementedError
 
+    def get_analytics_summary(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        site_id: uuid.UUID | None,
+        as_of: datetime | None,
+        window_days: int | None,
+        request_id: str | None,
+    ) -> AnalyticsSummaryDTO:
+        raise NotImplementedError
+
+    def get_analytics_trends(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        metric: str,
+        site_id: uuid.UUID | None,
+        as_of: datetime | None,
+        window_days: int | None,
+        request_id: str | None,
+    ) -> AnalyticsTrendDTO:
+        raise NotImplementedError
+
+    def get_analytics_signals(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        site_id: uuid.UUID | None,
+        as_of: datetime | None,
+        window_days: int | None,
+        request_id: str | None,
+    ) -> AnalyticsSignalsResultDTO:
+        raise NotImplementedError
+
 
 class NotConfiguredCommercialCoreClient(CommercialCoreClient):
     """The fallback implementation this repository ships when Commercial
@@ -169,6 +206,40 @@ class NotConfiguredCommercialCoreClient(CommercialCoreClient):
         request_id: str | None,
     ) -> AttentionResultDTO:
         raise self.unavailable("Attention")
+
+    def get_analytics_summary(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        site_id: uuid.UUID | None,
+        as_of: datetime | None,
+        window_days: int | None,
+        request_id: str | None,
+    ) -> AnalyticsSummaryDTO:
+        raise self.unavailable("Analytics summary")
+
+    def get_analytics_trends(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        metric: str,
+        site_id: uuid.UUID | None,
+        as_of: datetime | None,
+        window_days: int | None,
+        request_id: str | None,
+    ) -> AnalyticsTrendDTO:
+        raise self.unavailable("Analytics trends")
+
+    def get_analytics_signals(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        site_id: uuid.UUID | None,
+        as_of: datetime | None,
+        window_days: int | None,
+        request_id: str | None,
+    ) -> AnalyticsSignalsResultDTO:
+        raise self.unavailable("Analytics signals")
 
 
 class HttpCommercialCoreClient(CommercialCoreClient):
@@ -332,6 +403,157 @@ class HttpCommercialCoreClient(CommercialCoreClient):
         raise CommercialCoreUnexpectedStatusError(
             f"Commercial Core returned an unexpected HTTP status ({response.status_code})."
         ) from None
+
+    def _post_and_decode(self, path: str, body: dict, *, organization_id: uuid.UUID, request_id: str | None, log_name: str):
+        """Shared request/response mechanics for the three Analytics
+        methods below -- headers, transport-failure mapping, and
+        non-2xx mapping are identical to `get_attention()`'s own
+        inline implementation above (kept separate, not refactored
+        into this shared helper, so this addition cannot change that
+        already-verified method's behavior). Returns the decoded JSON
+        body on a 200; raises the same typed exceptions `get_attention()`
+        raises, on every other outcome."""
+        import httpx
+
+        headers = {
+            "Authorization": self._authorization_header,
+            "X-SIE-Contract-Version": sie_contract.__version__,
+            "X-Organization-Id": str(organization_id),
+        }
+        if request_id:
+            headers["X-Request-Id"] = request_id
+
+        log_fields = {"endpoint": f"{self._base_url}{path}", "request_id": request_id}
+        logger.info(f"commercial_core.{log_name}.request_started", extra=log_fields)
+
+        transport_failure: CommercialCoreIntegrationError | None = None
+        try:
+            response = httpx.post(f"{self._base_url}{path}", json=body, headers=headers, timeout=self._timeout_seconds)
+        except httpx.TimeoutException:
+            logger.warning(f"commercial_core.{log_name}.timeout", extra=log_fields)
+            transport_failure = CommercialCoreTimeoutError("Commercial Core did not respond in time.")
+        except httpx.TransportError:
+            logger.warning(f"commercial_core.{log_name}.connection_failed", extra=log_fields)
+            transport_failure = CommercialCoreConnectionError("Could not reach Commercial Core.")
+        if transport_failure is not None:
+            raise transport_failure
+
+        if response.status_code == 200:
+            logger.info(f"commercial_core.{log_name}.response_received", extra=log_fields)
+            try:
+                return response.json()
+            except Exception:
+                logger.error(f"commercial_core.{log_name}.malformed_response", extra=log_fields)
+                raise CommercialCoreMalformedResponseError(
+                    "Commercial Core returned a successful response that does not match "
+                    "the expected contract shape."
+                ) from None
+
+        error_code: str | None = None
+        try:
+            error_code = ErrorResponse(**response.json()).error_code
+        except Exception:
+            pass  # Falls through to the generic, status-code-only handling below.
+
+        if response.status_code == 401:
+            logger.error(f"commercial_core.{log_name}.authentication_failed", extra=log_fields)
+            raise CommercialCoreAuthenticationError(
+                "Commercial Core rejected this deployment's own service credential."
+            ) from None
+        if response.status_code == 403:
+            logger.error(f"commercial_core.{log_name}.authorization_failed", extra={**log_fields, "error_code": error_code})
+            if error_code == KnownErrorCode.TENANT_MISMATCH:
+                raise CommercialCoreAuthorizationError(
+                    "Commercial Core rejected this request's tenant binding."
+                ) from None
+            raise CommercialCoreAuthorizationError("Commercial Core denied this request.") from None
+        if response.status_code == 422:
+            logger.warning(f"commercial_core.{log_name}.validation_failed", extra=log_fields)
+            raise CommercialCoreValidationError("Commercial Core rejected the request as invalid.") from None
+        if response.status_code == 503:
+            logger.warning(f"commercial_core.{log_name}.dependency_unavailable", extra=log_fields)
+            raise CommercialCoreDependencyUnavailableError(
+                "A Commercial Core dependency is currently unavailable."
+            ) from None
+
+        logger.error(f"commercial_core.{log_name}.unexpected_status", extra={**log_fields, "status_code": response.status_code})
+        raise CommercialCoreUnexpectedStatusError(
+            f"Commercial Core returned an unexpected HTTP status ({response.status_code})."
+        ) from None
+
+    def get_analytics_summary(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        site_id: uuid.UUID | None,
+        as_of: datetime | None,
+        window_days: int | None,
+        request_id: str | None,
+    ) -> AnalyticsSummaryDTO:
+        body = {
+            "site_id": str(site_id) if site_id is not None else None,
+            "as_of": as_of.isoformat() if as_of is not None else None,
+            "window_days": window_days,
+        }
+        decoded = self._post_and_decode(
+            _ANALYTICS_SUMMARY_PATH, body, organization_id=organization_id, request_id=request_id, log_name="analytics_summary"
+        )
+        try:
+            return AnalyticsSummaryDTO(**decoded)
+        except Exception:
+            raise CommercialCoreMalformedResponseError(
+                "Commercial Core returned a successful response that does not match the expected contract shape."
+            ) from None
+
+    def get_analytics_trends(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        metric: str,
+        site_id: uuid.UUID | None,
+        as_of: datetime | None,
+        window_days: int | None,
+        request_id: str | None,
+    ) -> AnalyticsTrendDTO:
+        body = {
+            "metric": metric,
+            "site_id": str(site_id) if site_id is not None else None,
+            "as_of": as_of.isoformat() if as_of is not None else None,
+            "period_days": window_days,
+        }
+        decoded = self._post_and_decode(
+            _ANALYTICS_TRENDS_PATH, body, organization_id=organization_id, request_id=request_id, log_name="analytics_trends"
+        )
+        try:
+            return AnalyticsTrendDTO(**decoded)
+        except Exception:
+            raise CommercialCoreMalformedResponseError(
+                "Commercial Core returned a successful response that does not match the expected contract shape."
+            ) from None
+
+    def get_analytics_signals(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        site_id: uuid.UUID | None,
+        as_of: datetime | None,
+        window_days: int | None,
+        request_id: str | None,
+    ) -> AnalyticsSignalsResultDTO:
+        body = {
+            "site_id": str(site_id) if site_id is not None else None,
+            "as_of": as_of.isoformat() if as_of is not None else None,
+            "window_days": window_days,
+        }
+        decoded = self._post_and_decode(
+            _ANALYTICS_SIGNALS_PATH, body, organization_id=organization_id, request_id=request_id, log_name="analytics_signals"
+        )
+        try:
+            return AnalyticsSignalsResultDTO(**decoded)
+        except Exception:
+            raise CommercialCoreMalformedResponseError(
+                "Commercial Core returned a successful response that does not match the expected contract shape."
+            ) from None
 
 
 commercial_core_client: CommercialCoreClient = NotConfiguredCommercialCoreClient()
