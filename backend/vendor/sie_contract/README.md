@@ -144,6 +144,7 @@ sie-contract/
         tenancy.py            TenantContext, ActorType
         common.py             EvidenceReference, AsOfWindow, Page[T]
         attention.py           AttentionPriority, AttentionItemDTO, AttentionResultDTO, ...
+        analytics.py            AnalyticsSummaryDTO, AnalyticsTrendDTO, AnalyticsSignalsResultDTO, ...
         intelligence_context.py IntelligenceContextSummaryDTO, category status
         decisions.py            DecisionReferenceDTO, DecisionActorType
         rag.py                  CitationReferenceDTO, RAGAnswerDTO
@@ -164,6 +165,13 @@ output) or left `REVIEW_REQUIRED` pending a deliberate future design
 pass — never included "because the internal schema already exists."
 
 ## Changelog
+
+### 0.3.0 — Analytics (Task 01D-F2)
+Additive: `AnalyticsSummaryDTO`, `AnalyticsTrendDTO`/`AnalyticsTrendPeriodDTO`,
+`AnalyticsSignalsResultDTO`/`AnalyticsSignalDTO`, plus their supporting
+enums (`AnalyticsDataSufficiency`, `AnalyticsIndicatorCategory`,
+`AnalyticsSignalSeverity`, `AnalyticsTrendDirection`). No existing DTO
+changed.
 
 ### 0.1.0 — initial contract (M43-IP-02)
 Initial draft: `TenantContext`, `ErrorResponse`, `EvidenceReference`,

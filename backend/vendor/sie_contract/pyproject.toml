@@ -1,6 +1,6 @@
 [project]
 name = "sie-contract"
-version = "0.2.0"
+version = "0.3.0"
 description = "SIE Shared Contract -- the versioned boundary between Public SIE and the Private Commercial Core. Contains DTOs and enums only: no algorithms, no internal models, no orchestration."
 requires-python = ">=3.11"
 dependencies = [

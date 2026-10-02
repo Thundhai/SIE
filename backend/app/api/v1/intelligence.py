@@ -18,8 +18,7 @@ computation actually lives now. Public SIE no longer contains it.
         -> GenericJSONAdapter -> SafetyEventIngestionService -> SafetyEvent rows
         (unchanged -- generic ingestion, not proprietary intelligence)
 
-    human OR machine caller -> GET .../analytics/summary | .../analytics/trends |
-        .../analytics/signals | .../features | .../enterprise | .../context |
+    human OR machine caller -> GET .../features | .../enterprise | .../context |
         .../memory-context
         -> HTTP 501 (Commercial Core client integration not yet wired -- see
            docs/M43_IP_03_PUBLIC_EXTRACTION.md)
@@ -27,9 +26,19 @@ computation actually lives now. Public SIE no longer contains it.
     human OR machine caller -> GET .../attention | .../sites/{site_id}/attention
         -> Task 01D-B: CommercialCoreClient -> cc_service (Thundhai/SIE-Commercial-Core)
            POST /internal/v1/attention -> sie_contract.AttentionResultDTO
-        -> still HTTP 501 (the existing NotConfiguredCommercialCoreClient
-           fallback) whenever this deployment has no Commercial Core
-           configured -- see app/integrations/commercial_core.py.
+
+    human OR machine caller -> GET .../analytics/summary | .../analytics/trends |
+        .../analytics/signals
+        -> Task 01D-F2: CommercialCoreClient -> cc_service (Thundhai/SIE-Commercial-Core)
+           POST /internal/v1/analytics/{summary,trends,signals} ->
+           sie_contract.AnalyticsSummaryDTO / AnalyticsTrendDTO / AnalyticsSignalsResultDTO
+
+    Both of the above still return HTTP 501 (the existing
+    NotConfiguredCommercialCoreClient fallback) whenever this deployment
+    has no Commercial Core configured -- see
+    app/integrations/commercial_core.py. `.../analytics/trends` adds one
+    new, previously-absent required query parameter, `metric` -- the
+    stub never needed one; the real implementation cannot run without it.
 
 These reads are not deleted outright (the route, its path, and its
 authorization requirement all still exist) because removing the route
@@ -47,7 +56,7 @@ import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sie_contract import AttentionResultDTO
+from sie_contract import AnalyticsSummaryDTO, AttentionResultDTO
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
@@ -126,6 +135,50 @@ def _map_commercial_core_attention_error(exc: CommercialCoreIntegrationError) ->
         code=ErrorCode.MODEL_NOT_AVAILABLE,
         message=str(exc),
     )
+
+
+def _analytics_summary_response(dto: AnalyticsSummaryDTO) -> dict:
+    """Task 01D-F2: reshapes `AnalyticsSummaryDTO` (the redacted,
+    Commercial-Core-contract shape) into the flat response body
+    `src/services/api/analytics.ts`'s existing `AnalyticsSummary`
+    TypeScript type -- and, specifically, `HomePage.tsx`'s own
+    `indicator.feature.value` access -- expect.
+
+    Two deliberate, honest differences from that TypeScript type,
+    neither of which this repository's current UI actually reads:
+
+    - `features`/`source_reliability` are omitted entirely, rather than
+      filled with fabricated placeholder data -- the contract redacts
+      exactly this internal detail (see `sie_contract.analytics`'s own
+      module docstring), so there is nothing real to put there.
+    - each indicator's `feature` is a minimal `{value, unavailable_reason}`
+      object, not the full internal `FeatureValue` shape (no
+      `calculation_version`/`exposure_basis`/`source_event_ids` --
+      none of those cross the contract boundary either).
+
+    `entity_type` is synthesized, not fabricated: it is exactly what
+    `entity_id`'s own presence already means, by this DTO's own field
+    documentation ("the site_id when site-scoped; None when
+    organization-scoped")."""
+    as_of = dto.as_of
+    return {
+        "organization_id": str(dto.organization_id),
+        "entity_type": "site" if dto.entity_id is not None else "organization",
+        "entity_id": str(dto.entity_id) if dto.entity_id is not None else None,
+        "as_of": as_of.as_of.isoformat(),
+        "window_days": as_of.window_days,
+        "event_count": dto.event_count,
+        "data_sufficiency": dto.data_sufficiency.value,
+        "indicators": [
+            {
+                "name": indicator.name,
+                "category": indicator.category.value,
+                "feature": {"value": indicator.value, "unavailable_reason": indicator.unavailable_reason},
+            }
+            for indicator in dto.indicators
+        ],
+        "signals": [signal.model_dump(mode="json") for signal in dto.signals],
+    }
 
 
 def _to_raw_payload(body: SafetyEventCreate) -> RawSafetyEventPayload:
@@ -219,35 +272,88 @@ def ingest_event_batch(
 
 @router.get("/analytics/summary", dependencies=[Depends(require_rate_limit(RateLimitClass.READ))])
 def analytics_summary(
+    request: Request,
     organization_id: uuid.UUID = Query(...),
     site_id: uuid.UUID | None = Query(default=None),
     window_days: int | None = Query(default=None, ge=1, le=3650),
     context: RequestContext = Depends(require_context_permission(Permission.INTELLIGENCE_READ)),
     db: Session = Depends(get_db),
+    request_id: str | None = Depends(get_request_id),
 ):
-    raise _not_available()
+    try:
+        client = get_commercial_core_client()
+        dto = client.get_analytics_summary(
+            organization_id=resolve_authorized_organization_id(context, organization_id),
+            site_id=site_id,
+            as_of=None,
+            window_days=window_days,
+            request_id=request_id,
+        )
+    except CommercialCoreUnavailable:
+        raise
+    except CommercialCoreIntegrationError as exc:
+        raise _map_commercial_core_attention_error(exc) from exc
+    return _analytics_summary_response(dto)
 
 
 @router.get("/analytics/trends", dependencies=[Depends(require_rate_limit(RateLimitClass.READ))])
 def analytics_trends(
+    request: Request,
+    metric: str = Query(..., description="A known trend metric name, e.g. 'incident_count'. See app/intelligence/analytics.py::TREND_METRIC_REGISTRY (Commercial Core) for the full vocabulary."),
     organization_id: uuid.UUID = Query(...),
     site_id: uuid.UUID | None = Query(default=None),
     window_days: int | None = Query(default=None, ge=1, le=3650),
     context: RequestContext = Depends(require_context_permission(Permission.INTELLIGENCE_READ)),
     db: Session = Depends(get_db),
+    request_id: str | None = Depends(get_request_id),
 ):
-    raise _not_available()
+    try:
+        client = get_commercial_core_client()
+        dto = client.get_analytics_trends(
+            organization_id=resolve_authorized_organization_id(context, organization_id),
+            metric=metric,
+            site_id=site_id,
+            as_of=None,
+            window_days=window_days,
+            request_id=request_id,
+        )
+    except CommercialCoreUnavailable:
+        raise
+    except CommercialCoreIntegrationError as exc:
+        raise _map_commercial_core_attention_error(exc) from exc
+    return dto.model_dump(mode="json")
 
 
 @router.get("/analytics/signals", dependencies=[Depends(require_rate_limit(RateLimitClass.READ))])
 def analytics_signals(
+    request: Request,
     organization_id: uuid.UUID = Query(...),
     site_id: uuid.UUID | None = Query(default=None),
     window_days: int | None = Query(default=None, ge=1, le=3650),
     context: RequestContext = Depends(require_context_permission(Permission.INTELLIGENCE_READ)),
     db: Session = Depends(get_db),
+    request_id: str | None = Depends(get_request_id),
 ):
-    raise _not_available()
+    try:
+        client = get_commercial_core_client()
+        dto = client.get_analytics_signals(
+            organization_id=resolve_authorized_organization_id(context, organization_id),
+            site_id=site_id,
+            as_of=None,
+            window_days=window_days,
+            request_id=request_id,
+        )
+    except CommercialCoreUnavailable:
+        raise
+    except CommercialCoreIntegrationError as exc:
+        raise _map_commercial_core_attention_error(exc) from exc
+    # Task 01D-F2: the existing frontend (src/services/api/analytics.ts::
+    # getAnalyticsSignals()) expects a bare `RiskSignal[]` array, not an
+    # organization/as_of-enveloped object -- the envelope is the
+    # contract's own shape (mirrors AttentionResultDTO), unwrapped here,
+    # at the Public SIE API boundary, rather than changing that existing
+    # frontend expectation.
+    return [signal.model_dump(mode="json") for signal in dto.signals]
 
 
 @router.get("/features", dependencies=[Depends(require_rate_limit(RateLimitClass.READ))])
