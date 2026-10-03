@@ -17,9 +17,9 @@ See `PROVENANCE.json` for the machine-readable record
 
 - **Source repository:** `Thundhai/SIE-Commercial-Core`
 - **Source path:** `sie-contract/` (that repository's own contract package)
-- **Source commit:** `3f8729ebee5b14e61f73fe572cf9394714e47c23` (`claude/task-01d-f2-analytics-boundary` — Task 01D-F2's own Analytics-boundary branch, **not yet merged to `main`**; re-vendor again from `main` once that branch merges)
-- **Source contract version:** `0.3.0`
-- **Vendored:** 2026-10-02
+- **Source commit:** `9b0c2c652e99bb08ae07b0a4a1d569af95d49e80` (`claude/task-01d-f3-enterprise-intelligence-boundary` — Task 01D-F3's own Enterprise Intelligence-boundary branch, **not yet merged to `main`**; re-vendor again from `main` once that branch merges)
+- **Source contract version:** `0.4.0`
+- **Vendored:** 2026-10-03
 
 ## Why this exists, and why it is not a decision to redesign anything
 

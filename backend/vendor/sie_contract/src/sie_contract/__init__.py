@@ -13,8 +13,8 @@ from sie_contract.analytics import (
     AnalyticsSignalSeverity,
     AnalyticsSignalsResultDTO,
     AnalyticsSummaryDTO,
-    AnalyticsTrendDTO,
     AnalyticsTrendDirection,
+    AnalyticsTrendDTO,
     AnalyticsTrendPeriodDTO,
 )
 from sie_contract.attention import (
@@ -27,6 +27,29 @@ from sie_contract.attention import (
 )
 from sie_contract.common import AsOfWindow, EvidenceReference, EvidenceType, Page
 from sie_contract.decisions import DecisionReferenceDTO
+from sie_contract.enterprise_intelligence import (
+    ActionsContextDTO,
+    ConcentrationClassification,
+    ConcentrationContributorDTO,
+    EnterpriseAnomalyDirection,
+    EnterpriseAnomalyDTO,
+    EnterpriseAnomalyStatus,
+    EnterpriseAssociationClassification,
+    EnterpriseAssociationDTO,
+    EnterpriseDataSufficiency,
+    EnterpriseIndicatorCategory,
+    EnterpriseIndicatorDTO,
+    EnterpriseIntelligenceProvenanceDTO,
+    EnterpriseIntelligenceResultDTO,
+    EnterpriseRiskClassification,
+    EnterpriseTrendClassification,
+    EnterpriseTrendDTO,
+    ExplanationItemDTO,
+    RecurrenceClassification,
+    RecurrencePatternDTO,
+    RiskScoreComponentDTO,
+    RiskScoreDTO,
+)
 from sie_contract.errors import ErrorResponse, KnownErrorCode
 from sie_contract.intelligence_context import (
     IntelligenceContextCategoryStatus,
@@ -70,6 +93,28 @@ __all__ = [
     "AnalyticsTrendDTO",
     "AnalyticsTrendDirection",
     "AnalyticsTrendPeriodDTO",
+    # enterprise intelligence
+    "ActionsContextDTO",
+    "ConcentrationClassification",
+    "ConcentrationContributorDTO",
+    "EnterpriseAnomalyDirection",
+    "EnterpriseAnomalyDTO",
+    "EnterpriseAnomalyStatus",
+    "EnterpriseAssociationClassification",
+    "EnterpriseAssociationDTO",
+    "EnterpriseDataSufficiency",
+    "EnterpriseIndicatorCategory",
+    "EnterpriseIndicatorDTO",
+    "EnterpriseIntelligenceProvenanceDTO",
+    "EnterpriseIntelligenceResultDTO",
+    "EnterpriseRiskClassification",
+    "EnterpriseTrendClassification",
+    "EnterpriseTrendDTO",
+    "ExplanationItemDTO",
+    "RecurrenceClassification",
+    "RecurrencePatternDTO",
+    "RiskScoreComponentDTO",
+    "RiskScoreDTO",
     # intelligence context
     "IntelligenceContextCategoryStatus",
     "IntelligenceContextCategoryStatusDTO",

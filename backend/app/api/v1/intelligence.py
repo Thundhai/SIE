@@ -18,8 +18,8 @@ computation actually lives now. Public SIE no longer contains it.
         -> GenericJSONAdapter -> SafetyEventIngestionService -> SafetyEvent rows
         (unchanged -- generic ingestion, not proprietary intelligence)
 
-    human OR machine caller -> GET .../features | .../enterprise | .../context |
-        .../memory-context
+    human OR machine caller -> GET .../features | .../context |
+        .../memory-context | .../sites/{site_id}
         -> HTTP 501 (Commercial Core client integration not yet wired -- see
            docs/M43_IP_03_PUBLIC_EXTRACTION.md)
 
@@ -33,12 +33,22 @@ computation actually lives now. Public SIE no longer contains it.
            POST /internal/v1/analytics/{summary,trends,signals} ->
            sie_contract.AnalyticsSummaryDTO / AnalyticsTrendDTO / AnalyticsSignalsResultDTO
 
-    Both of the above still return HTTP 501 (the existing
+    human OR machine caller -> GET .../enterprise
+        -> Task 01D-F3: CommercialCoreClient -> cc_service (Thundhai/SIE-Commercial-Core)
+           POST /internal/v1/intelligence/enterprise ->
+           sie_contract.EnterpriseIntelligenceResultDTO
+
+    All of the above still return HTTP 501 (the existing
     NotConfiguredCommercialCoreClient fallback) whenever this deployment
     has no Commercial Core configured -- see
     app/integrations/commercial_core.py. `.../analytics/trends` adds one
     new, previously-absent required query parameter, `metric` -- the
     stub never needed one; the real implementation cannot run without it.
+    `.../sites/{site_id}` (site-scoped Enterprise Intelligence) remains a
+    501 stub -- Task 01D-F3's own scope is only `GET .../enterprise`
+    (organization-scoped); the underlying Commercial Core boundary
+    already supports site scope identically to Attention, so wiring that
+    route is a small, later, separate change.
 
 These reads are not deleted outright (the route, its path, and its
 authorization requirement all still exist) because removing the route
@@ -56,7 +66,11 @@ import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sie_contract import AnalyticsSummaryDTO, AttentionResultDTO
+from sie_contract import (
+    AnalyticsSummaryDTO,
+    AttentionResultDTO,
+    EnterpriseIntelligenceResultDTO,
+)
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
@@ -195,6 +209,95 @@ def _analytics_summary_response(dto: AnalyticsSummaryDTO) -> dict:
             for indicator in dto.indicators
         ],
         "signals": [signal.model_dump(mode="json") for signal in dto.signals],
+    }
+
+
+def _evidence_ids(evidence: list) -> list[str]:
+    """`EvidenceReference.reference_id` unwrapped back to a bare id
+    string -- the existing frontend (`src/services/api/intelligence.ts`'s
+    `supporting_event_ids: string[]`/`evidence_sample_event_ids: string[]`
+    fields) was never updated to the contract's own typed
+    `EvidenceReference` shape, and there is no reason to widen it just
+    because the contract carries more structure internally: every
+    `EvidenceReference` this adapter ever produces is
+    `EvidenceType.SAFETY_EVENT` already (see
+    `enterprise_intelligence_adapter.py`'s own "event_ids = SafetyEvent
+    ids" convention), so unwrapping loses nothing the frontend reads."""
+    return [str(item.reference_id) for item in evidence]
+
+
+def _enterprise_intelligence_response(dto: EnterpriseIntelligenceResultDTO) -> dict:
+    """Reshapes `EnterpriseIntelligenceResultDTO` (the redacted,
+    Commercial-Core-contract shape) into the flat response body
+    `src/services/api/intelligence.ts`'s existing `EnterpriseIntelligence`
+    TypeScript type expects -- same pattern, same rationale, as
+    `_analytics_summary_response()` above.
+
+    Three deliberate, honest differences from that TypeScript type,
+    none of which this repository's current UI actually reads:
+
+    - every `calculation_version` field (and `RiskScore.version`) is
+      simply absent -- the contract redacts exactly this internal
+      detail (see `sie_contract.enterprise_intelligence`'s own module
+      docstring), so there is nothing real to put there.
+    - `provenance.calculation_versions` is likewise absent, for the
+      same reason.
+    - `predictive_context` has no analog on this response at all --
+      that is the Predictions capability, explicitly out of scope for
+      Task 01D-F3, and this TypeScript type never declared it either.
+
+    `provenance.organization_id`/`scope`/`entity_id`/`as_of`/
+    `window_days` are not fabricated -- they are the same real values
+    already present at the top level of this DTO, duplicated into the
+    nested `provenance` object only because that TypeScript type's own
+    `IntelligenceProvenance` interface (unlike this response's own
+    top-level fields) declares them there too."""
+    as_of = dto.as_of
+    risk = dto.deterministic_risk
+    provenance = dto.provenance
+    return {
+        "scope": dto.scope,
+        "organization_id": str(dto.organization_id),
+        "entity_id": str(dto.entity_id) if dto.entity_id is not None else None,
+        "as_of": as_of.as_of.isoformat(),
+        "window_days": as_of.window_days,
+        "data_sufficiency": {"status": dto.data_sufficiency.value, "event_count": dto.event_count},
+        "deterministic_risk": {
+            "score": risk.score,
+            "classification": risk.classification.value if risk.classification is not None else None,
+            "components": [component.model_dump(mode="json") for component in risk.components],
+            "insufficient_data_reason": risk.insufficient_data_reason,
+        },
+        "trend": dto.trend.model_dump(mode="json"),
+        "indicators": [indicator.model_dump(mode="json") for indicator in dto.indicators],
+        "patterns": [
+            {**pattern.model_dump(mode="json", exclude={"evidence"}), "supporting_event_ids": _evidence_ids(pattern.evidence)}
+            for pattern in dto.patterns
+        ],
+        "concentrations": [contributor.model_dump(mode="json") for contributor in dto.concentrations],
+        "anomalies": [
+            {**anomaly.model_dump(mode="json", exclude={"evidence"}), "supporting_event_ids": _evidence_ids(anomaly.evidence)}
+            for anomaly in dto.anomalies
+        ],
+        "associations": [
+            {**association.model_dump(mode="json", exclude={"evidence"}), "supporting_event_ids": _evidence_ids(association.evidence)}
+            for association in dto.associations
+        ],
+        "explanations": [explanation.model_dump(mode="json") for explanation in dto.explanations],
+        "provenance": {
+            "organization_id": str(dto.organization_id),
+            "scope": dto.scope,
+            "entity_id": str(dto.entity_id) if dto.entity_id is not None else None,
+            "as_of": as_of.as_of.isoformat(),
+            "window_start": provenance.window_start.isoformat(),
+            "window_end": provenance.window_end.isoformat(),
+            "window_days": as_of.window_days,
+            "generated_at": as_of.generated_at.isoformat(),
+            "event_count": provenance.event_count,
+            "evidence_sample_event_ids": _evidence_ids(provenance.evidence_sample),
+            "total_supporting_events": provenance.total_supporting_events,
+        },
+        "actions_context": dto.actions_context.model_dump(mode="json") if dto.actions_context is not None else None,
     }
 
 
@@ -386,12 +489,28 @@ def features(
 
 @router.get("/enterprise", dependencies=[Depends(require_rate_limit(RateLimitClass.READ))])
 def enterprise_intelligence(
+    request: Request,
     organization_id: uuid.UUID = Query(...),
     window_days: int | None = Query(default=None, ge=1, le=3650),
     context: RequestContext = Depends(require_context_permission(Permission.INTELLIGENCE_READ)),
     db: Session = Depends(get_db),
+    request_id: str | None = Depends(get_request_id),
 ):
-    raise _not_available()
+    try:
+        client = get_commercial_core_client()
+        dto = client.get_enterprise_intelligence(
+            organization_id=resolve_authorized_organization_id(context, organization_id),
+            scope="organization",
+            site_id=None,
+            as_of=None,
+            window_days=window_days,
+            request_id=request_id,
+        )
+    except CommercialCoreUnavailable:
+        raise
+    except CommercialCoreIntegrationError as exc:
+        raise _map_commercial_core_attention_error(exc) from exc
+    return _enterprise_intelligence_response(dto)
 
 
 @router.get("/sites/{site_id}", dependencies=[Depends(require_rate_limit(RateLimitClass.READ))])

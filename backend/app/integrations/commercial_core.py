@@ -33,7 +33,15 @@ from functools import lru_cache
 
 import sie_contract
 from fastapi import HTTPException, status
-from sie_contract import AnalyticsSignalsResultDTO, AnalyticsSummaryDTO, AnalyticsTrendDTO, AttentionResultDTO, ErrorResponse, KnownErrorCode
+from sie_contract import (
+    AnalyticsSignalsResultDTO,
+    AnalyticsSummaryDTO,
+    AnalyticsTrendDTO,
+    AttentionResultDTO,
+    EnterpriseIntelligenceResultDTO,
+    ErrorResponse,
+    KnownErrorCode,
+)
 
 from app.core.config import settings
 
@@ -43,6 +51,7 @@ _ATTENTION_PATH = "/internal/v1/attention"
 _ANALYTICS_SUMMARY_PATH = "/internal/v1/analytics/summary"
 _ANALYTICS_TRENDS_PATH = "/internal/v1/analytics/trends"
 _ANALYTICS_SIGNALS_PATH = "/internal/v1/analytics/signals"
+_ENTERPRISE_INTELLIGENCE_PATH = "/internal/v1/intelligence/enterprise"
 
 
 class CommercialCoreUnavailable(HTTPException):
@@ -185,6 +194,18 @@ class CommercialCoreClient:
     ) -> AnalyticsSignalsResultDTO:
         raise NotImplementedError
 
+    def get_enterprise_intelligence(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        scope: str,
+        site_id: uuid.UUID | None,
+        as_of: datetime | None,
+        window_days: int | None,
+        request_id: str | None,
+    ) -> EnterpriseIntelligenceResultDTO:
+        raise NotImplementedError
+
 
 class NotConfiguredCommercialCoreClient(CommercialCoreClient):
     """The fallback implementation this repository ships when Commercial
@@ -240,6 +261,18 @@ class NotConfiguredCommercialCoreClient(CommercialCoreClient):
         request_id: str | None,
     ) -> AnalyticsSignalsResultDTO:
         raise self.unavailable("Analytics signals")
+
+    def get_enterprise_intelligence(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        scope: str,
+        site_id: uuid.UUID | None,
+        as_of: datetime | None,
+        window_days: int | None,
+        request_id: str | None,
+    ) -> EnterpriseIntelligenceResultDTO:
+        raise self.unavailable("Enterprise intelligence")
 
 
 class HttpCommercialCoreClient(CommercialCoreClient):
@@ -550,6 +583,32 @@ class HttpCommercialCoreClient(CommercialCoreClient):
         )
         try:
             return AnalyticsSignalsResultDTO(**decoded)
+        except Exception:
+            raise CommercialCoreMalformedResponseError(
+                "Commercial Core returned a successful response that does not match the expected contract shape."
+            ) from None
+
+    def get_enterprise_intelligence(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        scope: str,
+        site_id: uuid.UUID | None,
+        as_of: datetime | None,
+        window_days: int | None,
+        request_id: str | None,
+    ) -> EnterpriseIntelligenceResultDTO:
+        body = {
+            "scope": scope,
+            "site_id": str(site_id) if site_id is not None else None,
+            "as_of": as_of.isoformat() if as_of is not None else None,
+            "window_days": window_days,
+        }
+        decoded = self._post_and_decode(
+            _ENTERPRISE_INTELLIGENCE_PATH, body, organization_id=organization_id, request_id=request_id, log_name="enterprise_intelligence"
+        )
+        try:
+            return EnterpriseIntelligenceResultDTO(**decoded)
         except Exception:
             raise CommercialCoreMalformedResponseError(
                 "Commercial Core returned a successful response that does not match the expected contract shape."

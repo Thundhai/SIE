@@ -1,10 +1,10 @@
 {
   "source_repository": "Thundhai/SIE-Commercial-Core",
   "source_path": "sie-contract",
-  "source_branch": "claude/task-01d-f2-analytics-boundary",
-  "source_commit": "3f8729ebee5b14e61f73fe572cf9394714e47c23",
-  "source_contract_version": "0.3.0",
-  "vendored_at": "2026-10-02",
+  "source_branch": "claude/task-01d-f3-enterprise-intelligence-boundary",
+  "source_commit": "9b0c2c652e99bb08ae07b0a4a1d569af95d49e80",
+  "source_contract_version": "0.4.0",
+  "vendored_at": "2026-10-03",
   "vendored_files": [
     "VERSION",
     "pyproject.toml",
@@ -13,6 +13,7 @@
     "src/sie_contract/attention.py",
     "src/sie_contract/common.py",
     "src/sie_contract/decisions.py",
+    "src/sie_contract/enterprise_intelligence.py",
     "src/sie_contract/errors.py",
     "src/sie_contract/intelligence_context.py",
     "src/sie_contract/rag.py",
@@ -20,7 +21,7 @@
     "src/sie_contract/tenancy.py",
     "src/sie_contract/version.py"
   ],
-  "source_tree_sha256": "9dac719a9d5a20ff72c65a17ae7d52affee33f7c585c48cabd788fb4dbba6127",
+  "source_tree_sha256": "90d5a98314a99c337e22edf2b53081d4336bb3b760b8f8a47ea4d88667daccd5",
   "hash_algorithm": "sha256 over each vendored_files entry, in listed order, as (relative_posix_path + '\\n' + raw_file_bytes)",
   "notice": "This is a controlled, vendored copy of Commercial Core's sie-contract package. Do not edit any file under this directory independently. A real change originates in Thundhai/SIE-Commercial-Core's sie-contract/ package and is re-vendored here as a fresh copy, with this file's source_commit, source_contract_version, vendored_at, and source_tree_sha256 all updated together. tests/test_sie_contract_vendored.py enforces this by recomputing source_tree_sha256 and failing if it disagrees with the value recorded here."
 }
