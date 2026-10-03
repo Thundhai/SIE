@@ -25,6 +25,7 @@ from app.services.knowledge_source_service import knowledge_source_service
 from app.services.membership_service import membership_service
 from app.services.organization_service import organization_service
 from app.services.user_service import user_service
+from tests.conftest import dev_auth_headers
 
 
 def audit_rows(db_session, *, action: str) -> list[AuditLog]:
@@ -184,6 +185,53 @@ def test_member_role_and_status_changes_are_audited(db_session):
     }
     assert len(status_rows) == 1
     assert status_rows[0].event_metadata["new_status"] == "SUSPENDED"
+
+
+def test_api_access_denied_for_a_nonexistent_organization_is_audited_without_a_fake_fk(client, db_session):
+    """TASK G1: the access-denied audit write for `require_context_permission()`
+    (`app/api/deps_context.py::_log_access_denied`) must never claim a
+    nonexistent organization is real by putting its id in
+    `AuditLog.organization_id` -- that column is a real FK to
+    `organizations.id`, and would make this very audit write raise
+    `IntegrityError` instead of the intended 403. The id is kept, just
+    not as a fake FK value: it stays in `event_metadata.
+    requested_organization_id`."""
+    from tests.test_ingestion_api import make_user
+
+    user = make_user(db_session, "g1-nonexistent-org@example.com")
+    bogus_org_id = uuid.uuid4()
+
+    response = client.get(
+        f"/api/v1/intelligence/analytics/summary?organization_id={bogus_org_id}",
+        headers=dev_auth_headers(user.id),
+    )
+    assert response.status_code == 403
+
+    rows = audit_rows(db_session, action=AuditAction.API_ACCESS_DENIED)
+    assert len(rows) == 1
+    assert rows[0].organization_id is None
+    assert rows[0].event_metadata["requested_organization_id"] == str(bogus_org_id)
+
+
+def test_api_access_denied_for_an_existing_organization_still_records_the_real_organization_id(client, db_session):
+    """No regression: when the organization genuinely exists (the caller
+    is simply not a member of it), the access-denied audit row still
+    records the real `organization_id`, exactly as before TASK G1."""
+    from tests.test_ingestion_api import create_org, make_user
+
+    org = create_org(client)
+    user = make_user(db_session, "g1-real-org-outsider@example.com")
+
+    response = client.get(
+        f"/api/v1/intelligence/analytics/summary?organization_id={org['id']}",
+        headers=dev_auth_headers(user.id),
+    )
+    assert response.status_code == 403
+
+    rows = audit_rows(db_session, action=AuditAction.API_ACCESS_DENIED)
+    assert len(rows) == 1
+    assert rows[0].organization_id == uuid.UUID(org["id"])
+    assert rows[0].event_metadata["requested_organization_id"] == org["id"]
 
 
 def test_audit_log_never_contains_credential_like_fields(db_session):
