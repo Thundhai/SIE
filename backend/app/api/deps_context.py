@@ -239,17 +239,38 @@ def require_context_permission(permission: Permission) -> Callable[..., RequestC
 def _log_access_denied(
     db: Session, context: RequestContext, *, permission: Permission, organization_id: uuid.UUID | None
 ) -> None:
+    """`organization_id` here is the raw, unauthorized query value a
+    caller supplied -- by definition not yet proven to be a real
+    organization (that is exactly why authorization just failed). Unlike
+    every other `audit_service.log()` call site in this codebase (which
+    all pass an already-validated id, resolved from an authenticated
+    `ApiClient`/membership row), this is the one place a caller-supplied,
+    unchecked id reaches the audit path -- so it is the one place that
+    must not hand it to `AuditLog.organization_id` (a real FK to
+    `organizations.id`) without checking first: a nonexistent
+    organization id would otherwise make the `AuditLog` insert itself
+    raise `IntegrityError`, which would replace the intended 403 with an
+    unhandled 500 before the caller ever sees it. The raw value is kept
+    in `metadata` either way -- never discarded -- so an operator reviewing
+    this organization's audit trail can still see every organization id a
+    denied request named, real or not."""
+    from app.models.organization import Organization
     from app.services.audit_service import AuditAction, audit_service
+
+    validated_organization_id = (
+        organization_id if organization_id is not None and db.get(Organization, organization_id) is not None else None
+    )
 
     audit_service.log(
         db,
         action=AuditAction.API_ACCESS_DENIED,
         resource_type="RequestContext",
-        organization_id=organization_id,
+        organization_id=validated_organization_id,
         user_id=context.user_id,
         metadata={
             "identity": context.identity_label,
             "kind": context.kind,
             "required_permission": permission.value,
+            "requested_organization_id": str(organization_id) if organization_id is not None else None,
         },
     )

@@ -11,7 +11,8 @@ import uuid
 from datetime import datetime, timezone
 
 from app.services.permissions import Permission
-from tests.test_ingestion_api import create_org
+from tests.conftest import dev_auth_headers
+from tests.test_ingestion_api import create_org, make_user
 from tests.test_intelligence_api import _bearer, _make_client_credential
 
 
@@ -161,6 +162,20 @@ def test_enterprise_intelligence_tenant_security_a_machine_credential_cannot_rea
 
     assert response.status_code == 403
     assert fake_client.calls == []  # the client was never even invoked
+
+
+def test_enterprise_intelligence_rejects_a_nonexistent_organization_with_403_not_500(client, db_session):
+    """TASK G1 regression: mirrors `tests.test_intelligence_api::
+    test_analytics_summary_rejects_a_nonexistent_organization_with_403_not_500`
+    for this route -- proves the fix in `app/api/deps_context.py::
+    _log_access_denied` is genuinely shared infrastructure, not an
+    Enterprise-Intelligence-specific patch."""
+    user = make_user(db_session, "no-such-org-enterprise@example.com")
+    response = client.get(
+        f"/api/v1/intelligence/enterprise?organization_id={uuid.uuid4()}",
+        headers=dev_auth_headers(user.id),
+    )
+    assert response.status_code == 403
 
 
 # --- Success: full response-shape reproof ----------------------------------------------------------

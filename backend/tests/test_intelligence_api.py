@@ -140,11 +140,37 @@ def test_analytics_summary_requires_authentication(client):
     assert response.status_code == 401
 
 
+def test_analytics_summary_rejects_an_unknown_dev_user_id(client):
+    """TASK G1 authorization matrix: an invalid/unknown identity must
+    still fail with 401, before authorization or audit logging is ever
+    reached -- untouched by this task's fix, included here as a
+    regression anchor for the full matrix."""
+    response = client.get(
+        f"/api/v1/intelligence/analytics/summary?organization_id={uuid.uuid4()}",
+        headers=dev_auth_headers(uuid.uuid4()),
+    )
+    assert response.status_code == 401
+
+
 def test_analytics_summary_rejects_an_organization_the_user_has_no_membership_in(client, db_session):
     org = create_org(client)
     user = make_user(db_session, "outsider@example.com")
     response = client.get(
         f"/api/v1/intelligence/analytics/summary?organization_id={org['id']}",
+        headers=dev_auth_headers(user.id),
+    )
+    assert response.status_code == 403
+
+
+def test_analytics_summary_rejects_a_nonexistent_organization_with_403_not_500(client, db_session):
+    """TASK G1 regression: a syntactically valid but nonexistent
+    `organization_id` must still fail authorization cleanly (403) --
+    not crash the access-denied audit write with an `IntegrityError`
+    on `AuditLog.organization_id`'s real FK to `organizations.id` (see
+    `app/api/deps_context.py::_log_access_denied`)."""
+    user = make_user(db_session, "no-such-org@example.com")
+    response = client.get(
+        f"/api/v1/intelligence/analytics/summary?organization_id={uuid.uuid4()}",
         headers=dev_auth_headers(user.id),
     )
     assert response.status_code == 403
