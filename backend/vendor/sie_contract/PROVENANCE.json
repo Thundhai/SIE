@@ -1,8 +1,8 @@
 {
   "source_repository": "Thundhai/SIE-Commercial-Core",
   "source_path": "sie-contract",
-  "source_branch": "claude/task-01d-f3-enterprise-intelligence-boundary",
-  "source_commit": "9b0c2c652e99bb08ae07b0a4a1d569af95d49e80",
+  "source_branch": "main",
+  "source_commit": "8fd692a49dd2d3b18734e723ccc3bdb94046608b",
   "source_contract_version": "0.4.0",
   "vendored_at": "2026-10-03",
   "vendored_files": [

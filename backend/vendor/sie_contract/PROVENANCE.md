@@ -17,7 +17,7 @@ See `PROVENANCE.json` for the machine-readable record
 
 - **Source repository:** `Thundhai/SIE-Commercial-Core`
 - **Source path:** `sie-contract/` (that repository's own contract package)
-- **Source commit:** `9b0c2c652e99bb08ae07b0a4a1d569af95d49e80` (`claude/task-01d-f3-enterprise-intelligence-boundary` — Task 01D-F3's own Enterprise Intelligence-boundary branch, **not yet merged to `main`**; re-vendor again from `main` once that branch merges)
+- **Source commit:** `8fd692a49dd2d3b18734e723ccc3bdb94046608b` (`main` — the merge commit carrying both Task 01D-F2's Analytics boundary and Task 01D-F3's Enterprise Intelligence boundary)
 - **Source contract version:** `0.4.0`
 - **Vendored:** 2026-10-03
 
