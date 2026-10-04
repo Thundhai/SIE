@@ -1,16 +1,22 @@
 import uuid
 
+from tests.conftest import platform_admin_headers
+
 
 def create_org(client, name="Acme Industrial"):
-    return client.post("/api/v1/organizations", json={"name": name}).json()
+    return client.post(
+        "/api/v1/organizations", json={"name": name}, headers=platform_admin_headers()
+    ).json()
 
 
 def test_create_site_belongs_to_organization(client):
     org = create_org(client)
+    headers = platform_admin_headers()
 
     response = client.post(
         f"/api/v1/organizations/{org['id']}/sites",
         json={"name": "Plant 1", "location": "Houston", "country": "US"},
+        headers=headers,
     )
 
     assert response.status_code == 201
@@ -22,10 +28,11 @@ def test_create_site_belongs_to_organization(client):
 
 def test_list_sites_for_organization(client):
     org = create_org(client)
-    client.post(f"/api/v1/organizations/{org['id']}/sites", json={"name": "Plant 1"})
-    client.post(f"/api/v1/organizations/{org['id']}/sites", json={"name": "Plant 2"})
+    headers = platform_admin_headers()
+    client.post(f"/api/v1/organizations/{org['id']}/sites", json={"name": "Plant 1"}, headers=headers)
+    client.post(f"/api/v1/organizations/{org['id']}/sites", json={"name": "Plant 2"}, headers=headers)
 
-    response = client.get(f"/api/v1/organizations/{org['id']}/sites")
+    response = client.get(f"/api/v1/organizations/{org['id']}/sites", headers=headers)
 
     assert response.status_code == 200
     body = response.json()
@@ -38,5 +45,6 @@ def test_create_site_under_missing_organization_returns_404(client):
     response = client.post(
         f"/api/v1/organizations/{uuid.uuid4()}/sites",
         json={"name": "Plant 1"},
+        headers=platform_admin_headers(),
     )
     assert response.status_code == 404

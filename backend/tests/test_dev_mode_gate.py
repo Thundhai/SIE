@@ -15,18 +15,26 @@ from app.schemas.organization_membership import OrganizationMembershipCreate
 from app.schemas.user import UserCreate
 from app.services.membership_service import membership_service
 from app.services.user_service import user_service
+from tests.conftest import platform_admin_headers
 
 
 def create_org(client, name="Acme Industrial"):
-    return client.post("/api/v1/organizations", json={"name": name}).json()
+    return client.post(
+        "/api/v1/organizations", json={"name": name}, headers=platform_admin_headers()
+    ).json()
 
 
 def test_dev_auth_disabled_by_default_returns_501(client, monkeypatch):
     """The literal production-safety requirement: with DEV_MODE off (the
     default), a route that requires authentication fails closed rather
-    than falling back to trusting the caller."""
-    monkeypatch.setattr("app.api.deps_auth.settings.DEV_MODE", False)
+    than falling back to trusting the caller.
+
+    Organization setup happens before DEV_MODE is patched off, since
+    organization creation now requires its own authenticated
+    PLATFORM_ADMIN (G3-BE-01) -- this test is about the *members*
+    endpoint's own fail-closed behavior, not organization creation's."""
     org = create_org(client)
+    monkeypatch.setattr("app.api.deps_auth.settings.DEV_MODE", False)
 
     response = client.post(
         f"/api/v1/organizations/{org['id']}/members",

@@ -13,12 +13,14 @@ from app.schemas.site import SiteCreate
 from app.services.data_source_service import data_source_service
 from app.services.organization_service import organization_service
 from app.services.site_service import site_service
-from tests.conftest import dev_auth_headers
+from tests.conftest import dev_auth_headers, platform_admin_headers
 from tests.test_ingestion_api import make_membership, make_user
 
 
 def create_org(client, name):
-    return client.post("/api/v1/organizations", json={"name": name}).json()
+    return client.post(
+        "/api/v1/organizations", json={"name": name}, headers=platform_admin_headers()
+    ).json()
 
 
 def _org_admin(db_session, organization_id):
@@ -30,11 +32,12 @@ def _org_admin(db_session, organization_id):
 def test_api_site_list_is_scoped_per_organization(client):
     org_a = create_org(client, "Org A")
     org_b = create_org(client, "Org B")
+    headers = platform_admin_headers()
 
-    client.post(f"/api/v1/organizations/{org_a['id']}/sites", json={"name": "A Plant"})
+    client.post(f"/api/v1/organizations/{org_a['id']}/sites", json={"name": "A Plant"}, headers=headers)
 
-    org_b_sites = client.get(f"/api/v1/organizations/{org_b['id']}/sites").json()
-    org_a_sites = client.get(f"/api/v1/organizations/{org_a['id']}/sites").json()
+    org_b_sites = client.get(f"/api/v1/organizations/{org_b['id']}/sites", headers=headers).json()
+    org_a_sites = client.get(f"/api/v1/organizations/{org_a['id']}/sites", headers=headers).json()
 
     assert org_b_sites == []
     assert len(org_a_sites) == 1

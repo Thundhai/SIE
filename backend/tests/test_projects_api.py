@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 from app.services.permissions import Permission
-from tests.conftest import dev_auth_headers
+from tests.conftest import dev_auth_headers, platform_admin_headers
 from tests.intelligence_test_helpers import make_safety_event
 from tests.test_ingestion_api import create_org, make_membership, make_user
 
@@ -33,10 +33,13 @@ def _create_project(client, org_id, headers, **overrides):
 
 
 def _create_site(client, org_id, name="Main Yard"):
-    # sites.py is unauthenticated legacy tooling (see its own module) --
-    # used here purely to stand up fixture data, unrelated to this
-    # milestone's own auth surface.
-    return client.post(f"/api/v1/organizations/{org_id}/sites", json={"name": name}).json()
+    # sites.py now requires SITE_MANAGE in the target organization (see
+    # app/api/v1/sites.py, G3-BE-01) -- a throwaway platform-admin
+    # identity exists here purely to stand up fixture data, mirroring
+    # create_org_source's own established pattern in test_ingestion_api.py.
+    return client.post(
+        f"/api/v1/organizations/{org_id}/sites", json={"name": name}, headers=platform_admin_headers()
+    ).json()
 
 
 # --- Authorization -------------------------------------------------------------------------
