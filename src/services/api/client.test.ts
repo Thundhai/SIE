@@ -66,4 +66,37 @@ describe('apiRequest', () => {
     const headers = init.headers as Headers;
     expect(headers.get('X-SIE-Dev-User-Id')).toBeNull();
   });
+
+  it('SECURITY (G3-1): never sends the dev-identity header in production mode, even when dev identity variables are configured', async () => {
+    vi.stubEnv('MODE', 'production');
+    vi.stubEnv('VITE_DEV_USER_ID', 'user-1');
+    vi.stubEnv('VITE_DEV_ORGANIZATION_ID', 'org-1');
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
+    global.fetch = fetchMock;
+
+    await apiRequest('/organizations/org-1');
+
+    const [, init] = fetchMock.mock.calls[0];
+    const headers = init.headers as Headers;
+    expect(headers.get('X-SIE-Dev-User-Id')).toBeNull();
+    expect(headers.get('Authorization')).toBeNull();
+  });
+
+  it('sends a production Bearer token, never the dev-identity header, when a token getter is registered', async () => {
+    const { setAccessTokenGetter } = await import('../../auth/authToken');
+    setAccessTokenGetter(() => 'a-real-access-token');
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
+    global.fetch = fetchMock;
+
+    try {
+      await apiRequest('/organizations/org-1');
+    } finally {
+      setAccessTokenGetter(null);
+    }
+
+    const [, init] = fetchMock.mock.calls[0];
+    const headers = init.headers as Headers;
+    expect(headers.get('Authorization')).toBe('Bearer a-real-access-token');
+    expect(headers.get('X-SIE-Dev-User-Id')).toBeNull();
+  });
 });

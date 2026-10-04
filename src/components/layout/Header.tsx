@@ -1,4 +1,6 @@
 import { useAuth } from '../../auth/AuthContext';
+import { useOidcSession } from '../../auth/oidcSession';
+import { Button } from '../ui/Button';
 
 /**
  * Top bar — organization/user identity only, never hardcoded (contrast
@@ -8,9 +10,18 @@ import { useAuth } from '../../auth/AuthContext';
  * identity resolved, is still resolving, or isn't configured at all —
  * and will keep working unchanged once a real auth provider replaces
  * `DevAuthProvider`.
+ *
+ * **Sign out (G3-1).** Only rendered for a real production session
+ * (`!isDevIdentity`) — a dev identity has no login step, so it has no
+ * meaningful logout either (see `devIdentity.ts`). `useOidcSession()` is
+ * safe to call unconditionally: in dev mode (no OIDC configured) it
+ * simply resolves to an inert `unauthenticated` state and the button
+ * below never renders.
  */
 export function Header() {
   const auth = useAuth();
+  const oidc = useOidcSession();
+  const showSignOut = auth.isAuthenticated && !auth.isDevIdentity;
 
   return (
     <header className="flex h-14 shrink-0 items-center justify-between border-b border-border bg-surface px-6">
@@ -37,6 +48,11 @@ export function Header() {
           </div>
         ) : (
           <span className="text-sm text-text-muted">Not signed in</span>
+        )}
+        {showSignOut && (
+          <Button variant="ghost" size="sm" onClick={() => void oidc.signOutLocally()}>
+            Sign out
+          </Button>
         )}
       </div>
     </header>

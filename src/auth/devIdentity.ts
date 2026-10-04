@@ -11,7 +11,22 @@
  * unset, the app has no dev identity at all and shows that honestly
  * (see AuthContext's `isAuthenticated: false` state) rather than
  * fabricating one.
+ *
+ * **Production safety gate (G3-1).** Before this gate existed, this
+ * function's only check was "are `VITE_DEV_USER_ID`/
+ * `VITE_DEV_ORGANIZATION_ID` set" — which meant a production build whose
+ * deployment environment happened to still carry those two build-time
+ * variables (exactly the live misconfiguration the G3-0 audit found)
+ * would silently resolve a development identity, and `services/api/
+ * client.ts`'s own fallback would silently attach the dev-only
+ * `X-SIE-Dev-User-Id` header to every request. This now returns `null`
+ * unconditionally in production (see `authMode.ts`), regardless of
+ * whether those two variables are set, so there is no environment-
+ * variable combination that can reactivate development identity in a
+ * production build.
  */
+
+import { getAuthMode } from './authMode';
 
 export interface DevIdentityConfig {
   userId: string;
@@ -22,6 +37,10 @@ export interface DevIdentityConfig {
 }
 
 export function getDevIdentityConfig(): DevIdentityConfig | null {
+  if (getAuthMode() === 'production') {
+    return null;
+  }
+
   const userId = import.meta.env.VITE_DEV_USER_ID as string | undefined;
   const organizationId = import.meta.env.VITE_DEV_ORGANIZATION_ID as string | undefined;
 

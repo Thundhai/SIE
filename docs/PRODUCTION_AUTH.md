@@ -164,11 +164,13 @@ call, rather than guessing or defaulting to one.
   clean `NOT_AUTHENTICATED` state `DevAuthProvider` already falls back
   to — never a raw `ApiError` surfacing as a generic app error.
 
-Not wired into `App.tsx` by default: a concrete token source (a real
-login flow for a specific provider) is external infrastructure this
-milestone does not build — see "Explicitly not in this milestone" below.
-Swapping `DevAuthProvider` for `ProdAuthProvider` touches exactly one
-file and zero screens/routes/repositories.
+**Now actually wired into the running app — see §8 below (SIE Milestone
+G3-1).** At the time this milestone shipped, `ProdAuthProvider` was a
+complete, tested, but unused seam: nothing supplied it a concrete token
+source, so `App.tsx` mounted `DevAuthProvider` unconditionally regardless
+of build. G3-1 is the milestone that built that concrete token source
+(a real OIDC Authorization Code + PKCE flow) and wired the two providers
+to the correct build mode.
 
 ### 7. Auditability — `app/services/audit_service.py`
 
@@ -183,7 +185,7 @@ Three new `AuditAction` values:
   internals that could carry one.
 - `IDENTITY_PROVISIONED` — a new `Identity` row was created.
 
-## Explicitly not in this milestone
+## Explicitly not in this milestone (M20)
 
 Google/Microsoft/Okta-specific UI, password authentication, SSO
 administration UI, MFA, SCIM, a user-provisioning portal, social login,
@@ -191,9 +193,9 @@ session-management redesign, RBAC redesign, new permissions, new
 database ontology beyond what's described above, and a concrete
 production login flow (which provider, redirect handling, token refresh)
 — `ProdAuthProvider` is the seam that flow plugs into, not the flow
-itself.
+itself. (That login flow is what SIE Milestone G3-1, §8 below, adds.)
 
-## Tests
+## Tests (M20)
 
 - `backend/tests/test_oidc_verifier.py` — unit tests against
   `OIDCTokenVerifier` directly: valid token, expired, invalid signature,
@@ -217,3 +219,125 @@ itself.
   `test_authorization.py`, and the full backend/frontend suites) continue
   passing unchanged — see the milestone's own completion report for the
   exact numbers.
+
+---
+
+## 8. SIE Milestone G3-1: Login & Production Session (frontend)
+
+Everything above this line describes the backend boundary M20 built —
+real token *verification*, with no login flow behind it. G3-1 is the
+milestone that built the other half: a real frontend OIDC client that
+actually *obtains* a token and wires it into the seam M20 already
+provided.
+
+### Flow
+
+```
+  Browser (SIE frontend)                           External OIDC Provider
+  ───────────────────────                          ───────────────────────
+  LoginPage.signIn()
+      │
+      ▼
+  UserManager.signinRedirect() ───────────────────► /authorize (discovered
+                                                      from VITE_OIDC_AUTHORITY)
+                                                           │
+                                   user authenticates ◄────┘
+                                   with the PROVIDER,
+                                   never with SIE
+                                                           │
+  CallbackPage                    ◄── redirect with ───────┘
+  (route: /callback)                  ?code=...&state=...
+      │
+      ▼
+  UserManager.signinRedirectCallback()
+      │  (Authorization Code + PKCE token exchange,
+      │   handled entirely by oidc-client-ts — no
+      │   client secret, no hand-rolled crypto)
+      ▼
+  OIDC session established (access_token held by
+  oidc-client-ts's UserManager, sessionStorage-backed)
+      │
+      ▼
+  ProductionSessionGate
+      │  1. GET /auth/organizations  (confirms the backend
+      │     still honors the token; resolves which organization
+      │     to enter with — see organizationResolution.ts)
+      ▼
+  ProdAuthProvider (§6 above, unchanged)
+      │  2. GET /auth/me?organization_id=...
+      │  3. GET /auth/organizations (again — see
+      │     ProductionSessionGate.tsx's own docstring on why
+      │     this one call is duplicated rather than changing
+      │     ProdAuthProvider's contract)
+      ▼
+  AuthContext — identical shape DevAuthProvider already
+  produces; no screen in the app is aware which provider
+  is mounted.
+```
+
+### New frontend modules
+
+`src/auth/authMode.ts` (the one `import.meta.env.MODE`-keyed switch —
+`AuthGate` uses it to pick `DevAuthProvider` vs `ProductionSessionGate`;
+`devIdentity.ts` uses it to refuse to resolve a dev identity in a
+production build regardless of which environment variables are set),
+`oidcConfig.ts` (`VITE_OIDC_*` configuration — see table below),
+`oidcSession.ts` (the `oidc-client-ts`-backed `UserManager` singleton +
+`useOidcSession()` hook), `LoginPage.tsx`, `CallbackPage.tsx` (the OIDC
+redirect target, also handling the silent-renew iframe case),
+`ProductionSessionGate.tsx` (the session-state machine: loading /
+unauthenticated / error / organization-setup-required / ready),
+`organizationResolution.ts` (the deterministic initial-organization
+pick for G3-1 — the full organization *switcher* is G3-3).
+
+### Frontend configuration
+
+See `.env.production.example` (repo root) for the full, commented file.
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `VITE_OIDC_AUTHORITY` | Yes | Provider issuer URL, used for OIDC discovery |
+| `VITE_OIDC_CLIENT_ID` | Yes | This SPA's public client id |
+| `VITE_OIDC_REDIRECT_URI` | No (defaults to `<origin>/callback`) | Where the provider redirects back |
+| `VITE_OIDC_SCOPE` | No (defaults to `openid profile email`) | Requested OIDC scopes |
+
+Missing either required variable → `getOidcConfig()` returns `null` → no
+OIDC session is ever attempted; `/login`'s "Sign in" action fails with a
+visible, deterministic error rather than silently doing nothing.
+
+**These are a separate configuration surface from the backend's own
+`OIDC_ISSUER`/`OIDC_AUDIENCE`/`OIDC_JWKS_URL` (§1 above)** — both must
+point at the same provider/tenant to work together, but neither is
+derived from the other; there is no shared config file, by design
+(frontend and backend are deployed, versioned, and scaled independently).
+
+### Session storage and token handling
+
+- The OIDC `User` (which embeds the access token) is persisted by
+  `oidc-client-ts`'s own `UserManager` to **`sessionStorage`**, never
+  `localStorage`. No component in this codebase reads that storage
+  directly.
+- `authToken.ts`'s registered-getter seam (§6 above) is unchanged:
+  `ProductionSessionGate` wires `getAccessTokenLive` (always reading the
+  OIDC layer's current, live state — never a cached copy) into
+  `ProdAuthProvider`'s existing `getAccessToken` prop.
+- Automatic silent renewal is configured (`automaticSilentRenew: true`)
+  but has not been exercised end-to-end against a real provider in this
+  milestone — see the G3-1 final report's "Known limitations" section.
+
+### Logout
+
+Local session reset only (`UserManager.removeUser()`) — this milestone
+deliberately does not assume a configured provider supports RP-initiated
+logout (`end_session_endpoint`). A deployment whose provider does, and
+wants the IdP's own session terminated on sign-out too, is a scoped,
+separate follow-up (`UserManager.signoutRedirect()`), not implemented
+here.
+
+### Explicitly not in G3-1
+
+The full organization switcher (G3-3), permission-based route/sidebar
+gating beyond the plain authenticated/unauthenticated boundary (G3-2),
+the full administration workspace (G3-4), onboarding (G3-5), and a
+browser/E2E test framework (G3-6) — only unit/integration coverage
+(Vitest + Testing Library) was added here.
