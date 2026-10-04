@@ -13,15 +13,14 @@ from app.services.tenant_context import TenantContext
 router = APIRouter(
     prefix="/organizations/{organization_id}/sites",
     tags=["sites"],
-    dependencies=[Depends(get_organization_or_404)],
 )
 
 
 @router.post("", response_model=SiteRead, status_code=201)
 def create_site(
     payload: SiteCreate,
-    organization: Organization = Depends(get_organization_or_404),
     context: TenantContext = Depends(require_permission(Permission.SITE_MANAGE)),
+    organization: Organization = Depends(get_organization_or_404),
     db: Session = Depends(get_db),
 ) -> Site:
     return site_service.create(db, organization_id=organization.id, obj_in=payload)
@@ -29,8 +28,8 @@ def create_site(
 
 @router.get("", response_model=list[SiteRead])
 def list_sites(
-    organization: Organization = Depends(get_organization_or_404),
     context: TenantContext = Depends(require_permission(Permission.SITE_READ)),
+    organization: Organization = Depends(get_organization_or_404),
     db: Session = Depends(get_db),
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=500),

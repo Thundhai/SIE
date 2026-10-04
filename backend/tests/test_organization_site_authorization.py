@@ -201,8 +201,11 @@ def test_platform_admin_against_nonexistent_organization_returns_404_not_500(cli
     -- otherwise `site_service.create()` would attempt to insert a row
     with a foreign key to an organization that doesn't exist, which
     would surface as an unhandled IntegrityError/500 (the exact class of
-    bug G1 fixed elsewhere). `get_organization_or_404` running ahead of
-    `require_permission` is what prevents that here."""
+    bug G1 fixed elsewhere). `require_permission` succeeding (via the
+    platform-admin exception) and *then* `get_organization_or_404`
+    catching the nonexistent id is what prevents that here -- see the
+    "dependency ordering" section below for why that order, and not the
+    reverse, is the one that avoids an unauthenticated existence oracle."""
     response = client.post(
         _create_site_url(uuid.uuid4()),
         json={"name": "Plant 1"},
@@ -228,3 +231,107 @@ def test_denied_organization_creation_does_not_touch_the_audit_log(client, db_se
             "/api/v1/organizations", json={"name": "Denied"}, headers=dev_auth_headers(non_admin.id)
         )
         assert response.status_code == 403
+
+
+# --- Dependency ordering: authentication/authorization before existence --
+#
+# FastAPI resolves a router-level `dependencies=[...]` entry ahead of any
+# of the endpoint's own parameter dependencies, regardless of how those
+# parameters are ordered. The original fix kept `get_organization_or_404`
+# declared that way (inherited unchanged from the pre-authorization route
+# design), which meant an unauthenticated caller learned whether an
+# organization id was real (404) or not (401) -- an existence oracle no
+# other organization-scoped route in this codebase has (see
+# app/api/v1/memberships.py, which never resolves organization existence
+# separately from authorization at all). `get_organization_or_404` is now
+# a plain function-parameter dependency declared *after*
+# `require_permission(...)` on both routes, with no router-level
+# `dependencies=[...]` entry -- so authentication/authorization always
+# resolves first, and existence is only ever revealed to a caller who
+# already cleared it.
+
+
+def test_nonexistent_organization_unauthenticated_returns_401_not_404(client):
+    """The oracle this hardening closes: before it, this returned 404 --
+    disclosing organization existence to a caller with no credentials at
+    all. It must now be indistinguishable from the existing-organization
+    case below."""
+    response = client.get(_create_site_url(uuid.uuid4()))
+    assert response.status_code == 401
+
+
+def test_nonexistent_organization_unauthorized_user_returns_403_not_404(client, db_session):
+    """A real, authenticated user with no membership anywhere gets the
+    same 403 `authorize_tenant_context` already gives for a *real*
+    organization they don't belong to -- nonexistent-vs-real is still
+    not distinguishable to a caller who fails authorization."""
+    other_org = make_org(db_session)
+    outsider = make_org_member(db_session, other_org.id, role="VIEWER")
+
+    response = client.get(_create_site_url(uuid.uuid4()), headers=dev_auth_headers(outsider.id))
+
+    assert response.status_code == 403
+
+
+def test_nonexistent_organization_platform_admin_returns_404(client):
+    """The one caller for whom existence is ever revealed: authorization
+    already succeeded (the platform-admin exception needs no membership),
+    so a 404 here is informative, not a leak -- and, critically, is a
+    clean 404 rather than the FK IntegrityError/500 that would result if
+    `site_service.create()` ran against an organization_id that doesn't
+    exist."""
+    headers = platform_admin_headers()
+
+    get_response = client.get(_create_site_url(uuid.uuid4()), headers=headers)
+    post_response = client.post(_create_site_url(uuid.uuid4()), json={"name": "Plant 1"}, headers=headers)
+
+    assert get_response.status_code == 404
+    assert post_response.status_code == 404
+
+
+def test_existing_organization_unauthenticated_returns_401(client, db_session):
+    org = make_org(db_session)
+    response = client.get(_create_site_url(org.id))
+    assert response.status_code == 401
+
+
+def test_existing_organization_unauthorized_user_returns_403(client, db_session):
+    org = make_org(db_session)
+    other_org = make_org(db_session, "Other Org")
+    outsider = make_org_member(db_session, other_org.id, role="VIEWER")
+
+    response = client.get(_create_site_url(org.id), headers=dev_auth_headers(outsider.id))
+
+    assert response.status_code == 403
+
+
+def test_existing_organization_authorized_user_returns_200(client, db_session):
+    org = make_org(db_session)
+    member = make_org_member(db_session, org.id, role="VIEWER")
+
+    response = client.get(_create_site_url(org.id), headers=dev_auth_headers(member.id))
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_dependency_order_produces_no_audit_log_failures(client, db_session):
+    """Repeating every status in the reordered matrix must never raise --
+    in particular, confirms the reordering itself introduces no new path
+    that could reach `AuditLog.organization_id` (a real FK) with an
+    unvalidated id, the exact G1 class of bug."""
+    org = make_org(db_session)
+    member = make_org_member(db_session, org.id, role="VIEWER")
+    admin_headers = platform_admin_headers()
+    nonexistent = uuid.uuid4()
+
+    responses = [
+        client.get(_create_site_url(nonexistent)).status_code,
+        client.get(_create_site_url(nonexistent), headers=dev_auth_headers(member.id)).status_code,
+        client.get(_create_site_url(nonexistent), headers=admin_headers).status_code,
+        client.get(_create_site_url(org.id)).status_code,
+        client.get(_create_site_url(org.id), headers=dev_auth_headers(member.id)).status_code,
+    ]
+
+    assert responses == [401, 403, 404, 401, 200]
+    assert 500 not in responses
