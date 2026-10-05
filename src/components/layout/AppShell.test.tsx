@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
 import { AuthContext } from '../../auth/AuthContext';
+import { OrganizationSwitchProvider } from '../../auth/OrganizationSwitchProvider';
 import type { AuthContextValue } from '../../auth/types';
 import { AppShell } from './AppShell';
 
@@ -24,15 +25,17 @@ const AUTHENTICATED_VALUE: AuthContextValue = {
 function renderShell(initialPath = '/') {
   return render(
     <AuthContext.Provider value={AUTHENTICATED_VALUE}>
-      <MemoryRouter initialEntries={[initialPath]}>
-        <Routes>
-          <Route element={<AppShell />}>
-            <Route index element={<h1>Home content</h1>} />
-            <Route path="events" element={<h1>Events content</h1>} />
-            <Route path="intelligence" element={<h1>Intelligence content</h1>} />
-          </Route>
-        </Routes>
-      </MemoryRouter>
+      <OrganizationSwitchProvider>
+        <MemoryRouter initialEntries={[initialPath]}>
+          <Routes>
+            <Route element={<AppShell />}>
+              <Route index element={<h1>Home content</h1>} />
+              <Route path="events" element={<h1>Events content</h1>} />
+              <Route path="intelligence" element={<h1>Intelligence content</h1>} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </OrganizationSwitchProvider>
     </AuthContext.Provider>,
   );
 }
