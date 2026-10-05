@@ -2,6 +2,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getAccessToken, setAccessTokenGetter } from './authToken';
+import { notifySessionInvalidated, registerSessionInvalidationHandler } from './sessionInvalidation';
 import { ProductionSessionGate } from './ProductionSessionGate';
 
 /**
@@ -181,5 +182,89 @@ describe('ProductionSessionGate — real token-registration bridge (Blocker 1)',
     // every assertion above vacuously true.
     setAccessTokenGetter(null);
     expect(getAccessToken()).toBeNull();
+  });
+});
+
+/**
+ * SIE Milestone G3-2 — proves the session-invalidation registration the
+ * same way the token-getter bridge above is proven: against the real
+ * bootstrap, not a mocked registration call. `ProductionSessionGate`
+ * registers exactly one handler, for exactly the window
+ * `oidc.status === 'authenticated'`, delegating to that same session's
+ * `signOutLocally` — never a second, independently-constructed one.
+ */
+describe('ProductionSessionGate — session-invalidation handler bridge (G3-2)', () => {
+  afterEach(() => {
+    cleanup();
+    registerSessionInvalidationHandler(null);
+    setAccessTokenGetter(null);
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it('a 401 notified from anywhere while authenticated signs out the SAME session the gate bootstrapped with', async () => {
+    vi.stubEnv('MODE', 'production');
+    const signOutLocally = vi.fn().mockResolvedValue(undefined);
+    mockUseOidcSession.mockReturnValue({
+      status: 'authenticated',
+      user: { access_token: 'real-oidc-access-token', expired: false },
+      error: null,
+      signIn: vi.fn(),
+      signOutLocally,
+      getAccessTokenLive: () => 'real-oidc-access-token',
+    });
+
+    const fetchMock = vi.fn((input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/auth/organizations')) return Promise.resolve(jsonResponse(ORGANIZATIONS_BODY));
+      if (url.includes('/auth/me')) return Promise.resolve(jsonResponse(EFFECTIVE_PERMISSIONS_BODY));
+      return Promise.reject(new Error(`Unexpected fetch to ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderGate();
+    await waitFor(() => expect(screen.getByText('Authenticated Workspace')).toBeInTheDocument());
+
+    // Simulates a 401 surfacing from some unrelated, later API call
+    // (client.ts's own responsibility -- proven separately in
+    // client.test.ts). This is the gate's side of that same contract:
+    // whichever handler is registered right now must be the real
+    // session's signOutLocally, not a stand-in.
+    notifySessionInvalidated();
+
+    expect(signOutLocally).toHaveBeenCalledTimes(1);
+  });
+
+  it('never leaves a stale handler registered once the session stops being authenticated', async () => {
+    vi.stubEnv('MODE', 'production');
+    const signOutLocally = vi.fn().mockResolvedValue(undefined);
+    mockUseOidcSession.mockReturnValue({
+      status: 'authenticated',
+      user: { access_token: 'real-oidc-access-token', expired: false },
+      error: null,
+      signIn: vi.fn(),
+      signOutLocally,
+      getAccessTokenLive: () => 'real-oidc-access-token',
+    });
+
+    const fetchMock = vi.fn((input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/auth/organizations')) return Promise.resolve(jsonResponse(ORGANIZATIONS_BODY));
+      if (url.includes('/auth/me')) return Promise.resolve(jsonResponse(EFFECTIVE_PERMISSIONS_BODY));
+      return Promise.reject(new Error(`Unexpected fetch to ${url}`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { unmount } = renderGate();
+    await waitFor(() => expect(screen.getByText('Authenticated Workspace')).toBeInTheDocument());
+
+    unmount();
+
+    // With the component gone, its cleanup must have cleared the
+    // registration -- a later, unrelated 401 must never reach this
+    // unmounted session's signOutLocally.
+    notifySessionInvalidated();
+    expect(signOutLocally).not.toHaveBeenCalled();
   });
 });

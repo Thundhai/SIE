@@ -9,7 +9,7 @@ import { ErrorState } from '../../components/ui/ErrorState';
 import { LoadingState } from '../../components/ui/LoadingState';
 import { StatusBadge } from '../../components/ui/StatusBadge';
 import { Tabs } from '../../components/ui/Tabs';
-import { ApiError } from '../../services/api/errors';
+import { ApiError, isPermissionDeniedError } from '../../services/api/errors';
 import { getRiskAssessment, type RiskAssessmentDetail, type RiskAssessmentFinding } from '../../services/api/riskAssessments';
 import type { AsyncState } from '../../types/common';
 import { RiskAssessmentActionsTab } from './RiskAssessmentActionsTab';
@@ -47,11 +47,16 @@ export function RiskAssessmentDetailPage() {
   const [state, setState] = useState<AsyncState<RiskAssessmentDetail | null>>({ status: 'loading' });
   const [reloadToken, setReloadToken] = useState(0);
   const [tab, setTab] = useState<TabValue>('overview');
+  // Checked via the real HTTP status (SIE Milestone G3-2), not a
+  // fragile message-text match on `state.message` -- kept as its own
+  // flag rather than widening the shared AsyncState error variant.
+  const [permissionDenied, setPermissionDenied] = useState(false);
 
   useEffect(() => {
     if (!assessmentId || !auth.organization) return;
     const controller = new AbortController();
     setState({ status: 'loading' });
+    setPermissionDenied(false);
     getRiskAssessment(auth.organization.id, assessmentId, controller.signal)
       .then((detail) => setState({ status: 'success', data: detail }))
       .catch((error: unknown) => {
@@ -60,12 +65,15 @@ export function RiskAssessmentDetailPage() {
           setState({ status: 'success', data: null });
           return;
         }
+        if (isPermissionDeniedError(error)) {
+          setPermissionDenied(true);
+        }
         setState({ status: 'error', message: error instanceof Error ? error.message : 'Could not load this risk assessment.' });
       });
     return () => controller.abort();
   }, [auth.organization, assessmentId, reloadToken]);
 
-  const isPermissionDenied = state.status === 'error' && state.message.toLowerCase().includes('missing') && state.message.toLowerCase().includes('permission');
+  const isPermissionDenied = state.status === 'error' && permissionDenied;
 
   function handleFindingChanged(updated: RiskAssessmentFinding) {
     setState((current) => {
