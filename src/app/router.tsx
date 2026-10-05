@@ -14,6 +14,8 @@ import { AdministrationPage } from '../features/administration/AdministrationPag
 import { CallbackPage } from '../auth/CallbackPage';
 import { LoginPage } from '../auth/LoginPage';
 import { AuthGate } from '../auth/AuthGate';
+import { PermissionRoute } from '../auth/PermissionRoute';
+import { ROUTE_PERMISSIONS } from '../auth/routePermissions';
 
 /**
  * URL-based routing — replaces the legacy `currentScreen: AppScreen`
@@ -33,9 +35,25 @@ import { AuthGate } from '../auth/AuthGate';
  * today's unchanged `<DevAuthProvider>`, and in production is
  * `<ProductionSessionGate>` (redirect-to-`/login` + organization
  * resolution + `<ProdAuthProvider>` — see that component's own
- * docstring). This milestone deliberately does not add permission-based
- * routing here (that's G3-2) — only the authenticated/unauthenticated
- * boundary.
+ * docstring).
+ *
+ * **Permission gates (SIE Milestone G3-2).** Below the authentication
+ * boundary:
+ *
+ *     Public Routes -> AuthGate (authentication) -> PermissionRoute
+ *         (authorization) -> Feature Route
+ *
+ * Each route that requires a specific backend permission beyond plain
+ * authentication is wrapped in `<PermissionRoute permission={...}>`,
+ * reading the SAME `ROUTE_PERMISSIONS` constants `Sidebar.tsx` uses for
+ * navigation visibility — the one source of truth this milestone's own
+ * "do not duplicate permission logic between Sidebar and router"
+ * requirement asks for. This is what actually protects a direct URL/
+ * deep link: `Sidebar` hiding a link is a UX convenience only, never
+ * the security boundary (`PermissionRoute` runs regardless of how the
+ * route was reached). Home has no entry in `ROUTE_PERMISSIONS` and is
+ * therefore wrapped in nothing beyond `AuthGate` — see that module's
+ * own docstring for why.
  */
 export function AppRoutes() {
   return (
@@ -50,16 +68,86 @@ export function AppRoutes() {
         }
       >
         <Route index element={<HomePage />} />
-        <Route path="events" element={<EventsPage />} />
-        <Route path="events/:eventId" element={<EventDetailPage />} />
-        <Route path="actions" element={<ActionsPage />} />
-        <Route path="actions/:actionId" element={<ActionDetailPage />} />
-        <Route path="risk-assessments" element={<RiskAssessmentsPage />} />
-        <Route path="risk-assessments/:assessmentId" element={<RiskAssessmentDetailPage />} />
-        <Route path="intelligence" element={<IntelligencePage />} />
-        <Route path="knowledge" element={<KnowledgePage />} />
-        <Route path="reports" element={<ReportsPage />} />
-        <Route path="administration" element={<AdministrationPage />} />
+        <Route
+          path="events"
+          element={
+            <PermissionRoute permission={ROUTE_PERMISSIONS.events}>
+              <EventsPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="events/:eventId"
+          element={
+            <PermissionRoute permission={ROUTE_PERMISSIONS.events}>
+              <EventDetailPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="actions"
+          element={
+            <PermissionRoute permission={ROUTE_PERMISSIONS.actions}>
+              <ActionsPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="actions/:actionId"
+          element={
+            <PermissionRoute permission={ROUTE_PERMISSIONS.actions}>
+              <ActionDetailPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="risk-assessments"
+          element={
+            <PermissionRoute permission={ROUTE_PERMISSIONS.riskAssessments}>
+              <RiskAssessmentsPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="risk-assessments/:assessmentId"
+          element={
+            <PermissionRoute permission={ROUTE_PERMISSIONS.riskAssessments}>
+              <RiskAssessmentDetailPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="intelligence"
+          element={
+            <PermissionRoute permission={ROUTE_PERMISSIONS.intelligence}>
+              <IntelligencePage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="knowledge"
+          element={
+            <PermissionRoute permission={ROUTE_PERMISSIONS.knowledge}>
+              <KnowledgePage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="reports"
+          element={
+            <PermissionRoute permission={ROUTE_PERMISSIONS.reports}>
+              <ReportsPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="administration"
+          element={
+            <PermissionRoute permission={ROUTE_PERMISSIONS.administration}>
+              <AdministrationPage />
+            </PermissionRoute>
+          }
+        />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

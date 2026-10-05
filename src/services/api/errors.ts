@@ -29,6 +29,21 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * The one place "was this specifically a permission problem" is decided
+ * — SIE Milestone G3-2. Checks the real HTTP status (403), never the
+ * error message text: a prior ad hoc pattern in a couple of pages
+ * matched on `message.includes('permission')`, which is fragile (it
+ * would misfire on any unrelated error whose text happens to contain
+ * that word, and silently stop working if the backend's own wording
+ * ever changes) and duplicated the same guess in more than one place.
+ * See `KnowledgePage.tsx`/`RiskAssessmentDetailPage.tsx` for the two
+ * call sites this replaces.
+ */
+export function isPermissionDeniedError(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 403;
+}
+
 export async function apiErrorFromResponse(response: Response): Promise<ApiError> {
   const requestId = response.headers.get('X-Request-Id');
   let message = `Request failed with status ${response.status}`;

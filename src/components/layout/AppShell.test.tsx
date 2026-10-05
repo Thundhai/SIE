@@ -12,8 +12,13 @@ const AUTHENTICATED_VALUE: AuthContextValue = {
   user: { id: 'u1', name: 'Frontend Dev', email: 'dev@example.com' },
   organization: { id: 'org1', name: 'SIE Test Organization' },
   memberships: [{ organizationId: 'org1', organizationName: 'SIE Test Organization', role: 'ORG_ADMIN' }],
+  // SIE Milestone G3-2: Sidebar now hides a nav item whose permission
+  // is missing -- this test's own purpose is "every item renders as a
+  // real link for an authorized user", so this stub grants all of them,
+  // mirroring an ORG_ADMIN (whose real ROLE_PERMISSIONS set is exactly
+  // "every permission").
   permissions: [],
-  hasPermission: () => false,
+  hasPermission: () => true,
 };
 
 function renderShell(initialPath = '/') {

@@ -5,6 +5,7 @@ import { LoadingState } from '../components/ui/LoadingState';
 import { listAuthOrganizations } from '../services/api/auth';
 import { ApiError } from '../services/api/errors';
 import { setAccessTokenGetter } from './authToken';
+import { registerSessionInvalidationHandler } from './sessionInvalidation';
 import { resolveInitialOrganization } from './organizationResolution';
 import { useOidcSession } from './oidcSession';
 import { ProdAuthProvider, type ProdAuthBootstrapStatus } from './ProdAuthProvider';
@@ -95,6 +96,24 @@ export function ProductionSessionGate({ children }: { children: ReactNode }) {
     setAccessTokenGetter(oidc.getAccessTokenLive);
     return () => setAccessTokenGetter(null);
   }, [oidc.status, oidc.getAccessTokenLive]);
+
+  // SIE Milestone G3-2: the one registrant of auth/sessionInvalidation.ts
+  // -- a 401 from ANY later API call (not only the bootstrap calls this
+  // component's own effects below already handle) reaches this same
+  // signOutLocally(), which in turn flips oidc.status to
+  // 'unauthenticated' and is picked up by the effect below exactly like
+  // any other session end. Registered for the same window as the token
+  // getter above (only while genuinely authenticated), for the same
+  // reason.
+  useEffect(() => {
+    if (oidc.status !== 'authenticated') {
+      return;
+    }
+    registerSessionInvalidationHandler(() => {
+      void oidc.signOutLocally();
+    });
+    return () => registerSessionInvalidationHandler(null);
+  }, [oidc.status, oidc.signOutLocally]);
 
   useEffect(() => {
     if (oidc.status === 'loading') {

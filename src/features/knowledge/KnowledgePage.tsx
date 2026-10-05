@@ -17,6 +17,7 @@ import {
   type KnowledgeSource,
   type VerificationStatus,
 } from '../../services/api/knowledge';
+import { isPermissionDeniedError } from '../../services/api/errors';
 
 export function KnowledgePage() {
   const auth = useAuth();
@@ -28,16 +29,25 @@ export function KnowledgePage() {
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searchError, setSearchError] = useState<string | null>(null);
+  // Checked via the real HTTP status (SIE Milestone G3-2), not a
+  // fragile message-text match -- see isPermissionDeniedError's own
+  // docstring.
+  const [permissionDenied, setPermissionDenied] = useState(false);
 
   useEffect(() => {
     if (!auth.organization) return;
     const controller = new AbortController();
     setLoading(true);
     setError(null);
+    setPermissionDenied(false);
     listKnowledgeSources({ organizationId: auth.organization.id }, controller.signal)
       .then(setSources)
       .catch((requestError: unknown) => {
         if (controller.signal.aborted) return;
+        if (isPermissionDeniedError(requestError)) {
+          setPermissionDenied(true);
+          return;
+        }
         setError(requestError instanceof Error ? requestError.message : 'Could not load knowledge sources.');
       })
       .finally(() => setLoading(false));
@@ -60,7 +70,11 @@ export function KnowledgePage() {
         setSearchError('No relevant evidence was returned for this query.');
       }
     } catch (requestError) {
-      setSearchError(requestError instanceof Error ? requestError.message : 'Knowledge search failed.');
+      if (isPermissionDeniedError(requestError)) {
+        setPermissionDenied(true);
+      } else {
+        setSearchError(requestError instanceof Error ? requestError.message : 'Knowledge search failed.');
+      }
       setResults([]);
     } finally {
       setSearching(false);
@@ -75,8 +89,6 @@ export function KnowledgePage() {
       </PageContainer>
     );
   }
-
-  const permissionDenied = error?.toLowerCase().includes('permission') || searchError?.toLowerCase().includes('permission');
 
   return (
     <PageContainer>

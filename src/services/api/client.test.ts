@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { registerSessionInvalidationHandler } from '../../auth/sessionInvalidation';
 import { apiRequest } from './client';
 import { ApiError } from './errors';
 
@@ -98,5 +99,49 @@ describe('apiRequest', () => {
     const headers = init.headers as Headers;
     expect(headers.get('Authorization')).toBe('Bearer a-real-access-token');
     expect(headers.get('X-SIE-Dev-User-Id')).toBeNull();
+  });
+
+  // --- SIE Milestone G3-2: 401 vs 403 ---------------------------------
+
+  describe('session invalidation on 401', () => {
+    afterEach(() => {
+      registerSessionInvalidationHandler(null);
+    });
+
+    it('notifies the registered session-invalidation handler on a 401 response', async () => {
+      const handler = vi.fn();
+      registerSessionInvalidationHandler(handler);
+      global.fetch = vi.fn().mockResolvedValue(new Response('{}', { status: 401 }));
+
+      await expect(apiRequest('/auth/me')).rejects.toMatchObject({ status: 401 });
+
+      expect(handler).toHaveBeenCalledTimes(1);
+    });
+
+    it('never notifies on a 403 — authenticated but forbidden is not a session problem', async () => {
+      const handler = vi.fn();
+      registerSessionInvalidationHandler(handler);
+      global.fetch = vi.fn().mockResolvedValue(new Response('{}', { status: 403 }));
+
+      await expect(apiRequest('/risk-assessments/1')).rejects.toMatchObject({ status: 403 });
+
+      expect(handler).not.toHaveBeenCalled();
+    });
+
+    it('never notifies on a successful response', async () => {
+      const handler = vi.fn();
+      registerSessionInvalidationHandler(handler);
+      global.fetch = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
+
+      await apiRequest('/organizations/org-1');
+
+      expect(handler).not.toHaveBeenCalled();
+    });
+
+    it('does not throw when no handler is registered (e.g. dev mode) — a 401 still rejects with the right status', async () => {
+      global.fetch = vi.fn().mockResolvedValue(new Response('{}', { status: 401 }));
+
+      await expect(apiRequest('/auth/me')).rejects.toMatchObject({ status: 401 });
+    });
   });
 });

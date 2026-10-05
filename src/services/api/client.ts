@@ -18,6 +18,7 @@
  */
 import { getAccessToken } from '../../auth/authToken';
 import { getDevIdentityConfig } from '../../auth/devIdentity';
+import { notifySessionInvalidated } from '../../auth/sessionInvalidation';
 import { API_BASE_URL } from './config';
 import { ApiError, apiErrorFromResponse } from './errors';
 
@@ -106,7 +107,17 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions = {
   }
 
   if (!response.ok) {
-    throw await apiErrorFromResponse(response);
+    const error = await apiErrorFromResponse(response);
+    if (error.status === 401) {
+      // 401 always and only means "this credential is no longer
+      // valid" (see backend/app/api/deps_auth.py's own semantics) --
+      // never a permission problem (that's 403, left alone below).
+      // See auth/sessionInvalidation.ts for why this is the one place
+      // every such failure, from any call, is reported (SIE Milestone
+      // G3-2).
+      notifySessionInvalidated();
+    }
+    throw error;
   }
 
   if (response.status === 204) {
