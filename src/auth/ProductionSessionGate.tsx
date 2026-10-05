@@ -6,7 +6,7 @@ import { listAuthOrganizations } from '../services/api/auth';
 import { ApiError } from '../services/api/errors';
 import { setAccessTokenGetter } from './authToken';
 import { registerSessionInvalidationHandler } from './sessionInvalidation';
-import { resolveInitialOrganization } from './organizationResolution';
+import { readPersistedOrganizationId, resolveActiveOrganization } from './organizationPersistence';
 import { useOidcSession } from './oidcSession';
 import { ProdAuthProvider, type ProdAuthBootstrapStatus } from './ProdAuthProvider';
 
@@ -135,7 +135,15 @@ export function ProductionSessionGate({ children }: { children: ReactNode }) {
     listAuthOrganizations(controller.signal)
       .then((result) => {
         if (cancelled) return;
-        const resolution = resolveInitialOrganization(result.memberships);
+        // SIE Milestone G3-3: prefer a persisted, still-valid active
+        // organization (set by a previous session's explicit switch —
+        // see organizationPersistence.ts) over G3-1's deterministic
+        // pick, so a page refresh re-enters the organization the user
+        // was actually last using rather than always the lowest-id one.
+        // Discarding an invalid persisted id and resolving the
+        // deterministic fallback both happen inside this one call —
+        // see that module's own docstring.
+        const resolution = resolveActiveOrganization(result.memberships, readPersistedOrganizationId());
         setGate(
           resolution.kind === 'none'
             ? { phase: 'organization_setup_required' }

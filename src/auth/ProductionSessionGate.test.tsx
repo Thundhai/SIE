@@ -102,6 +102,7 @@ describe('ProductionSessionGate', () => {
     // resetAllMocks (not clearAllMocks): also clears mockReturnValue/
     // mockResolvedValue implementations between tests.
     vi.resetAllMocks();
+    window.sessionStorage.clear();
   });
 
   it('shows a loading state while the OIDC session itself is still resolving', () => {
@@ -354,5 +355,46 @@ describe('ProductionSessionGate', () => {
     expect(screen.queryByText('Login Page')).not.toBeInTheDocument();
     expect(signOutLocally).not.toHaveBeenCalled();
     expect(getEffectivePermissions).toHaveBeenCalledTimes(1);
+  });
+
+  // --- SIE Milestone G3-3: persisted active organization on bootstrap ---
+
+  const MULTI_ORG_MEMBERSHIPS = {
+    memberships: [
+      { organization_id: 'org-1', organization_name: 'Org One', role: 'ORG_ADMIN' },
+      { organization_id: 'org-2', organization_name: 'Org Two', role: 'VIEWER' },
+    ],
+    is_platform_admin: false,
+  };
+
+  it('bootstraps into a validated, previously-persisted organization rather than the deterministic (lowest-id) pick', async () => {
+    window.sessionStorage.setItem('sie.activeOrganizationId', 'org-2');
+    mockUseOidcSession.mockReturnValue(authenticatedOidcState());
+    vi.mocked(listAuthOrganizations).mockResolvedValue(MULTI_ORG_MEMBERSHIPS);
+    vi.mocked(getEffectivePermissions).mockResolvedValue({
+      ...EFFECTIVE_PERMISSIONS,
+      organization_id: 'org-2',
+      organization_name: 'Org Two',
+    });
+
+    renderGate();
+
+    await waitFor(() => expect(screen.getByText('Authenticated Workspace')).toBeInTheDocument());
+    expect(getEffectivePermissions).toHaveBeenCalledWith('org-2', expect.anything());
+  });
+
+  it('SECURITY: discards a persisted organization id no longer present in the authenticated memberships list and falls back to the deterministic pick', async () => {
+    window.sessionStorage.setItem('sie.activeOrganizationId', 'org-revoked');
+    mockUseOidcSession.mockReturnValue(authenticatedOidcState());
+    vi.mocked(listAuthOrganizations).mockResolvedValue(MULTI_ORG_MEMBERSHIPS);
+    vi.mocked(getEffectivePermissions).mockResolvedValue(EFFECTIVE_PERMISSIONS);
+
+    renderGate();
+
+    await waitFor(() => expect(screen.getByText('Authenticated Workspace')).toBeInTheDocument());
+    // Deterministic fallback: 'org-1' < 'org-2' by plain string
+    // comparison (resolveInitialOrganization's own contract).
+    expect(getEffectivePermissions).toHaveBeenCalledWith('org-1', expect.anything());
+    expect(window.sessionStorage.getItem('sie.activeOrganizationId')).toBeNull();
   });
 });
