@@ -1,11 +1,13 @@
 import uuid
 
-from tests.conftest import dev_auth_headers
+from tests.conftest import dev_auth_headers, platform_admin_headers
 from tests.intelligence_test_helpers import make_org_member, make_platform_admin_user
 
 
 def create_org(client, name="Acme Industrial"):
-    return client.post("/api/v1/organizations", json={"name": name}).json()
+    return client.post(
+        "/api/v1/organizations", json={"name": name}, headers=platform_admin_headers()
+    ).json()
 
 
 def global_source_payload(**overrides):

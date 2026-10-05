@@ -14,12 +14,14 @@ from app.schemas.organization import OrganizationCreate
 from app.services.knowledge_document_service import knowledge_document_service
 from app.services.knowledge_source_service import knowledge_source_service
 from app.services.organization_service import organization_service
-from tests.conftest import dev_auth_headers
+from tests.conftest import dev_auth_headers, platform_admin_headers
 from tests.intelligence_test_helpers import make_org_member, make_platform_admin_user
 
 
 def create_org(client, name):
-    return client.post("/api/v1/organizations", json={"name": name}).json()
+    return client.post(
+        "/api/v1/organizations", json={"name": name}, headers=platform_admin_headers()
+    ).json()
 
 
 def create_org_source(client, organization_id, member, name="Org Source"):

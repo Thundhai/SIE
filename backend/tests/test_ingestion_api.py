@@ -10,11 +10,13 @@ from app.schemas.user import UserCreate
 from app.services.membership_service import membership_service
 from app.services.permissions import PLATFORM_ADMIN
 from app.services.user_service import user_service
-from tests.conftest import dev_auth_headers, load_fixture
+from tests.conftest import dev_auth_headers, load_fixture, platform_admin_headers
 
 
 def create_org(client, name="Acme Industrial"):
-    return client.post("/api/v1/organizations", json={"name": name}).json()
+    return client.post(
+        "/api/v1/organizations", json={"name": name}, headers=platform_admin_headers()
+    ).json()
 
 
 def create_org_source(client, db_session, organization_id, name="Internal Procedure"):

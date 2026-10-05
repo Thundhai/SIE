@@ -15,12 +15,14 @@ from app.models.enums import ScopeType
 from app.schemas.knowledge_source import KnowledgeSourceCreate
 from app.services.ingestion_service import ingestion_service
 from app.services.knowledge_source_service import knowledge_source_service
-from tests.conftest import dev_auth_headers, load_fixture
+from tests.conftest import dev_auth_headers, load_fixture, platform_admin_headers
 from tests.intelligence_test_helpers import make_org_member, make_platform_admin_user
 
 
 def create_org(client, name="Acme Industrial"):
-    return client.post("/api/v1/organizations", json={"name": name}).json()
+    return client.post(
+        "/api/v1/organizations", json={"name": name}, headers=platform_admin_headers()
+    ).json()
 
 
 def make_global_source(db_session, name="29 CFR 1910"):

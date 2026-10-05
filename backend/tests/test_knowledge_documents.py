@@ -4,12 +4,14 @@ from app.schemas.knowledge_document import KnowledgeDocumentCreate
 from app.schemas.knowledge_source import KnowledgeSourceCreate
 from app.services.knowledge_document_service import knowledge_document_service
 from app.services.knowledge_source_service import knowledge_source_service
-from tests.conftest import dev_auth_headers
+from tests.conftest import dev_auth_headers, platform_admin_headers
 from tests.intelligence_test_helpers import make_org_member, make_platform_admin_user
 
 
 def create_org(client, name="Acme Industrial"):
-    return client.post("/api/v1/organizations", json={"name": name}).json()
+    return client.post(
+        "/api/v1/organizations", json={"name": name}, headers=platform_admin_headers()
+    ).json()
 
 
 def create_global_source(client, admin):

@@ -14,11 +14,13 @@ from app.services.errors import KnowledgeNotFoundError, KnowledgeValidationError
 from app.services.membership_service import membership_service
 from app.services.permissions import OrganizationRole
 from app.services.user_service import user_service
-from tests.conftest import dev_auth_headers
+from tests.conftest import dev_auth_headers, platform_admin_headers
 
 
 def create_org(client, name="Acme Industrial"):
-    return client.post("/api/v1/organizations", json={"name": name}).json()
+    return client.post(
+        "/api/v1/organizations", json={"name": name}, headers=platform_admin_headers()
+    ).json()
 
 
 def make_user(db_session, email="user@example.com", name="Test User", **kwargs):

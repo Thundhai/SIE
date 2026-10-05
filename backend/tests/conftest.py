@@ -21,6 +21,7 @@ Real Postgres (Alembic, CI) uses the actual `commercial_core` schema
 unchanged.
 """
 
+import uuid
 from collections.abc import Generator
 from pathlib import Path
 
@@ -35,6 +36,9 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.main import app
 from app.models import Base
+from app.schemas.user import UserCreate
+from app.services.permissions import PLATFORM_ADMIN
+from app.services.user_service import user_service
 
 # The development-only identity mechanism (app/api/deps_auth.py) is gated
 # by DEV_MODE, off by default in production. Tests exercise that pipeline
@@ -49,6 +53,32 @@ def dev_auth_headers(user_id) -> dict[str, str]:
     See app/api/deps_auth.py — this names an existing user id; it cannot
     assert a role, permission, or organization directly."""
     return {DEV_USER_HEADER: str(user_id)}
+
+
+def platform_admin_headers() -> dict[str, str]:
+    """G3-BE-01: `POST /organizations` now requires an authenticated
+    PLATFORM_ADMIN (see app/api/v1/organizations.py) -- there is no
+    OrganizationMembership to check before the organization exists, so
+    this is the one identity every existing test's own `create_org()`
+    setup helper needs to keep working unchanged.
+
+    Creates a disposable platform-admin user directly against the same
+    in-memory database `client` is wired to (`StaticPool` gives every
+    session, including this one, the same underlying connection -- the
+    same sharing `tests/test_users_and_memberships.py` already relies on
+    between its `client` and `db_session` fixtures), so callers don't
+    need a `db_session` fixture of their own just to create one.
+    """
+    session = TestingSessionLocal()
+    try:
+        admin = user_service.create(
+            session,
+            obj_in=UserCreate(email=f"platform-admin-{uuid.uuid4()}@example.com", name="Platform Admin"),
+        )
+        user_service.set_platform_role(session, user=admin, platform_role=PLATFORM_ADMIN)
+        return dev_auth_headers(admin.id)
+    finally:
+        session.close()
 
 
 # Small, non-confidential fixture files for the ingestion adapters (PDF,
