@@ -75,6 +75,11 @@ describe('ProductionSessionGate — real token-registration bridge (Blocker 1)',
     setAccessTokenGetter(null);
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
+    // Restores the real global.fetch stubbed via vi.stubGlobal() below
+    // -- test hygiene: prefer vi.stubGlobal/unstubAllGlobals over a
+    // direct `global.fetch = ...` assignment, which Vitest can't track
+    // or guarantee gets reverted on its own.
+    vi.unstubAllGlobals();
   });
 
   it('(A) the initial GET /auth/organizations request — made before ProdAuthProvider ever mounts — carries the real Bearer token', async () => {
@@ -94,7 +99,7 @@ describe('ProductionSessionGate — real token-registration bridge (Blocker 1)',
       if (url.includes('/auth/me')) return Promise.resolve(jsonResponse(EFFECTIVE_PERMISSIONS_BODY));
       return Promise.reject(new Error(`Unexpected fetch to ${url}`));
     });
-    global.fetch = fetchMock as unknown as typeof fetch;
+    vi.stubGlobal('fetch', fetchMock);
 
     renderGate();
     await waitFor(() => expect(screen.getByText('Authenticated Workspace')).toBeInTheDocument());
@@ -128,7 +133,7 @@ describe('ProductionSessionGate — real token-registration bridge (Blocker 1)',
       if (url.includes('/auth/me')) return Promise.resolve(jsonResponse(EFFECTIVE_PERMISSIONS_BODY));
       return Promise.reject(new Error(`Unexpected fetch to ${url}`));
     });
-    global.fetch = fetchMock as unknown as typeof fetch;
+    vi.stubGlobal('fetch', fetchMock);
 
     renderGate();
     await waitFor(() => expect(screen.getByText('Authenticated Workspace')).toBeInTheDocument());
@@ -156,7 +161,7 @@ describe('ProductionSessionGate — real token-registration bridge (Blocker 1)',
       if (url.includes('/auth/me')) return Promise.resolve(jsonResponse(EFFECTIVE_PERMISSIONS_BODY));
       return Promise.reject(new Error(`Unexpected fetch to ${url}`));
     });
-    global.fetch = fetchMock as unknown as typeof fetch;
+    vi.stubGlobal('fetch', fetchMock);
 
     renderGate();
 

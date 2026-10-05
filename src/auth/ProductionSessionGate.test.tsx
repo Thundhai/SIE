@@ -63,6 +63,34 @@ function authenticatedOidcState(overrides: Partial<Record<string, unknown>> = {}
   };
 }
 
+const ORG_MEMBERSHIPS = {
+  memberships: [{ organization_id: 'org-1', organization_name: 'Org One', role: 'ORG_ADMIN' }],
+  is_platform_admin: false,
+};
+
+/** Manually-controlled promise — lets a test drive the exact
+ * loading -> settled transition instead of racing a `waitFor` against
+ * whichever microtask order a `mockResolvedValue`/`mockRejectedValue`
+ * happens to produce. Used below to prove there is exactly one
+ * authoritative `/auth/me` call driving the UI's transition, not two
+ * that could independently disagree. */
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  // Silences Node's unhandled-rejection warning for the window between
+  // this promise being created and the component under test actually
+  // awaiting it -- a harmless artifact of manually deferring resolution
+  // in a test, not a real unhandled rejection in production code (the
+  // component's own `await Promise.all(...)` still independently
+  // receives the same rejection through its own subscription).
+  promise.catch(() => {});
+  return { promise, resolve, reject };
+}
+
 describe('ProductionSessionGate', () => {
   afterEach(() => {
     // Explicit, not relying on @testing-library/react's auto-cleanup
@@ -125,15 +153,15 @@ describe('ProductionSessionGate', () => {
 
   it('renders the authenticated workspace once the session, organization, and permissions all resolve', async () => {
     mockUseOidcSession.mockReturnValue(authenticatedOidcState());
-    vi.mocked(listAuthOrganizations).mockResolvedValue({
-      memberships: [{ organization_id: 'org-1', organization_name: 'Org One', role: 'ORG_ADMIN' }],
-      is_platform_admin: false,
-    });
+    vi.mocked(listAuthOrganizations).mockResolvedValue(ORG_MEMBERSHIPS);
     vi.mocked(getEffectivePermissions).mockResolvedValue(EFFECTIVE_PERMISSIONS);
 
     renderGate();
 
     await waitFor(() => expect(screen.getByText('Authenticated Workspace')).toBeInTheDocument());
+    // Exactly one /auth/me call drives this render -- there is no
+    // second, independent probe that could have disagreed with it.
+    expect(getEffectivePermissions).toHaveBeenCalledTimes(1);
   });
 
   it('never renders the authenticated workspace before ProdAuthProvider itself reports isAuthenticated', async () => {
@@ -268,5 +296,63 @@ describe('ProductionSessionGate', () => {
     );
 
     await waitFor(() => expect(getAccessToken()).toBeNull());
+  });
+
+  // --- Blocker 2 hardening: ProdAuthProvider's own /auth/me call is the ---
+  // --- single authoritative source -- no second, independent probe that --
+  // --- could race against and disagree with it ----------------------------
+
+  it('race-proof scenario 1: loading -> resolved renders the workspace exactly once the one authoritative call settles', async () => {
+    const deferred = createDeferred<typeof EFFECTIVE_PERMISSIONS>();
+    mockUseOidcSession.mockReturnValue(authenticatedOidcState());
+    vi.mocked(listAuthOrganizations).mockResolvedValue(ORG_MEMBERSHIPS);
+    vi.mocked(getEffectivePermissions).mockReturnValue(deferred.promise);
+
+    renderGate();
+    await waitFor(() => expect(screen.getByRole('status')).toBeInTheDocument());
+    expect(screen.queryByText('Authenticated Workspace')).not.toBeInTheDocument();
+
+    deferred.resolve(EFFECTIVE_PERMISSIONS);
+
+    await waitFor(() => expect(screen.getByText('Authenticated Workspace')).toBeInTheDocument());
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(getEffectivePermissions).toHaveBeenCalledTimes(1);
+  });
+
+  it('race-proof scenario 2: loading -> 401 signs out and reaches /login, driven by the one authoritative call alone', async () => {
+    const deferred = createDeferred<never>();
+    const signOutLocally = vi.fn().mockResolvedValue(undefined);
+    mockUseOidcSession.mockReturnValue(authenticatedOidcState({ signOutLocally }));
+    vi.mocked(listAuthOrganizations).mockResolvedValue(ORG_MEMBERSHIPS);
+    vi.mocked(getEffectivePermissions).mockReturnValue(deferred.promise);
+
+    renderGate();
+    await waitFor(() => expect(screen.getByRole('status')).toBeInTheDocument());
+
+    deferred.reject(new ApiError('Unauthorized', { status: 401 }));
+
+    await waitFor(() => expect(screen.getByText('Login Page')).toBeInTheDocument());
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(signOutLocally).toHaveBeenCalledTimes(1);
+    expect(getEffectivePermissions).toHaveBeenCalledTimes(1);
+  });
+
+  it('race-proof scenario 3: loading -> 503 shows a deterministic error and never signs out, driven by the one authoritative call alone', async () => {
+    const deferred = createDeferred<never>();
+    const signOutLocally = vi.fn().mockResolvedValue(undefined);
+    mockUseOidcSession.mockReturnValue(authenticatedOidcState({ signOutLocally }));
+    vi.mocked(listAuthOrganizations).mockResolvedValue(ORG_MEMBERSHIPS);
+    vi.mocked(getEffectivePermissions).mockReturnValue(deferred.promise);
+
+    renderGate();
+    await waitFor(() => expect(screen.getByRole('status')).toBeInTheDocument());
+
+    deferred.reject(new ApiError('Service unavailable', { status: 503 }));
+
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Could not load your workspace'));
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.queryByText('Login Page')).not.toBeInTheDocument();
+    expect(signOutLocally).not.toHaveBeenCalled();
+    expect(getEffectivePermissions).toHaveBeenCalledTimes(1);
   });
 });
