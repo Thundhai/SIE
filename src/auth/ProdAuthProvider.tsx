@@ -1,8 +1,26 @@
 import { ReactNode, useEffect, useState } from 'react';
 import { getEffectivePermissions, listAuthOrganizations } from '../services/api/auth';
+import { ApiError } from '../services/api/errors';
 import { setAccessTokenGetter, type AccessTokenGetter } from './authToken';
 import { AuthContext } from './AuthContext';
 import type { AuthContextValue, AuthMembership } from './types';
+
+/**
+ * The authoritative outcome of this provider's own `/auth/me` +
+ * `/auth/organizations` resolution — SIE Milestone G3-1 blocker
+ * hardening. Deliberately NOT part of `AuthContextValue` (that stays
+ * exactly as every existing consumer already expects: `isAuthenticated`
+ * and nothing finer-grained) — this is an internal signal a *wrapper*
+ * around `ProdAuthProvider` can use to distinguish "still resolving"
+ * from "resolved" from "the backend said 401" from "the backend failed
+ * for some other reason", none of which `isAuthenticated: false` alone
+ * can tell apart. See `ProductionSessionGate.tsx` for the one consumer.
+ */
+export type ProdAuthBootstrapStatus =
+  | { status: 'resolving' }
+  | { status: 'resolved' }
+  | { status: 'unauthorized' }
+  | { status: 'error'; message: string };
 
 const NOT_AUTHENTICATED: AuthContextValue = {
   isAuthenticated: false,
@@ -52,10 +70,16 @@ const NOT_AUTHENTICATED: AuthContextValue = {
 export function ProdAuthProvider({
   getAccessToken,
   organizationId,
+  onBootstrapStatusChange,
   children,
 }: {
   getAccessToken: AccessTokenGetter;
   organizationId: string | null;
+  /** Optional — see `ProdAuthBootstrapStatus`'s own docstring. Existing
+   * callers that don't pass this (every test and usage predating this
+   * hardening) are completely unaffected: the public `AuthContextValue`
+   * this provider produces is unchanged either way. */
+  onBootstrapStatusChange?: (status: ProdAuthBootstrapStatus) => void;
   children: ReactNode;
 }) {
   const [value, setValue] = useState<AuthContextValue>(NOT_AUTHENTICATED);
@@ -74,6 +98,7 @@ export function ProdAuthProvider({
 
     let cancelled = false;
     const controller = new AbortController();
+    onBootstrapStatusChange?.({ status: 'resolving' });
 
     async function resolve() {
       try {
@@ -106,13 +131,26 @@ export function ProdAuthProvider({
           permissions: effectivePermissions.permissions,
           hasPermission: (permission) => permissionSet.has(permission),
         });
-      } catch {
+        onBootstrapStatusChange?.({ status: 'resolved' });
+      } catch (err) {
         // No real session, an expired/invalid token, a 401 from the
         // backend, or a network failure -- all resolve to the same
-        // clean "not authenticated" state (see this module's own
-        // docstring), never a raw application error.
+        // clean "not authenticated" AuthContextValue (see this module's
+        // own docstring), never a raw application error -- but the
+        // *authoritative* outcome (401 vs. any other failure) is still
+        // reported via onBootstrapStatusChange so a wrapper around this
+        // provider can act on it without a second /auth/me request of
+        // its own (SIE Milestone G3-1 blocker hardening).
         if (!cancelled) {
           setValue(NOT_AUTHENTICATED);
+          if (err instanceof ApiError && err.status === 401) {
+            onBootstrapStatusChange?.({ status: 'unauthorized' });
+          } else {
+            onBootstrapStatusChange?.({
+              status: 'error',
+              message: err instanceof ApiError ? err.message : 'Could not resolve your session.',
+            });
+          }
         }
       }
     }
@@ -122,7 +160,7 @@ export function ProdAuthProvider({
       cancelled = true;
       controller.abort();
     };
-  }, [getAccessToken, organizationId]);
+  }, [getAccessToken, organizationId, onBootstrapStatusChange]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

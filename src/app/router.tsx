@@ -11,6 +11,9 @@ import { RiskAssessmentsPage } from '../features/riskAssessments/RiskAssessments
 import { KnowledgePage } from '../features/knowledge/KnowledgePage';
 import { ReportsPage } from '../features/reports/ReportsPage';
 import { AdministrationPage } from '../features/administration/AdministrationPage';
+import { CallbackPage } from '../auth/CallbackPage';
+import { LoginPage } from '../auth/LoginPage';
+import { AuthGate } from '../auth/AuthGate';
 
 /**
  * URL-based routing — replaces the legacy `currentScreen: AppScreen`
@@ -23,11 +26,29 @@ import { AdministrationPage } from '../features/administration/AdministrationPag
  * Knowledge, Reports, and Administration are all real routes, each backed
  * by real backend data (never a fake/placeholder page — §9/§22). Any
  * unknown path redirects to Home rather than 404ing.
+ *
+ * **`/login` and `/callback` (SIE Milestone G3-1).** The only two public
+ * routes — reachable with no session at all, in either auth mode. Every
+ * other route is nested under `<AuthGate>`, which in dev mode is exactly
+ * today's unchanged `<DevAuthProvider>`, and in production is
+ * `<ProductionSessionGate>` (redirect-to-`/login` + organization
+ * resolution + `<ProdAuthProvider>` — see that component's own
+ * docstring). This milestone deliberately does not add permission-based
+ * routing here (that's G3-2) — only the authenticated/unauthenticated
+ * boundary.
  */
 export function AppRoutes() {
   return (
     <Routes>
-      <Route element={<AppShell />}>
+      <Route path="login" element={<LoginPage />} />
+      <Route path="callback" element={<CallbackPage />} />
+      <Route
+        element={
+          <AuthGate>
+            <AppShell />
+          </AuthGate>
+        }
+      >
         <Route index element={<HomePage />} />
         <Route path="events" element={<EventsPage />} />
         <Route path="events/:eventId" element={<EventDetailPage />} />

@@ -161,14 +161,28 @@ documented there as non-production.
   every real enforcement is still the backend's own 403 response,
   whether or not a screen also checks this first.
 
-**`ProdAuthProvider.tsx` (SIE Milestone 20) now exists** and implements
-the exact same `AuthContextValue` interface, backed by the real
-production authentication boundary (`docs/PRODUCTION_AUTH.md`). It is
-not wired into `App.tsx` by default — that still requires a concrete
-token source (a real login flow for whichever provider a deployment
-picks), which is explicitly out of this milestone's scope — but swapping
-it in touches exactly one file (`app/App.tsx`, which provider wraps the
-router) and zero screens, exactly as designed.
+**`ProdAuthProvider.tsx` is now actually wired in (SIE Milestone G3-1:
+Login & Production Session)**, implementing the exact same
+`AuthContextValue` interface, backed by the real production
+authentication boundary — see `docs/PRODUCTION_AUTH.md` for the full
+flow. `src/auth/AuthGate.tsx` (dispatched from `router.tsx`, not
+`App.tsx` — `/login`/`/callback` must render outside either provider)
+picks `DevAuthProvider` vs `ProductionSessionGate` (which resolves an
+OIDC session + active organization before mounting `ProdAuthProvider`
+itself) based on `authMode.ts`'s build-mode switch. Zero screens needed
+to change to support this — exactly as the milestone this paragraph
+previously described as a "later" step had designed for.
+
+New in this milestone: `src/auth/oidcConfig.ts` (`VITE_OIDC_*`
+configuration), `oidcSession.ts` (the `oidc-client-ts`-backed
+`UserManager` + `useOidcSession()` hook), `LoginPage.tsx`,
+`CallbackPage.tsx`, `ProductionSessionGate.tsx` (the session-state
+machine: loading / unauthenticated / error / organization-setup-required
+/ ready), `organizationResolution.ts` (the deterministic initial-org
+pick — not the full organization switcher, which is G3-3), and
+`authMode.ts` (the one `import.meta.env.MODE`-keyed switch — see that
+module's own docstring for why dev identity cannot activate in a
+production build regardless of which environment variables are set).
 
 ## 4. API layer
 
@@ -178,9 +192,14 @@ router) and zero screens, exactly as designed.
   `http://localhost:8000/api/v1` for local development only.
 - `client.ts` — `apiRequest<T>()`, the only place `fetch` is called from.
   Attaches `X-Client-Request-Id` (echoed by the backend's
-  `RequestIdMiddleware`) and the dev-identity header when configured;
-  normalizes every failure (HTTP error status OR a network-level
-  failure — offline, DNS, **CORS**, see §7) into one `ApiError` type.
+  `RequestIdMiddleware`), a production Bearer token when one is
+  registered (`auth/authToken.ts`), else the dev-identity header when
+  configured *and* the build's own auth mode is `'dev'` (SIE Milestone
+  G3-1 — see `auth/authMode.ts`/`auth/devIdentity.ts`; never both,
+  never the dev header in a production build regardless of what
+  environment variables are set); normalizes every failure (HTTP error
+  status OR a network-level failure — offline, DNS, **CORS**, see §7)
+  into one `ApiError` type.
 - `errors.ts` — `ApiError`, parsed from the backend's own standardized
   error contract (`backend/app/core/errors.py`:
   `{ detail, error: { code, message, request_id } }`).
