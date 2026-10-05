@@ -97,6 +97,17 @@ export function OrganizationSwitchProvider({ children }: { children: ReactNode }
   const [override, setOverride] = useState<AuthContextValue | null>(null);
   const [switchState, setSwitchState] = useState<InternalSwitchState>({ status: 'idle' });
   const inFlight = useRef<AbortController | null>(null);
+  // The ACTUAL single-flight guarantee -- a plain ref, not `switchState`
+  // (see this component's own module-level note on why React state is
+  // not a synchronous lock: two `switchOrganization()` calls issued in
+  // the same tick can both observe `switchState.status === 'idle'`
+  // before either state update commits, since React batches/defers
+  // that commit past the current synchronous execution). A ref's
+  // read/write is immediate and synchronous, so the very next call
+  // -- even one issued microseconds later in the same tick, before any
+  // `await` has yielded control back to the event loop -- sees this
+  // flip the instant the first call sets it, not after a render.
+  const switchInFlightRef = useRef(false);
   // Which base-provider organization id this override was computed
   // relative to -- if the base provider ever resolves a *different*
   // organization than this (a fresh sign-in after a session ended, most
@@ -132,9 +143,11 @@ export function OrganizationSwitchProvider({ children }: { children: ReactNode }
     async (organizationId: string) => {
       // One switch in flight at a time -- prevents rapid repeated
       // switching from ever leaving the context inconsistent (the task's
-      // own explicit requirement). A caller-side disabled control is the
-      // first line of defense; this is the actual guarantee.
-      if (switchState.status === 'switching') {
+      // own explicit requirement). This ref check is the real guarantee
+      // (see `switchInFlightRef`'s own comment on why `switchState`
+      // cannot be); a caller-side disabled control is only the UI's own
+      // first line of defense on top of it, never a substitute for it.
+      if (switchInFlightRef.current) {
         return;
       }
 
@@ -152,7 +165,14 @@ export function OrganizationSwitchProvider({ children }: { children: ReactNode }
         return;
       }
 
-      inFlight.current?.abort();
+      // Everything above this line is synchronous (no `await` yet), so
+      // a second call arriving in the same tick -- even one issued
+      // immediately after this one, before any microtask has run --
+      // still observes `switchInFlightRef.current` exactly as this
+      // line is about to leave it: `false` up to here, `true` from this
+      // statement onward. There is no window in which two calls can
+      // both pass the guard above.
+      switchInFlightRef.current = true;
       const controller = new AbortController();
       inFlight.current = controller;
       setSwitchState({ status: 'switching', organizationId });
@@ -201,9 +221,16 @@ export function OrganizationSwitchProvider({ children }: { children: ReactNode }
               ? 'You do not have access to that organization.'
               : 'Could not switch organizations. Please try again.',
         });
+      } finally {
+        // Releases the lock only once this attempt is fully settled
+        // (success, 401, 403, or any other failure) -- a second switch
+        // is only ever accepted after this one has genuinely finished,
+        // never merely after React has re-rendered.
+        switchInFlightRef.current = false;
+        inFlight.current = null;
       }
     },
-    [base, baseOrgId, activeOrganizationId, switchState.status],
+    [base, baseOrgId, activeOrganizationId],
   );
 
   const value = override ?? base;

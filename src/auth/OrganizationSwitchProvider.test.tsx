@@ -28,6 +28,7 @@ const MULTI_ORG_BASE: AuthContextValue = {
   memberships: [
     { organizationId: 'org-a', organizationName: 'Org A', role: 'ORG_ADMIN' },
     { organizationId: 'org-b', organizationName: 'Org B', role: 'VIEWER' },
+    { organizationId: 'org-c', organizationName: 'Org C', role: 'VIEWER' },
   ],
   permissions: ['safety_data:read', 'safety_data:manage'],
   hasPermission: (p) => ['safety_data:read', 'safety_data:manage'].includes(p),
@@ -267,6 +268,71 @@ describe('OrganizationSwitchProvider — one authoritative active-organization s
         await deferred.promise;
       });
       await waitFor(() => expect(screen.getByTestId('org-id')).toHaveTextContent('org-b'));
+    });
+
+    it('CONCURRENCY: two switchOrganization() calls issued in the same tick, before any React state commits, still only let the first one through', async () => {
+      // Deliberately does NOT go through userEvent -- a click handler's
+      // own dispatch already has scheduling between the two events that
+      // would hide the exact bug this test exists to catch (two calls
+      // genuinely interleaved before `switchState` has had a chance to
+      // commit "switching"). Capturing `switchOrganization` itself and
+      // calling it twice back to back, synchronously, with no `await`
+      // between the two calls, is the only way to reproduce that.
+      const switchRef: { current: ((organizationId: string) => Promise<void>) | null } = { current: null };
+      function CaptureSwitch() {
+        const { switchOrganization } = useOrganizationSwitch();
+        switchRef.current = switchOrganization;
+        return null;
+      }
+
+      const deferredB = createDeferred<ReturnType<typeof effectivePermissionsFor>>();
+      const deferredC = createDeferred<ReturnType<typeof effectivePermissionsFor>>();
+      mockGetEffectivePermissions.mockImplementation((organizationId: string) =>
+        organizationId === 'org-b' ? deferredB.promise : deferredC.promise,
+      );
+
+      render(
+        <AuthContext.Provider value={MULTI_ORG_BASE}>
+          <OrganizationSwitchProvider>
+            <Probe />
+            <CaptureSwitch />
+          </OrganizationSwitchProvider>
+        </AuthContext.Provider>,
+      );
+
+      let first!: Promise<void>;
+      let second!: Promise<void>;
+      act(() => {
+        // Same synchronous tick, no `await` between these two calls --
+        // exactly the scenario a React-state-only guard cannot defend
+        // against (both would observe `switchState.status === 'idle'`),
+        // and exactly what the synchronous `switchInFlightRef` guard
+        // must defend against instead.
+        first = switchRef.current!('org-b');
+        second = switchRef.current!('org-c');
+      });
+
+      // Only the first call's request was ever made -- the second was
+      // rejected before it could reach the API at all.
+      expect(mockGetEffectivePermissions).toHaveBeenCalledTimes(1);
+      expect(mockGetEffectivePermissions).toHaveBeenCalledWith('org-b', expect.anything());
+
+      await act(async () => {
+        deferredB.resolve(effectivePermissionsFor('org-b', 'Org B', ['safety_data:read']));
+        await first;
+        await second;
+      });
+
+      // The eventual active organization is the first accepted target,
+      // never the second (which was ignored, not queued) -- and the
+      // override is the real, single, consistent one the first call's
+      // own backend response produced, not a hybrid of the two.
+      expect(screen.getByTestId('org-id')).toHaveTextContent('org-b');
+      expect(screen.getByTestId('permissions')).toHaveTextContent('safety_data:read');
+      expect(screen.getByTestId('switch-state')).toHaveTextContent('idle');
+      // deferredC's own promise is simply left unsettled forever (the
+      // second call returned before ever awaiting it) -- confirmed by
+      // the single call count above, not by resolving it.
     });
 
     it('selecting the already-active organization is a no-op (no request, no state change)', async () => {
