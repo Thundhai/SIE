@@ -183,4 +183,90 @@ describe('ProductionSessionGate', () => {
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Service unavailable'));
     expect(screen.queryByText('Login Page')).not.toBeInTheDocument();
   });
+
+  // --- Blocker 2 regressions: a /auth/me failure must never look like ---
+  // --- "still loading" forever -----------------------------------------
+
+  it('(C, D) a 401 from /auth/me signs out locally and redirects to /login, never leaving an indefinite loading state', async () => {
+    const signOutLocally = vi.fn().mockResolvedValue(undefined);
+    mockUseOidcSession.mockReturnValue(authenticatedOidcState({ signOutLocally }));
+    vi.mocked(listAuthOrganizations).mockResolvedValue({
+      memberships: [{ organization_id: 'org-1', organization_name: 'Org One', role: 'ORG_ADMIN' }],
+      is_platform_admin: false,
+    });
+    // The organizations probe succeeded (token was valid a moment ago),
+    // but /auth/me itself now 401s -- e.g. the token expired in the
+    // narrow window between the two calls.
+    vi.mocked(getEffectivePermissions).mockRejectedValue(new ApiError('Unauthorized', { status: 401 }));
+
+    renderGate();
+
+    await waitFor(() => expect(screen.getByText('Login Page')).toBeInTheDocument());
+    expect(signOutLocally).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  it('(E) a 503 from /auth/me produces a deterministic error state, distinct from "still loading" and from the 401 case', async () => {
+    const signOutLocally = vi.fn().mockResolvedValue(undefined);
+    mockUseOidcSession.mockReturnValue(authenticatedOidcState({ signOutLocally }));
+    vi.mocked(listAuthOrganizations).mockResolvedValue({
+      memberships: [{ organization_id: 'org-1', organization_name: 'Org One', role: 'ORG_ADMIN' }],
+      is_platform_admin: false,
+    });
+    vi.mocked(getEffectivePermissions).mockRejectedValue(new ApiError('Service unavailable', { status: 503 }));
+
+    renderGate();
+
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Could not load your workspace'));
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.queryByText('Login Page')).not.toBeInTheDocument();
+    // A non-auth failure must not be treated as a session expiration.
+    expect(signOutLocally).not.toHaveBeenCalled();
+  });
+
+  // --- Blocker 1 regression: logout must actually clear the registered ---
+  // --- token, not merely the UI's own belief about auth state -----------
+
+  it('(F) signing out clears the registered token getter, not only the rendered auth state', async () => {
+    const { getAccessToken } = await import('./authToken');
+    mockUseOidcSession.mockReturnValue(authenticatedOidcState());
+    vi.mocked(listAuthOrganizations).mockResolvedValue({
+      memberships: [{ organization_id: 'org-1', organization_name: 'Org One', role: 'ORG_ADMIN' }],
+      is_platform_admin: false,
+    });
+    vi.mocked(getEffectivePermissions).mockResolvedValue(EFFECTIVE_PERMISSIONS);
+
+    const { rerender } = renderGate();
+    await waitFor(() => expect(screen.getByText('Authenticated Workspace')).toBeInTheDocument());
+    expect(getAccessToken()).toBe('tok-1');
+
+    // Simulate what the OIDC hook reports once signOutLocally() has
+    // actually fired its userUnloaded event -- the exact transition
+    // Header.tsx's "Sign out" button triggers in the real app.
+    mockUseOidcSession.mockReturnValue({
+      status: 'unauthenticated',
+      user: null,
+      error: null,
+      signIn: vi.fn(),
+      signOutLocally: vi.fn(),
+      getAccessTokenLive: () => null,
+    });
+    rerender(
+      <MemoryRouter initialEntries={['/']}>
+        <Routes>
+          <Route
+            path="/"
+            element={
+              <ProductionSessionGate>
+                <Workspace />
+              </ProductionSessionGate>
+            }
+          />
+          <Route path="/login" element={<div>Login Page</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await waitFor(() => expect(getAccessToken()).toBeNull());
+  });
 });
