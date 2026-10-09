@@ -36,12 +36,14 @@ class FakeUserManager {
 }
 
 let fakeManager: FakeUserManager;
+let lastUserManagerSettings: Record<string, unknown> | undefined;
 
 vi.mock('oidc-client-ts', () => ({
   // A constructor function (not an arrow function, which `new` cannot
   // invoke) that always returns the current `fakeManager` instance,
   // reassigned fresh in `beforeEach` below.
-  UserManager: vi.fn(function UserManager() {
+  UserManager: vi.fn(function UserManager(settings: Record<string, unknown>) {
+    lastUserManagerSettings = settings;
     return fakeManager;
   }),
   WebStorageStateStore: vi.fn(),
@@ -57,6 +59,7 @@ function configureOidcProvider() {
 describe('useOidcSession', () => {
   beforeEach(() => {
     fakeManager = new FakeUserManager();
+    lastUserManagerSettings = undefined;
     resetOidcUserManagerForTests();
   });
 
@@ -152,5 +155,26 @@ describe('useOidcSession', () => {
     expect(fakeManager.removeUser).toHaveBeenCalledTimes(1);
     await waitFor(() => expect(result.current.status).toBe('unauthenticated'));
     expect(result.current.getAccessTokenLive()).toBeNull();
+  });
+
+  it('omits extraQueryParams entirely when no VITE_OIDC_AUDIENCE is configured', async () => {
+    configureOidcProvider();
+    fakeManager.getUser.mockResolvedValue(null);
+
+    renderHook(() => useOidcSession());
+    await waitFor(() => expect(lastUserManagerSettings).toBeDefined());
+
+    expect(lastUserManagerSettings?.extraQueryParams).toBeUndefined();
+  });
+
+  it('forwards VITE_OIDC_AUDIENCE as the authorize request\'s audience param', async () => {
+    configureOidcProvider();
+    vi.stubEnv('VITE_OIDC_AUDIENCE', 'https://sie-api');
+    fakeManager.getUser.mockResolvedValue(null);
+
+    renderHook(() => useOidcSession());
+    await waitFor(() => expect(lastUserManagerSettings).toBeDefined());
+
+    expect(lastUserManagerSettings?.extraQueryParams).toEqual({ audience: 'https://sie-api' });
   });
 });

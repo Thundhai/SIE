@@ -78,6 +78,13 @@ export function getOidcUserManager(): UserManager | null {
     // docstring.
     userStore: new WebStorageStateStore({ store: window.sessionStorage }),
     stateStore: new WebStorageStateStore({ store: window.sessionStorage }),
+    // Forwarded to both the interactive authorize request and every
+    // automatic silent renew (oidc-client-ts applies extraQueryParams to
+    // both) -- only when configured (see oidcConfig.ts's own docstring
+    // on why this is optional). Omitted entirely rather than sent as
+    // `audience: undefined` so a provider that never asked for one never
+    // sees the parameter at all.
+    ...(config.audience ? { extraQueryParams: { audience: config.audience } } : {}),
   };
 
   cachedUserManager = new UserManager(settings);

@@ -49,6 +49,15 @@ export interface OidcConfig {
    * backend's own authorization (role/permission) is entirely separate
    * from what this token's scopes request. */
   scope: string;
+  /** Optional API identifier requested as the `audience` parameter on
+   * the authorization request. Unset by default: a provider that issues
+   * a JWT access token without one (rather than an opaque token) needs
+   * no audience at all. Set this only when the backend's own
+   * `OIDC_AUDIENCE` (`backend/app/core/config.py`) requires the access
+   * token to carry a matching `aud` claim — the two must agree, or the
+   * backend's verifier rejects every token regardless of how this SPA
+   * authenticated. */
+  audience?: string;
 }
 
 const DEFAULT_SCOPE = 'openid profile email';
@@ -73,5 +82,6 @@ export function getOidcConfig(): OidcConfig | null {
     clientId,
     redirectUri,
     scope: (import.meta.env.VITE_OIDC_SCOPE as string | undefined) || DEFAULT_SCOPE,
+    audience: (import.meta.env.VITE_OIDC_AUDIENCE as string | undefined) || undefined,
   };
 }
