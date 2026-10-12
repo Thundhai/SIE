@@ -40,6 +40,24 @@ interface APIIntegrationsViewProps {
   onNavigateToCanonicalModel?: () => void;
 }
 
+/**
+ * Safely embeds `value` as a single POSIX-shell single-quoted argument.
+ *
+ * Replacing `'` with `\'` (as this file previously did) does not escape
+ * anything inside single quotes -- backslash has no special meaning there,
+ * so `\'` ends the quoted string early and leaves the remainder as
+ * unquoted, literal shell syntax. The only correct way to embed a single
+ * quote inside a single-quoted argument is to close the quote, emit an
+ * escaped literal quote outside it, then reopen the quote: `'\''`.
+ *
+ * `requestBody` (the only caller of this function) is user-editable via
+ * the Request Payload textarea, so it's the one tainted value this
+ * generated "Copy cURL" example embeds.
+ */
+function shellQuoteSingle(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
 export const APIIntegrationsView: React.FC<APIIntegrationsViewProps> = ({ onNavigateToCanonicalModel }) => {
   const [endpoints] = useState<ApiEndpoint[]>(API_ENDPOINTS);
   const [selectedEndpoint, setSelectedEndpoint] = useState<ApiEndpoint>(API_ENDPOINTS[0]);
@@ -610,7 +628,7 @@ export const APIIntegrationsView: React.FC<APIIntegrationsViewProps> = ({ onNavi
                 curl -X {selectedEndpoint.method} "https://api.safelytic.com{selectedEndpoint.path}" -H "Authorization: Bearer YOUR_API_KEY_NOT_CONFIGURED"
               </span>
               <button 
-                onClick={() => handleCopyCode(`curl -X ${selectedEndpoint.method} "https://api.safelytic.com${selectedEndpoint.path}" \\\n  -H "Authorization: Bearer YOUR_API_KEY_NOT_CONFIGURED" \\\n  -H "Content-Type: application/json" \\\n  -d '${requestBody.replace(/'/g, "\\'")}'`)}
+                onClick={() => handleCopyCode(`curl -X ${selectedEndpoint.method} "https://api.safelytic.com${selectedEndpoint.path}" \\\n  -H "Authorization: Bearer YOUR_API_KEY_NOT_CONFIGURED" \\\n  -H "Content-Type: application/json" \\\n  -d ${shellQuoteSingle(requestBody)}`)}
                 className="text-cyan-400 hover:text-cyan-300 shrink-0 font-sans text-xs underline"
               >
                 Copy cURL
