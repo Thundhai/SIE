@@ -1721,7 +1721,7 @@ export const OUTCOME_LEARNING_CASES: OutcomeLearningRecord[] = [
 export const GOVERNANCE_LOGS: GovernanceLog[] = [
   { id: 'GOV-8901', timestamp: '2026-08-31 07:12:00', actor: 'System (SIE Pipeline)', event: 'Zero-Knowledge Tenant Isolation Check', resource: 'Tenant ORG-ENG-4921-NG', securityDomain: 'Tenant Isolation', status: 'Success' },
   { id: 'GOV-8902', timestamp: '2026-08-31 06:45:22', actor: 'Dr. Alistair Vance (HSE Director)', event: 'Approved Verified Knowledge Source: HSE UK LOLER', resource: 'KNOW-001', securityDomain: 'Source Governance', status: 'Audited' },
-  { id: 'GOV-8903', timestamp: '2026-08-31 05:30:11', actor: 'API Gateway (Key: sie_live_...48)', event: 'ERP Work Order Ingestion (89 records)', resource: 'SAP Bridge', securityDomain: 'Data Access', status: 'Success' },
+  { id: 'GOV-8903', timestamp: '2026-08-31 05:30:11', actor: 'API Gateway (Key: YOUR_API_KEY_NOT_CONFIGURED)', event: 'ERP Work Order Ingestion (89 records)', resource: 'SAP Bridge', securityDomain: 'Data Access', status: 'Success' },
   { id: 'GOV-8904', timestamp: '2026-08-31 04:15:08', actor: 'System (Security Daemon)', event: 'AES-256 GCM Rest Encryption Verification', resource: 'All Firestore & Blob Stores', securityDomain: 'Encryption', status: 'Protected' },
   { id: 'GOV-8905', timestamp: '2026-08-30 22:10:44', actor: 'System (AI Boundary Guard)', event: 'Outbound AI Payload Sanitization (Zero PII leak)', resource: 'Inference Gateway', securityDomain: 'External AI Access', status: 'Protected' }
 ];
