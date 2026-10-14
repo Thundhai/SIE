@@ -14,8 +14,12 @@ vi.mock('../actions/useActionRepository', () => ({
     isFixtureBacked: false,
   }),
 }));
+vi.mock('../../services/api/events', () => ({
+  listEvents: vi.fn().mockResolvedValue({ items: [], total: 0, page: 1, page_size: 10 }),
+}));
 
 import { createOutcome, type IntelligenceOutcome } from '../../services/api/outcomes';
+import { listEvents } from '../../services/api/events';
 
 function makeDecision(overrides: Partial<IntelligenceDecision> = {}): IntelligenceDecision {
   return {
@@ -78,6 +82,8 @@ function renderDrawer(decision: IntelligenceDecision | null = makeDecision(), on
 
 beforeEach(() => {
   vi.mocked(createOutcome).mockReset();
+  vi.mocked(listEvents).mockReset();
+  vi.mocked(listEvents).mockResolvedValue({ items: [], total: 0, page: 1, page_size: 10 });
 });
 
 // --- 1/2. Decision context is displayed, distinct from the outcome form -------------------------
@@ -128,6 +134,12 @@ it('submits the real backend fields against the decision being reviewed, nothing
         organizationId: 'org-1',
         input: expect.objectContaining({
           decisionId: 'dec-1',
+          // The decision being reviewed is site-scoped (site-1) — the
+          // outcome must carry that same site forward by default so it
+          // isn't silently recorded as organization-wide (the backend
+          // persists whatever site_id is sent, independently of the
+          // decision; it never derives it itself).
+          siteId: 'site-1',
           classification: 'EFFECTIVE',
           summary: 'Follow-up inspection confirmed compliance.',
           outcomeAt: expect.any(String),
@@ -137,6 +149,51 @@ it('submits the real backend fields against the decision being reviewed, nothing
     ),
   );
   await waitFor(() => expect(onRecorded).toHaveBeenCalledWith(expect.objectContaining({ id: 'outcome-1' })));
+});
+
+// --- 8. Evidence events can be searched for and attached, required for later verification --------
+
+it('lets the recorder attach evidence events, required for this outcome to ever reach Verified', async () => {
+  vi.mocked(listEvents).mockResolvedValue({
+    items: [
+      {
+        id: 'evt-followup-1',
+        event_time: '2026-06-04T00:00:00Z',
+        event_type: 'INSPECTION',
+        event_subtype: null,
+        site_id: 'site-1',
+        site_name: 'North Yard',
+        status: null,
+        severity: null,
+        source_system: 'manual',
+        source_record_id: 'rec-1',
+        data_quality_status: 'CLEAN',
+      },
+    ],
+    total: 1,
+    page: 1,
+    page_size: 10,
+  });
+  vi.mocked(createOutcome).mockResolvedValue(makeOutcome());
+  renderDrawer(makeDecision());
+  const dialog = await screen.findByRole('dialog');
+
+  await userEvent.selectOptions(within(dialog).getByLabelText('Classification'), 'EFFECTIVE');
+  await userEvent.type(within(dialog).getByLabelText('Summary'), 'Follow-up inspection confirmed compliance.');
+  await userEvent.type(within(dialog).getByLabelText('Search events', { selector: 'input' }), 'inspection');
+
+  await waitFor(() => expect(listEvents).toHaveBeenCalledWith(expect.objectContaining({ siteId: 'site-1', search: 'inspection' })));
+  await userEvent.click(await within(dialog).findByRole('button', { name: 'Add' }));
+  expect(within(dialog).getByText(/Inspection/)).toBeInTheDocument();
+
+  await userEvent.click(within(dialog).getByRole('button', { name: 'Record outcome' }));
+
+  await waitFor(() =>
+    expect(createOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({ input: expect.objectContaining({ evidenceEventIds: ['evt-followup-1'] }) }),
+      expect.any(String),
+    ),
+  );
 });
 
 // --- 5. Successful submission updates the UI --------------------------------------------------
