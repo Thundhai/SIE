@@ -110,14 +110,17 @@ function makeAttentionItem(overrides: Partial<AttentionItem> = {}): AttentionIte
   };
 }
 
-function makeAttentionResult(items: AttentionItem[] = [makeAttentionItem()]): AttentionResult {
+function makeAttentionResult(
+  items: AttentionItem[] = [makeAttentionItem()],
+  category_status: AttentionResult['category_status'] = [],
+): AttentionResult {
   return {
     scope: 'organization',
     organization_id: 'org-1',
     entity_id: null,
     as_of: { as_of: '2026-06-01T00:00:00Z', generated_at: '2026-06-01T00:05:00Z', window_days: 90 },
     items,
-    category_status: [],
+    category_status,
   };
 }
 
@@ -280,6 +283,39 @@ describe('IntelligencePage', () => {
       renderPage();
 
       await waitFor(() => expect(screen.getByText('Nothing needs attention right now')).toBeInTheDocument());
+    });
+
+    it('does not present an empty attention list as a clean result when categories were unavailable or not evaluated', async () => {
+      vi.mocked(getEnterpriseIntelligence).mockResolvedValue(baseIntelligence());
+      vi.mocked(getAttention).mockResolvedValue(
+        makeAttentionResult([], [
+          { category: 'PREDICTIVE_RISK', status: 'UNAVAILABLE', reason: 'Insufficient site history.', item_count: 0 },
+          { category: 'EVIDENCE_GAP', status: 'NOT_EVALUATED', reason: null, item_count: 0 },
+        ]),
+      );
+      renderPage();
+
+      await waitFor(() => expect(screen.getByText('Partial attention evaluation')).toBeInTheDocument());
+      expect(screen.getByText(/No attention items from the categories that were evaluated/)).toBeInTheDocument();
+      expect(screen.getByText(/Insufficient site history/)).toBeInTheDocument();
+      expect(screen.getByText(/not evaluated/)).toBeInTheDocument();
+      expect(screen.queryByText('Nothing needs attention right now')).not.toBeInTheDocument();
+    });
+
+    it('explains site-choice failures and offers a retry without hiding organization-wide attention', async () => {
+      vi.mocked(getEnterpriseIntelligence).mockResolvedValue(baseIntelligence());
+      vi.mocked(listSites).mockRejectedValueOnce(new ApiError('Site list unavailable.', { status: 0 }));
+      vi.mocked(getAttention).mockResolvedValue(makeAttentionResult());
+      renderPage();
+
+      await waitFor(() => expect(screen.getByText('Could not load site choices')).toBeInTheDocument());
+      expect(screen.getByText('Site list unavailable.')).toBeInTheDocument();
+      expect(screen.getByText('Vehicle incidents above baseline')).toBeInTheDocument();
+
+      vi.mocked(listSites).mockResolvedValueOnce([]);
+      await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
+      await waitFor(() => expect(screen.queryByText('Could not load site choices')).not.toBeInTheDocument());
+      expect(screen.getByText('Vehicle incidents above baseline')).toBeInTheDocument();
     });
 
     it('shows an error state with a working retry on a genuine failure, independent of the enterprise-intelligence lane', async () => {
