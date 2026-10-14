@@ -48,6 +48,37 @@ const DETAIL_TABS = [
   { value: 'associations', label: 'Associations' },
 ];
 
+/** Backend's own max `page_size` for `/intelligence/decisions` and
+ * `/intelligence/outcomes` (`Query(..., le=200)`). */
+const ANNOTATION_LOOKUP_PAGE_SIZE = 200;
+/** Safety cap, not a real-world expectation — 25 * 200 = 5,000 records
+ * is already far beyond what an "already decided" / "has an outcome"
+ * annotation lookup needs; this just bounds worst-case request count
+ * rather than looping forever against a runaway `total`. */
+const ANNOTATION_LOOKUP_MAX_PAGES = 25;
+
+/** Fetches every page of a paginated list endpoint and concatenates the
+ * items, so a correlation lookup (by `attention_reference` or
+ * `decision_id`) built from the result is never silently missing
+ * anything past the first page — the bug this exists to prevent: an
+ * attention item's most recent decision/outcome being older than the
+ * newest `page_size` records org-wide, so its annotation is dropped. */
+async function fetchAllPages<T>(
+  fetchPage: (page: number, pageSize: number, signal?: AbortSignal) => Promise<{ items: T[]; total: number }>,
+  signal?: AbortSignal,
+): Promise<T[]> {
+  const items: T[] = [];
+  let page = 1;
+  while (page <= ANNOTATION_LOOKUP_MAX_PAGES) {
+    if (signal?.aborted) break;
+    const result = await fetchPage(page, ANNOTATION_LOOKUP_PAGE_SIZE, signal);
+    items.push(...result.items);
+    if (result.items.length === 0 || items.length >= result.total) break;
+    page += 1;
+  }
+  return items;
+}
+
 /**
  * Intelligence — SIE Milestone 42's primary intelligence workspace.
  * Follows the information hierarchy the milestone spec requires:
@@ -135,8 +166,11 @@ export function IntelligencePage() {
     if (!auth.organization) return;
     const controller = new AbortController();
     setDecisionsState({ status: 'loading' });
-    listDecisions({ organizationId: auth.organization.id, pageSize: 100 }, controller.signal)
-      .then((result) => setDecisionsState({ status: 'success', data: result.items }))
+    fetchAllPages(
+      (page, pageSize, signal) => listDecisions({ organizationId: auth.organization!.id, page, pageSize }, signal),
+      controller.signal,
+    )
+      .then((items) => setDecisionsState({ status: 'success', data: items }))
       .catch((error: unknown) => {
         if (controller.signal.aborted) return;
         setDecisionsState({ status: 'error', message: error instanceof Error ? error.message : 'Could not load decisions.' });
@@ -167,8 +201,11 @@ export function IntelligencePage() {
     if (!auth.organization) return;
     const controller = new AbortController();
     setOutcomesState({ status: 'loading' });
-    listOutcomes({ organizationId: auth.organization.id, pageSize: 100 }, controller.signal)
-      .then((result) => setOutcomesState({ status: 'success', data: result.items }))
+    fetchAllPages(
+      (page, pageSize, signal) => listOutcomes({ organizationId: auth.organization!.id, page, pageSize }, signal),
+      controller.signal,
+    )
+      .then((items) => setOutcomesState({ status: 'success', data: items }))
       .catch((error: unknown) => {
         if (controller.signal.aborted) return;
         setOutcomesState({ status: 'error', message: error instanceof Error ? error.message : 'Could not load outcomes.' });
