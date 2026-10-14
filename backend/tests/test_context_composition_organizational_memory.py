@@ -120,7 +120,9 @@ def _make_decision(db_session, org_id, *, anchor=AS_OF):
     return decision
 
 
-def _make_accepted_memory(db_session, org_id, decision_id, *, site_id=None, memory_created_at=None, event_anchor=AS_OF):
+def _make_accepted_memory(
+    db_session, org_id, decision_id, *, site_id=None, memory_created_at=None, event_anchor=AS_OF, evidence_event=None
+):
     """Full chain: outcome (optionally site-scoped) -> VERIFIED
     verification -> eligible candidate -> ACCEPTED governance ->
     OrganizationalMemory. Mirrors `tests/test_memory_integration_
@@ -129,24 +131,27 @@ def _make_accepted_memory(db_session, org_id, decision_id, *, site_id=None, memo
 
     `event_anchor` (defaults to the module's own fixed `AS_OF`, so every
     pre-existing caller below is unaffected) is the time base for the
-    one `SafetyEvent` this chain creates as its evidence (`good_event`)
-    and for `outcome_at`/`verified_at`. It exists because this event
-    lands in the same `safety_events` table the enterprise-intelligence
-    association window (`_available_periods()`) scans for this
-    organization's *earliest* event -- a caller comparing two
-    `compose_field_intelligence_context()` calls at a real, moving
-    `anchor = datetime.now(timezone.utc)` (as the two "existing
-    categories are byte-identical" tests below do, deliberately using
-    the same `as_of` for both calls) must pass that same `anchor` here
-    too. Otherwise this chain's evidence event stays pinned to the
-    fixed `AS_OF` while the rest of the fixture moves with real time;
-    the gap between them grows by one calendar day every day this
-    suite runs, and once it crosses a `window_days` (30) boundary the
-    "after" call alone gains enough history for a real association
-    window the "before" call never had -- breaking the invariant these
-    tests exist to prove, for a reason that has nothing to do with
-    organizational memory."""
-    good_event = _make_event(
+    one `SafetyEvent` this chain creates as its evidence (`good_event`,
+    only when `evidence_event` is not supplied -- see below) and for
+    `outcome_at`/`verified_at`.
+
+    `evidence_event`, when given, is used as this chain's evidence
+    event instead of creating a new one. A caller comparing two
+    `compose_field_intelligence_context()` calls (as the two "existing
+    categories are byte-identical" tests below do) must create that
+    evidence event itself, *before* its first snapshot, and pass it in
+    here -- otherwise this chain would create a brand-new `SafetyEvent`
+    strictly between the two snapshots being compared, so it would
+    exist for the second call but not the first. That event lands in
+    the same `safety_events` table both the enterprise-association
+    window (`_available_periods()`, which scans this org's *earliest*
+    event) and `observed.event_count` (a *recent* window) read, so its
+    mere existence on only one side of the comparison is enough to
+    change either reading between the two calls -- breaking the
+    invariant these tests exist to prove, for a reason that has
+    nothing to do with organizational memory, regardless of what
+    timestamp that one-sided event is given."""
+    good_event = evidence_event if evidence_event is not None else _make_event(
         db_session, org_id, event_time=event_anchor - timedelta(days=1), ingestion_time=event_anchor - timedelta(days=1)
     )
     with outcome_mutation_transaction(db_session):
@@ -444,6 +449,20 @@ def test_existing_categories_are_byte_identical_with_and_without_organizational_
     _seed_events(db_session, org.id, count=8, anchor=anchor)
     decision = _make_decision(db_session, org.id, anchor=anchor)
 
+    # Created now, strictly before the "before" snapshot below, and
+    # reused (via `evidence_event=`) for the memory chain created after
+    # it -- so this one real `SafetyEvent` exists identically in BOTH
+    # snapshots. If `_make_accepted_memory()` created its own evidence
+    # event instead (the default when `evidence_event` is omitted), it
+    # would only exist for the "after" call, inflating `observed.
+    # event_count` (and `evidence_sample_event_ids`) by exactly one on
+    # that side alone -- breaking the invariant this test exists to
+    # prove, for a reason that has nothing to do with organizational
+    # memory. See `_make_accepted_memory()`'s own docstring.
+    evidence_event = _make_event(
+        db_session, org.id, event_time=anchor - timedelta(days=1), ingestion_time=anchor - timedelta(days=1)
+    )
+
     before = compose_field_intelligence_context(db_session, organization_id=org.id, scope="organization", as_of=anchor)
     assert before.organizational_memory.items == []
 
@@ -455,7 +474,8 @@ def test_existing_categories_are_byte_identical_with_and_without_organizational_
     # genuinely byte-comparable between the two calls, not merely
     # equal-by-coincidence.
     _make_accepted_memory(
-        db_session, org.id, decision.id, memory_created_at=anchor - timedelta(minutes=1), event_anchor=anchor
+        db_session, org.id, decision.id, memory_created_at=anchor - timedelta(minutes=1), event_anchor=anchor,
+        evidence_event=evidence_event,
     )
 
     after = compose_field_intelligence_context(db_session, organization_id=org.id, scope="organization", as_of=anchor)
@@ -490,7 +510,11 @@ def test_removing_an_organizational_memory_does_not_alter_existing_categories(db
     identical `as_of` is what makes `deterministic`/`observed` (whose
     own window boundaries are themselves computed from `as_of`)
     genuinely byte-comparable between the two calls, not merely
-    equal-by-coincidence."""
+    equal-by-coincidence. Unlike the test above, this one's memory
+    chain (and its one evidence event) is created once, before *both*
+    snapshots, so it does not need an explicit `evidence_event=` --
+    its existence is already constant across `with_memory`/
+    `without_memory`."""
     org = make_org(db_session)
     anchor = datetime.now(timezone.utc)
     _seed_events(db_session, org.id, count=6, anchor=anchor)
