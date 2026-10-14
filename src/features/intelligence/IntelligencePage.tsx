@@ -147,7 +147,7 @@ export function IntelligencePage() {
           {attentionState.status === 'error' && (
             <ErrorState description={attentionState.message} onRetry={() => setAttentionReloadToken((t) => t + 1)} />
           )}
-          {attentionState.status === 'success' && <AttentionList items={attentionState.data.items} />}
+          {attentionState.status === 'success' && <AttentionList items={attentionState.data.items} sites={attentionSites} />}
         </Section>
       )}
 

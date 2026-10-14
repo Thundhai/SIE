@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -31,6 +31,19 @@ function renderPage() {
       </MemoryRouter>
     </AuthProviderStub>,
   );
+}
+
+/** Finds a `role="status"` element by its exact announced text, among
+ * possibly several simultaneous loading regions on the page — a bare
+ * `getByRole('status')` is ambiguous once more than one lane is loading
+ * at once, so every loading-state assertion below goes through this
+ * instead of relying on there being exactly one match. */
+function getStatusRegionByText(text: string): HTMLElement {
+  const region = screen.getAllByRole('status').find((element) => element.textContent === text);
+  if (!region) {
+    throw new Error(`No role="status" region found with text: "${text}"`);
+  }
+  return region;
 }
 
 function baseIntelligence(overrides: Partial<Record<string, unknown>> = {}) {
@@ -75,6 +88,12 @@ function baseIntelligence(overrides: Partial<Record<string, unknown>> = {}) {
   };
 }
 
+/** Matches the real `AttentionItemDTO` shape (`sie_contract.attention`)
+ * exactly, including its nested `AsOfWindow` and `EvidenceReference[]` —
+ * not the frontend's own earlier, incorrect flattened/fabricated shape.
+ * There is deliberately no `site_label` override point here: the DTO
+ * carries no such field, and `IntelligencePage`/`AttentionList` resolve
+ * a display name from the fetched site list by `site_id` instead. */
 function makeAttentionItem(overrides: Partial<AttentionItem> = {}): AttentionItem {
   return {
     category: 'SIGNIFICANT_ANOMALY',
@@ -83,10 +102,8 @@ function makeAttentionItem(overrides: Partial<AttentionItem> = {}): AttentionIte
     explanation: 'Vehicle incidents this period are above the recent baseline.',
     scope: 'organization',
     site_id: null,
-    site_label: null,
-    as_of: '2026-06-01T00:00:00Z',
-    window_days: 90,
-    evidence: { source: 'enterprise_anomaly', calculation_version: 'v1', entity_ids: [], event_ids: ['evt-1'] },
+    as_of: { as_of: '2026-06-01T00:00:00Z', generated_at: '2026-06-01T00:05:00Z', window_days: 90 },
+    evidence: [{ evidence_type: 'safety_event', reference_id: 'evt-1', label: null }],
     limitation: null,
     reference: 'ref-anomaly-vehicle-incidents',
     ...overrides,
@@ -98,12 +115,9 @@ function makeAttentionResult(items: AttentionItem[] = [makeAttentionItem()]): At
     scope: 'organization',
     organization_id: 'org-1',
     entity_id: null,
-    as_of: '2026-06-01T00:00:00Z',
-    window_days: 90,
-    generated_at: '2026-06-01T00:05:00Z',
+    as_of: { as_of: '2026-06-01T00:00:00Z', generated_at: '2026-06-01T00:05:00Z', window_days: 90 },
     items,
-    category_statuses: [],
-    calculation_versions: {},
+    category_status: [],
   };
 }
 
@@ -116,10 +130,15 @@ describe('IntelligencePage', () => {
   it('shows a loading state, then renders the risk score and classification', async () => {
     vi.mocked(getEnterpriseIntelligence).mockResolvedValue(baseIntelligence());
     renderPage();
-    expect(screen.getByText('Loading intelligence data…')).toBeInTheDocument();
+    expect(getStatusRegionByText('Loading intelligence data…')).toBeInTheDocument();
 
     await waitFor(() => expect(screen.getByText('61.2')).toBeInTheDocument());
-    expect(screen.getByText('High')).toBeInTheDocument();
+    // Scoped to the risk-classification card specifically: the default
+    // Attention mock also resolves with a HIGH-priority item, so an
+    // unscoped `getByText('High')` would be ambiguous between the two
+    // independent, simultaneously-rendered sections.
+    const riskClassificationCard = screen.getByText('Risk classification').parentElement as HTMLElement;
+    expect(within(riskClassificationCard).getByText('High')).toBeInTheDocument();
   });
 
   it('renders anomalies on the Anomalies tab, in plain HSE language (never "AI detected")', async () => {
@@ -218,7 +237,7 @@ describe('IntelligencePage', () => {
   // capability works.
 
   describe('Attention', () => {
-    it('shows a loading state, then renders items in the exact order the backend returned (never re-sorted)', async () => {
+    it('shows a loading state — distinct from the simultaneous Enterprise Intelligence loading region — then renders items in the exact order the backend returned (never re-sorted)', async () => {
       vi.mocked(getEnterpriseIntelligence).mockResolvedValue(baseIntelligence());
       const items = [
         makeAttentionItem({ reference: 'ref-1', title: 'Critical item', priority: 'CRITICAL' }),
@@ -228,22 +247,31 @@ describe('IntelligencePage', () => {
       vi.mocked(getAttention).mockResolvedValue(makeAttentionResult(items));
       renderPage();
 
-      expect(screen.getByText('Loading attention…')).toBeInTheDocument();
+      expect(getStatusRegionByText('Loading attention…')).toBeInTheDocument();
+      expect(getStatusRegionByText('Loading intelligence data…')).toBeInTheDocument();
       await waitFor(() => expect(screen.getByText('Critical item')).toBeInTheDocument());
       const titles = screen.getAllByText(/Critical item|Low item|High item/).map((el) => el.textContent);
       expect(titles).toEqual(['Critical item', 'Low item', 'High item']);
     });
 
-    it('renders category, priority, explanation, and site label in plain language', async () => {
+    it('renders category, priority, and explanation in plain language, resolving the site name from the fetched site list by site_id', async () => {
       vi.mocked(getEnterpriseIntelligence).mockResolvedValue(baseIntelligence());
+      vi.mocked(listSites).mockResolvedValue([{ id: 'site-1', name: 'North Yard', location: null, country: null, status: 'ACTIVE', organization_id: 'org-1' }]);
       vi.mocked(getAttention).mockResolvedValue(
-        makeAttentionResult([makeAttentionItem({ category: 'RECURRING_PATTERN', site_id: 'site-1', site_label: 'North Yard' })]),
+        makeAttentionResult([makeAttentionItem({ category: 'RECURRING_PATTERN', scope: 'site', site_id: 'site-1' })]),
       );
       renderPage();
 
       await waitFor(() => expect(screen.getByText(/Recurring pattern/)).toBeInTheDocument());
-      expect(screen.getByText(/North Yard/)).toBeInTheDocument();
-      expect(screen.getByText('HIGH')).toBeInTheDocument();
+      // Scoped to the attention item itself: the site name also appears
+      // as an <option> in the scope selector rendered from the same
+      // fetched site list, and `role="listitem"` alone is ambiguous with
+      // the Indicators panel's own <li> list, either of which an
+      // unscoped query would also match.
+      const attentionItem = screen.getByText('Vehicle incidents above baseline').closest('li') as HTMLElement;
+      expect(within(attentionItem).getByText(/North Yard/)).toBeInTheDocument();
+      expect(within(attentionItem).getByText('High')).toBeInTheDocument();
+      expect(within(attentionItem).queryByText('HIGH')).not.toBeInTheDocument();
     });
 
     it('shows an honest empty state when there are no attention items', async () => {

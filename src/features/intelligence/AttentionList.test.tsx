@@ -1,6 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import type { AttentionItem } from '../../services/api/attention';
+import type { Site } from '../../services/api/sites';
 import { AttentionList } from './AttentionList';
 
 function makeAttentionItem(overrides: Partial<AttentionItem> = {}): AttentionItem {
@@ -11,14 +12,16 @@ function makeAttentionItem(overrides: Partial<AttentionItem> = {}): AttentionIte
     explanation: 'Vehicle incidents this period are above the recent baseline.',
     scope: 'organization',
     site_id: null,
-    site_label: null,
-    as_of: '2026-06-01T00:00:00Z',
-    window_days: 90,
-    evidence: { source: 'enterprise_anomaly', calculation_version: 'v1', entity_ids: [], event_ids: ['evt-1'] },
+    as_of: { as_of: '2026-06-01T00:00:00Z', generated_at: '2026-06-01T00:05:00Z', window_days: 90 },
+    evidence: [{ evidence_type: 'safety_event', reference_id: 'evt-1', label: null }],
     limitation: null,
     reference: 'ref-anomaly-vehicle-incidents',
     ...overrides,
   };
+}
+
+function makeSite(overrides: Partial<Site> = {}): Site {
+  return { id: 'site-1', name: 'North Yard', location: null, country: null, status: 'ACTIVE', organization_id: 'org-1', ...overrides };
 }
 
 describe('AttentionList', () => {
@@ -46,7 +49,26 @@ describe('AttentionList', () => {
     expect(titles).toEqual(['Critical item', 'Low item', 'High item']);
   });
 
-  it('renders title, priority badge, plain-language category, site label, and explanation', () => {
+  it('renders the human-readable priority label, not the raw backend enum, for every supported priority', () => {
+    const items = [
+      makeAttentionItem({ reference: 'ref-low', title: 'Low item', priority: 'LOW' }),
+      makeAttentionItem({ reference: 'ref-moderate', title: 'Moderate item', priority: 'MODERATE' }),
+      makeAttentionItem({ reference: 'ref-high', title: 'High item', priority: 'HIGH' }),
+      makeAttentionItem({ reference: 'ref-critical', title: 'Critical item', priority: 'CRITICAL' }),
+    ];
+    render(<AttentionList items={items} />);
+
+    expect(screen.getByText('Low')).toBeInTheDocument();
+    expect(screen.getByText('Moderate')).toBeInTheDocument();
+    expect(screen.getByText('High')).toBeInTheDocument();
+    expect(screen.getByText('Critical')).toBeInTheDocument();
+    expect(screen.queryByText('LOW')).not.toBeInTheDocument();
+    expect(screen.queryByText('MODERATE')).not.toBeInTheDocument();
+    expect(screen.queryByText('HIGH')).not.toBeInTheDocument();
+    expect(screen.queryByText('CRITICAL')).not.toBeInTheDocument();
+  });
+
+  it('renders title, priority badge, plain-language category, and explanation', () => {
     render(
       <AttentionList
         items={[
@@ -54,7 +76,6 @@ describe('AttentionList', () => {
             title: 'Repeated PPE non-compliance',
             priority: 'CRITICAL',
             category: 'RECURRING_PATTERN',
-            site_label: 'North Yard',
             explanation: 'PPE non-compliance recurred across the last three inspections.',
           }),
         ]}
@@ -62,10 +83,25 @@ describe('AttentionList', () => {
     );
 
     expect(screen.getByText('Repeated PPE non-compliance')).toBeInTheDocument();
-    expect(screen.getByText('CRITICAL')).toBeInTheDocument();
+    expect(screen.getByText('Critical')).toBeInTheDocument();
     expect(screen.getByText(/Recurring pattern/)).toBeInTheDocument();
-    expect(screen.getByText(/North Yard/)).toBeInTheDocument();
     expect(screen.getByText('PPE non-compliance recurred across the last three inspections.')).toBeInTheDocument();
+  });
+
+  it('resolves a site label from the provided site list by matching site_id — the DTO itself carries no label', () => {
+    render(
+      <AttentionList
+        items={[makeAttentionItem({ site_id: 'site-1', scope: 'site' })]}
+        sites={[makeSite({ id: 'site-1', name: 'North Yard' })]}
+      />,
+    );
+    expect(screen.getByText(/North Yard/)).toBeInTheDocument();
+  });
+
+  it('shows no site suffix, and never a fabricated name, when the site_id has no match in the provided site list', () => {
+    render(<AttentionList items={[makeAttentionItem({ site_id: 'site-unknown', scope: 'site' })]} sites={[makeSite({ id: 'site-1', name: 'North Yard' })]} />);
+    expect(screen.queryByText(/North Yard/)).not.toBeInTheDocument();
+    expect(screen.queryByText('site-unknown')).not.toBeInTheDocument();
   });
 
   it('renders a limitation note when the backend supplies one, honestly rather than hiding it', () => {
