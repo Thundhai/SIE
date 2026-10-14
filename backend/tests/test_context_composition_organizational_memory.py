@@ -120,13 +120,35 @@ def _make_decision(db_session, org_id, *, anchor=AS_OF):
     return decision
 
 
-def _make_accepted_memory(db_session, org_id, decision_id, *, site_id=None, memory_created_at=None):
+def _make_accepted_memory(db_session, org_id, decision_id, *, site_id=None, memory_created_at=None, event_anchor=AS_OF):
     """Full chain: outcome (optionally site-scoped) -> VERIFIED
     verification -> eligible candidate -> ACCEPTED governance ->
     OrganizationalMemory. Mirrors `tests/test_memory_integration_
     service.py::_make_accepted_memory` exactly (never a second,
-    divergent fixture). Returns the memory."""
-    good_event = _make_event(db_session, org_id, event_time=AS_OF - timedelta(days=1), ingestion_time=AS_OF - timedelta(days=1))
+    divergent fixture). Returns the memory.
+
+    `event_anchor` (defaults to the module's own fixed `AS_OF`, so every
+    pre-existing caller below is unaffected) is the time base for the
+    one `SafetyEvent` this chain creates as its evidence (`good_event`)
+    and for `outcome_at`/`verified_at`. It exists because this event
+    lands in the same `safety_events` table the enterprise-intelligence
+    association window (`_available_periods()`) scans for this
+    organization's *earliest* event -- a caller comparing two
+    `compose_field_intelligence_context()` calls at a real, moving
+    `anchor = datetime.now(timezone.utc)` (as the two "existing
+    categories are byte-identical" tests below do, deliberately using
+    the same `as_of` for both calls) must pass that same `anchor` here
+    too. Otherwise this chain's evidence event stays pinned to the
+    fixed `AS_OF` while the rest of the fixture moves with real time;
+    the gap between them grows by one calendar day every day this
+    suite runs, and once it crosses a `window_days` (30) boundary the
+    "after" call alone gains enough history for a real association
+    window the "before" call never had -- breaking the invariant these
+    tests exist to prove, for a reason that has nothing to do with
+    organizational memory."""
+    good_event = _make_event(
+        db_session, org_id, event_time=event_anchor - timedelta(days=1), ingestion_time=event_anchor - timedelta(days=1)
+    )
     with outcome_mutation_transaction(db_session):
         outcome = record_outcome(
             db_session,
@@ -137,7 +159,7 @@ def _make_accepted_memory(db_session, org_id, decision_id, *, site_id=None, memo
             classification=IntelligenceOutcomeClassification.EFFECTIVE,
             summary="Follow-up observation confirmed the hazard was corrected.",
             evidence_event_ids=[good_event.id],
-            outcome_at=AS_OF,
+            outcome_at=event_anchor,
             recorded_by_user_id=uuid.uuid4(),
             recorded_by_api_client_id=None,
             request_id=None,
@@ -146,7 +168,7 @@ def _make_accepted_memory(db_session, org_id, decision_id, *, site_id=None, memo
         record_verification(
             db_session, organization_id=org_id, outcome_id=outcome.id,
             status=IntelligenceOutcomeVerificationStatus.VERIFIED, rationale="Confirmed on-site.",
-            verified_at=AS_OF, verified_by_user_id=uuid.uuid4(), verified_by_api_client_id=None, request_id=None,
+            verified_at=event_anchor, verified_by_user_id=uuid.uuid4(), verified_by_api_client_id=None, request_id=None,
         )
     with candidate_mutation_transaction(db_session):
         candidate, _ = create_learning_candidate(
@@ -432,7 +454,9 @@ def test_existing_categories_are_byte_identical_with_and_without_organizational_
     # own window boundaries are themselves computed from `as_of`)
     # genuinely byte-comparable between the two calls, not merely
     # equal-by-coincidence.
-    _make_accepted_memory(db_session, org.id, decision.id, memory_created_at=anchor - timedelta(minutes=1))
+    _make_accepted_memory(
+        db_session, org.id, decision.id, memory_created_at=anchor - timedelta(minutes=1), event_anchor=anchor
+    )
 
     after = compose_field_intelligence_context(db_session, organization_id=org.id, scope="organization", as_of=anchor)
     assert len(after.organizational_memory.items) == 1
@@ -471,7 +495,9 @@ def test_removing_an_organizational_memory_does_not_alter_existing_categories(db
     anchor = datetime.now(timezone.utc)
     _seed_events(db_session, org.id, count=6, anchor=anchor)
     decision = _make_decision(db_session, org.id, anchor=anchor)
-    memory = _make_accepted_memory(db_session, org.id, decision.id, memory_created_at=anchor - timedelta(minutes=2))
+    memory = _make_accepted_memory(
+        db_session, org.id, decision.id, memory_created_at=anchor - timedelta(minutes=2), event_anchor=anchor
+    )
 
     with_memory = compose_field_intelligence_context(db_session, organization_id=org.id, scope="organization", as_of=anchor)
     assert with_memory.organizational_memory.items
