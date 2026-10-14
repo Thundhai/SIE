@@ -22,6 +22,7 @@ import { getAttention, type AttentionItem, type AttentionResult } from '../../se
 import { listDecisions, type IntelligenceDecision } from '../../services/api/decisions';
 import { listEvents, type EventSummaryResponse } from '../../services/api/events';
 import { getEnterpriseIntelligence, type EnterpriseIntelligence } from '../../services/api/intelligence';
+import { fetchAllPages } from '../../services/api/pagination';
 import { eventStatusLabel, eventStatusTone, formatCanonicalLabel } from '../events/eventStatus';
 import { AttentionList } from '../intelligence/AttentionList';
 import { AttentionReviewDrawer } from '../intelligence/AttentionReviewDrawer';
@@ -145,8 +146,11 @@ export function HomePage() {
     if (!auth.organization) return;
     const controller = new AbortController();
     setDecisionsState({ status: 'loading' });
-    listDecisions({ organizationId: auth.organization.id, pageSize: 100 }, controller.signal)
-      .then((result) => setDecisionsState({ status: 'success', data: result.items }))
+    fetchAllPages(
+      (page, pageSize, signal) => listDecisions({ organizationId: auth.organization!.id, page, pageSize }, signal),
+      controller.signal,
+    )
+      .then((items) => setDecisionsState({ status: 'success', data: items }))
       .catch((error: unknown) => {
         if (controller.signal.aborted) return;
         setDecisionsState({ status: 'error', message: error instanceof Error ? error.message : 'Could not load decisions.' });

@@ -214,6 +214,34 @@ describe('HomePage', () => {
     await waitFor(() => expect(createDecision).toHaveBeenCalled());
   });
 
+  it('still shows a previously recorded decision when it is older than the newest page of org-wide decisions', async () => {
+    vi.mocked(getEnterpriseIntelligence).mockResolvedValue(INTELLIGENCE_SUCCESS);
+    const matchingDecision: IntelligenceDecision = {
+      id: 'dec-1', organization_id: 'org-1', site_id: null, site_label: null, scope: 'organization',
+      attention_reference: ATTENTION_ITEM.reference, attention_category: ATTENTION_ITEM.category,
+      attention_priority: ATTENTION_ITEM.priority, attention_title: ATTENTION_ITEM.title,
+      attention_explanation: ATTENTION_ITEM.explanation, intelligence_as_of: ATTENTION_ITEM.as_of,
+      intelligence_window_days: ATTENTION_ITEM.window_days, calculation_version: 'v1',
+      evidence_source: 'enterprise_anomaly', evidence_entity_ids: [], evidence_event_ids: ['evt-1'],
+      decision: 'ACT', rationale: 'Raising a corrective action.', linked_action_id: null, linked_action: null,
+      decided_by_user_id: 'user-1', decided_by_api_client_id: null, decided_at: '2026-06-01T01:00:00Z',
+      created_at: '2026-06-01T01:00:00Z', updated_at: '2026-06-01T01:00:00Z',
+    };
+    // Page 1 is full of 200 newer, unrelated decisions — the matching
+    // decision for this attention item only shows up on page 2. A
+    // correlation lookup built from page 1 alone would miss it entirely
+    // (mirrors `IntelligencePage.test.tsx`'s own identical regression).
+    const fillerPage = Array.from({ length: 200 }, (_, i) => ({ ...matchingDecision, id: `filler-${i}`, attention_reference: `ref-unrelated-${i}` }));
+    vi.mocked(listDecisions).mockImplementation(async ({ page = 1, pageSize = 200 }) => {
+      if (page === 1) return { items: fillerPage, total: 201, page: 1, page_size: pageSize };
+      return { items: [matchingDecision], total: 201, page: 2, page_size: pageSize };
+    });
+    renderHome();
+
+    await waitFor(() => expect(screen.getByText('Last decision:')).toBeInTheDocument());
+    expect(screen.getAllByText('Act').length).toBeGreaterThan(0);
+  });
+
   it('handles the enterprise intelligence API failure without blanking the rest of the page', async () => {
     vi.mocked(getEnterpriseIntelligence).mockRejectedValue(new ApiError('Could not reach the SIE API.', { status: 0 }));
     renderHome();
