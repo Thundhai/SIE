@@ -457,6 +457,26 @@ describe('IntelligencePage', () => {
     expect(screen.getAllByText('Act').length).toBeGreaterThan(0);
   });
 
+  it('still shows a previously recorded decision when it is older than the newest page of org-wide decisions', async () => {
+    vi.mocked(getAttention).mockResolvedValue(makeAttentionResult());
+    vi.mocked(getFieldIntelligenceContext).mockResolvedValue(makeContext());
+    // Page 1 is full of 200 newer, unrelated decisions (a different
+    // attention_reference each) — the matching decision for this
+    // attention item only shows up on page 2. A correlation lookup
+    // built from page 1 alone would miss it entirely.
+    const fillerPage = Array.from({ length: 200 }, (_, i) =>
+      makeDecision({ id: `filler-${i}`, attention_reference: `ref-unrelated-${i}` }),
+    );
+    vi.mocked(listDecisions).mockImplementation(async ({ page = 1, pageSize = 200 }) => {
+      if (page === 1) return { items: fillerPage, total: 201, page: 1, page_size: pageSize };
+      return { items: [makeDecision()], total: 201, page: 2, page_size: pageSize };
+    });
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('Last decision:')).toBeInTheDocument());
+    expect(screen.getAllByText('Act').length).toBeGreaterThan(0);
+  });
+
   // --- 3b. Decision -> Outcome: reachable from Decision History, existing endpoint, shown after --
 
   it('offers Record outcome from Decision History for an existing decision', async () => {
