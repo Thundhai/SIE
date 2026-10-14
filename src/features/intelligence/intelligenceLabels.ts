@@ -163,3 +163,49 @@ const CONCENTRATION_LABEL: Record<string, string> = {
 export function concentrationLabel(classification: string): string {
   return CONCENTRATION_LABEL[classification] ?? formatCanonicalLabel(classification);
 }
+
+// --- Attention priority (AttentionPriority) -----------------------------------------------------
+// Mirrors `PriorityBadge`'s own low/medium/high/critical tone mapping —
+// kept separate since the backend's own vocabulary is
+// LOW/MODERATE/HIGH/CRITICAL, not low/medium/high/critical.
+
+const ATTENTION_PRIORITY_LABEL: Record<string, string> = {
+  LOW: 'Low',
+  MODERATE: 'Moderate',
+  HIGH: 'High',
+  CRITICAL: 'Critical',
+};
+
+const ATTENTION_PRIORITY_TONE: Record<string, StatusTone> = {
+  LOW: 'neutral',
+  MODERATE: 'informational',
+  HIGH: 'warning',
+  CRITICAL: 'critical',
+};
+
+export function attentionPriorityLabel(priority: string): string {
+  return ATTENTION_PRIORITY_LABEL[priority] ?? formatCanonicalLabel(priority);
+}
+
+export function attentionPriorityTone(priority: string): StatusTone {
+  return ATTENTION_PRIORITY_TONE[priority] ?? 'neutral';
+}
+
+// --- Attention category (AttentionCategory) -----------------------------------------------------
+// Plain-language category names — never "AI flagged", always naming the
+// specific deterministic mechanism behind the item.
+
+const ATTENTION_CATEGORY_LABEL: Record<string, string> = {
+  DETERIORATING_TREND: 'Deteriorating trend',
+  SIGNIFICANT_ANOMALY: 'Deviation from baseline',
+  RECURRING_PATTERN: 'Recurring pattern',
+  ELEVATED_RISK: 'Elevated risk score',
+  PREDICTIVE_RISK: 'Model-derived risk signal',
+  UNRESOLVED_FINDING: 'Unresolved finding',
+  OVERDUE_ACTIONS: 'Overdue actions',
+  EVIDENCE_GAP: 'Evidence gap',
+};
+
+export function attentionCategoryLabel(category: string): string {
+  return ATTENTION_CATEGORY_LABEL[category] ?? formatCanonicalLabel(category);
+}

@@ -9,8 +9,17 @@ import { IntelligencePage } from './IntelligencePage';
 vi.mock('../../services/api/intelligence', () => ({
   getEnterpriseIntelligence: vi.fn(),
 }));
+vi.mock('../../services/api/attention', () => ({
+  getAttention: vi.fn(),
+  getSiteAttention: vi.fn(),
+}));
+vi.mock('../../services/api/sites', () => ({
+  listSites: vi.fn(),
+}));
 
 import { getEnterpriseIntelligence } from '../../services/api/intelligence';
+import { getAttention, getSiteAttention, type AttentionItem, type AttentionResult } from '../../services/api/attention';
+import { listSites } from '../../services/api/sites';
 
 const ORGANIZATION = { id: 'org-1', name: 'Acme' };
 
@@ -66,11 +75,48 @@ function baseIntelligence(overrides: Partial<Record<string, unknown>> = {}) {
   };
 }
 
+function makeAttentionItem(overrides: Partial<AttentionItem> = {}): AttentionItem {
+  return {
+    category: 'SIGNIFICANT_ANOMALY',
+    priority: 'HIGH',
+    title: 'Vehicle incidents above baseline',
+    explanation: 'Vehicle incidents this period are above the recent baseline.',
+    scope: 'organization',
+    site_id: null,
+    site_label: null,
+    as_of: '2026-06-01T00:00:00Z',
+    window_days: 90,
+    evidence: { source: 'enterprise_anomaly', calculation_version: 'v1', entity_ids: [], event_ids: ['evt-1'] },
+    limitation: null,
+    reference: 'ref-anomaly-vehicle-incidents',
+    ...overrides,
+  };
+}
+
+function makeAttentionResult(items: AttentionItem[] = [makeAttentionItem()]): AttentionResult {
+  return {
+    scope: 'organization',
+    organization_id: 'org-1',
+    entity_id: null,
+    as_of: '2026-06-01T00:00:00Z',
+    window_days: 90,
+    generated_at: '2026-06-01T00:05:00Z',
+    items,
+    category_statuses: [],
+    calculation_versions: {},
+  };
+}
+
 describe('IntelligencePage', () => {
+  beforeEach(() => {
+    vi.mocked(listSites).mockResolvedValue([]);
+    vi.mocked(getAttention).mockResolvedValue(makeAttentionResult());
+  });
+
   it('shows a loading state, then renders the risk score and classification', async () => {
     vi.mocked(getEnterpriseIntelligence).mockResolvedValue(baseIntelligence());
     renderPage();
-    expect(screen.getByRole('status')).toHaveTextContent('Loading intelligence data…');
+    expect(screen.getByText('Loading intelligence data…')).toBeInTheDocument();
 
     await waitFor(() => expect(screen.getByText('61.2')).toBeInTheDocument());
     expect(screen.getByText('High')).toBeInTheDocument();
@@ -160,5 +206,104 @@ describe('IntelligencePage', () => {
     renderPage();
 
     await waitFor(() => expect(screen.getByText('No indicators available')).toBeInTheDocument());
+  });
+
+  // --- Attention (SIE Milestone 33, attention-only delivery) -------------------------------------
+  // `GET /intelligence/attention` is the one endpoint actually wired to
+  // the Commercial Core HTTP boundary on this deployment — unlike
+  // decisions/outcomes/verification/organizational-memory/context,
+  // which still return HTTP 501 (see PUBLIC_ARCHITECTURE_BOUNDARY.md /
+  // M43-IP-03). This section is deliberately read-only: no decision
+  // recording, no "Review" action, nothing that implies an unsupported
+  // capability works.
+
+  describe('Attention', () => {
+    it('shows a loading state, then renders items in the exact order the backend returned (never re-sorted)', async () => {
+      vi.mocked(getEnterpriseIntelligence).mockResolvedValue(baseIntelligence());
+      const items = [
+        makeAttentionItem({ reference: 'ref-1', title: 'Critical item', priority: 'CRITICAL' }),
+        makeAttentionItem({ reference: 'ref-2', title: 'Low item', priority: 'LOW' }),
+        makeAttentionItem({ reference: 'ref-3', title: 'High item', priority: 'HIGH' }),
+      ];
+      vi.mocked(getAttention).mockResolvedValue(makeAttentionResult(items));
+      renderPage();
+
+      expect(screen.getByText('Loading attention…')).toBeInTheDocument();
+      await waitFor(() => expect(screen.getByText('Critical item')).toBeInTheDocument());
+      const titles = screen.getAllByText(/Critical item|Low item|High item/).map((el) => el.textContent);
+      expect(titles).toEqual(['Critical item', 'Low item', 'High item']);
+    });
+
+    it('renders category, priority, explanation, and site label in plain language', async () => {
+      vi.mocked(getEnterpriseIntelligence).mockResolvedValue(baseIntelligence());
+      vi.mocked(getAttention).mockResolvedValue(
+        makeAttentionResult([makeAttentionItem({ category: 'RECURRING_PATTERN', site_id: 'site-1', site_label: 'North Yard' })]),
+      );
+      renderPage();
+
+      await waitFor(() => expect(screen.getByText(/Recurring pattern/)).toBeInTheDocument());
+      expect(screen.getByText(/North Yard/)).toBeInTheDocument();
+      expect(screen.getByText('HIGH')).toBeInTheDocument();
+    });
+
+    it('shows an honest empty state when there are no attention items', async () => {
+      vi.mocked(getEnterpriseIntelligence).mockResolvedValue(baseIntelligence());
+      vi.mocked(getAttention).mockResolvedValue(makeAttentionResult([]));
+      renderPage();
+
+      await waitFor(() => expect(screen.getByText('Nothing needs attention right now')).toBeInTheDocument());
+    });
+
+    it('shows an error state with a working retry on a genuine failure, independent of the enterprise-intelligence lane', async () => {
+      vi.mocked(getEnterpriseIntelligence).mockResolvedValue(baseIntelligence());
+      vi.mocked(getAttention).mockRejectedValueOnce(new ApiError('Could not reach the SIE API.', { status: 0 }));
+      renderPage();
+
+      await waitFor(() => expect(screen.getByText('Could not reach the SIE API.')).toBeInTheDocument());
+      // The enterprise-intelligence lane still renders successfully — one
+      // lane's failure never blanks the other.
+      await waitFor(() => expect(screen.getByText('61.2')).toBeInTheDocument());
+
+      vi.mocked(getAttention).mockResolvedValueOnce(makeAttentionResult());
+      await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
+      await waitFor(() => expect(screen.getByText('Vehicle incidents above baseline')).toBeInTheDocument());
+    });
+
+    it('shows an error state for enterprise intelligence without blanking a successfully-loaded Attention list (independent lanes)', async () => {
+      vi.mocked(getEnterpriseIntelligence).mockRejectedValue(new ApiError('Could not reach the SIE API.', { status: 0 }));
+      vi.mocked(getAttention).mockResolvedValue(makeAttentionResult());
+      renderPage();
+
+      await waitFor(() => expect(screen.getByText('Vehicle incidents above baseline')).toBeInTheDocument());
+      expect(screen.getByText('Could not reach the SIE API.')).toBeInTheDocument();
+    });
+
+    it('switches to a site scope and calls the site-scoped attention endpoint, preserving organization/site scoping', async () => {
+      vi.mocked(getEnterpriseIntelligence).mockResolvedValue(baseIntelligence());
+      vi.mocked(listSites).mockResolvedValue([{ id: 'site-1', name: 'North Yard', location: null, country: null, status: 'ACTIVE', organization_id: 'org-1' }]);
+      vi.mocked(getSiteAttention).mockResolvedValue(makeAttentionResult([]));
+      renderPage();
+
+      await waitFor(() => expect(screen.getByText('Vehicle incidents above baseline')).toBeInTheDocument());
+      await userEvent.selectOptions(screen.getByLabelText('Scope'), 'site-1');
+
+      await waitFor(() =>
+        expect(getSiteAttention).toHaveBeenCalledWith(
+          expect.objectContaining({ organizationId: 'org-1', siteId: 'site-1' }),
+          expect.anything(),
+        ),
+      );
+    });
+
+    it('never offers a "Review" or decision-recording control (decisions are not available on this deployment)', async () => {
+      vi.mocked(getEnterpriseIntelligence).mockResolvedValue(baseIntelligence());
+      vi.mocked(getAttention).mockResolvedValue(makeAttentionResult());
+      renderPage();
+
+      await waitFor(() => expect(screen.getByText('Vehicle incidents above baseline')).toBeInTheDocument());
+      expect(screen.queryByRole('button', { name: /review/i })).not.toBeInTheDocument();
+      expect(screen.queryByText(/decision/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/last decision/i)).not.toBeInTheDocument();
+    });
   });
 });
