@@ -63,6 +63,13 @@ export interface CreateOutcomeInput {
    * never client-invented, always the id of a decision the user is
    * already looking at. */
   decisionId: string;
+  /** Independently supplied — need not match `decisionId`'s own
+   * `site_id` (backend: `IntelligenceOutcomeCreate.site_id`'s own
+   * docstring). Callers should default this to the decision's own
+   * `site_id` unless the human recording the outcome deliberately
+   * chooses otherwise — omitting it silently makes every outcome
+   * organization-wide regardless of the decision it concerns. */
+  siteId?: string;
   classification: IntelligenceOutcomeClassification;
   summary: string;
   /** The real-world instant the outcome became observable — never
@@ -70,6 +77,12 @@ export interface CreateOutcomeInput {
    * `reject_future_outcome_at()`). */
   outcomeAt: string;
   linkedActionId?: string;
+  /** Existing `SafetyEvent` ids supporting this outcome (e.g. a
+   * follow-up observation) — required for this outcome's verification
+   * to ever reach `VERIFIED` (`evidence_eligible_for_verification` is
+   * false on `NO_EVIDENCE`; see
+   * `intelligence_outcome_verification_service.py::evaluate_evidence`). */
+  evidenceEventIds?: string[];
 }
 
 export function listOutcomes(
@@ -110,10 +123,12 @@ export function createOutcome(
     headers: { 'Idempotency-Key': idempotencyKey },
     body: {
       decision_id: input.decisionId,
+      site_id: input.siteId ?? null,
       classification: input.classification,
       summary: input.summary,
       outcome_at: input.outcomeAt,
       linked_action_id: input.linkedActionId ?? null,
+      evidence_event_ids: input.evidenceEventIds && input.evidenceEventIds.length > 0 ? input.evidenceEventIds : null,
     },
     signal,
   });

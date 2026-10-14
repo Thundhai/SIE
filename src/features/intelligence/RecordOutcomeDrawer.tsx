@@ -2,14 +2,18 @@ import { type FormEvent, useEffect, useState } from 'react';
 import { Drawer } from '../../components/ui/Drawer';
 import { Button } from '../../components/ui/Button';
 import { Select } from '../../components/ui/Select';
+import { SearchInput } from '../../components/ui/SearchInput';
 import { Textarea } from '../../components/ui/Textarea';
 import { Input } from '../../components/ui/Input';
 import { StatusBadge } from '../../components/ui/StatusBadge';
 import { ApiError } from '../../services/api/errors';
 import type { IntelligenceDecision } from '../../services/api/decisions';
+import type { EventSummaryResponse } from '../../services/api/events';
+import { listEvents } from '../../services/api/events';
 import { createOutcome, type IntelligenceOutcome } from '../../services/api/outcomes';
 import { useActionRepository } from '../actions/useActionRepository';
 import type { ActionOption } from '../actions/actionRepository';
+import { formatCanonicalLabel } from '../events/eventStatus';
 import {
   OUTCOME_CLASSIFICATION_OPTIONS,
   attentionCategoryLabel,
@@ -67,6 +71,9 @@ export function RecordOutcomeDrawer({ isOpen, onClose, decision, organizationId,
   const [outcomeAtDate, setOutcomeAtDate] = useState(todayDateInputValue());
   const [linkedActionId, setLinkedActionId] = useState('');
   const [actionOptions, setActionOptions] = useState<ActionOption[]>([]);
+  const [evidenceSearch, setEvidenceSearch] = useState('');
+  const [evidenceResults, setEvidenceResults] = useState<EventSummaryResponse[]>([]);
+  const [selectedEvidenceEvents, setSelectedEvidenceEvents] = useState<EventSummaryResponse[]>([]);
   const [idempotencyKey, setIdempotencyKey] = useState('');
   const [validationError, setValidationError] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -79,11 +86,48 @@ export function RecordOutcomeDrawer({ isOpen, onClose, decision, organizationId,
     setSummary('');
     setOutcomeAtDate(todayDateInputValue());
     setLinkedActionId('');
+    setEvidenceSearch('');
+    setEvidenceResults([]);
+    setSelectedEvidenceEvents([]);
     setValidationError(null);
     setSubmitError(null);
     setJustRecorded(null);
     setIdempotencyKey(crypto.randomUUID());
   }, [isOpen, decision]);
+
+  // Evidence events this outcome can cite (e.g. a follow-up
+  // observation) — required for its verification to ever reach
+  // VERIFIED (an outcome with no evidence is NO_EVIDENCE, which the
+  // backend's own `evaluate_evidence()` never counts as eligible).
+  // Scoped to the decision's own site when it has one, same convention
+  // as the open-action lookup above.
+  useEffect(() => {
+    if (!isOpen || !decision || !evidenceSearch.trim()) {
+      setEvidenceResults([]);
+      return;
+    }
+    let cancelled = false;
+    const controller = new AbortController();
+    listEvents({
+      organizationId,
+      page: 1,
+      pageSize: 10,
+      siteId: decision.site_id ?? undefined,
+      search: evidenceSearch.trim(),
+      signal: controller.signal,
+    })
+      .then((page) => {
+        if (cancelled) return;
+        setEvidenceResults(page.items);
+      })
+      .catch(() => {
+        if (!cancelled) setEvidenceResults([]);
+      });
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [isOpen, decision, organizationId, evidenceSearch]);
 
   // Candidate actions to link — an outcome may optionally reference an
   // existing open action regardless of which decision type was recorded
@@ -133,10 +177,12 @@ export function RecordOutcomeDrawer({ isOpen, onClose, decision, organizationId,
           organizationId,
           input: {
             decisionId: decision!.id,
+            siteId: decision!.site_id ?? undefined,
             classification: classification as IntelligenceOutcome['classification'],
             summary: summary.trim(),
             outcomeAt: dateInputValueToIsoInstant(outcomeAtDate),
             linkedActionId: linkedActionId || undefined,
+            evidenceEventIds: selectedEvidenceEvents.length > 0 ? selectedEvidenceEvents.map((event) => event.id) : undefined,
           },
         },
         idempotencyKey,
@@ -227,6 +273,62 @@ export function RecordOutcomeDrawer({ isOpen, onClose, decision, organizationId,
                 onChange={(event) => setLinkedActionId(event.target.value)}
                 options={[{ value: '', label: 'No linked action' }, ...actionOptions]}
               />
+
+              <div className="flex flex-col gap-1.5">
+                <p className="text-xs font-medium text-text-secondary">Evidence events (optional)</p>
+                <p className="text-xs text-text-muted">
+                  Search for a follow-up observation supporting this outcome. Required for this outcome to later reach "Verified".
+                </p>
+                <SearchInput
+                  label="Search events"
+                  placeholder="Search by event type, status, or reference…"
+                  value={evidenceSearch}
+                  onChange={(event) => setEvidenceSearch(event.target.value)}
+                  onClear={() => setEvidenceSearch('')}
+                />
+                {evidenceResults.length > 0 && (
+                  <ul className="flex flex-col gap-1 rounded-md border border-border bg-surface-muted p-1.5">
+                    {evidenceResults
+                      .filter((result) => !selectedEvidenceEvents.some((selected) => selected.id === result.id))
+                      .map((result) => (
+                        <li key={result.id} className="flex items-center justify-between gap-2 rounded px-1.5 py-1 text-xs hover:bg-surface">
+                          <span className="text-text-secondary">
+                            {formatCanonicalLabel(result.event_type)} · {new Date(result.event_time).toLocaleDateString()}
+                            {result.site_name ? ` · ${result.site_name}` : ''}
+                          </span>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => {
+                              setSelectedEvidenceEvents((current) => [...current, result]);
+                              setEvidenceSearch('');
+                            }}
+                          >
+                            Add
+                          </Button>
+                        </li>
+                      ))}
+                  </ul>
+                )}
+                {selectedEvidenceEvents.length > 0 && (
+                  <ul className="flex flex-wrap gap-1.5">
+                    {selectedEvidenceEvents.map((event) => (
+                      <li key={event.id} className="flex items-center gap-1 rounded-full border border-border-strong bg-surface px-2 py-0.5 text-xs text-text-secondary">
+                        {formatCanonicalLabel(event.event_type)} · {new Date(event.event_time).toLocaleDateString()}
+                        <button
+                          type="button"
+                          aria-label={`Remove ${formatCanonicalLabel(event.event_type)} evidence event`}
+                          className="text-text-muted hover:text-critical"
+                          onClick={() => setSelectedEvidenceEvents((current) => current.filter((selected) => selected.id !== event.id))}
+                        >
+                          ×
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
 
               <Textarea
                 label="Summary"
