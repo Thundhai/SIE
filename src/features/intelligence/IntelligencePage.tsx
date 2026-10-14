@@ -64,6 +64,8 @@ export function IntelligencePage() {
   // rest of this page).
   const [attentionSites, setAttentionSites] = useState<Site[]>([]);
   const [attentionSiteId, setAttentionSiteId] = useState('');
+  const [attentionSitesState, setAttentionSitesState] = useState<AsyncState<Site[]>>({ status: 'loading' });
+  const [attentionSitesReloadToken, setAttentionSitesReloadToken] = useState(0);
   const [attentionState, setAttentionState] = useState<AsyncState<AttentionResult>>({ status: 'loading' });
   const [attentionReloadToken, setAttentionReloadToken] = useState(0);
 
@@ -82,30 +84,51 @@ export function IntelligencePage() {
 
   useEffect(() => {
     if (!auth.organization) return;
-    let cancelled = false;
-    listSites(auth.organization.id).then((result) => {
-      if (!cancelled) setAttentionSites(result);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [auth.organization]);
+    const controller = new AbortController();
+    setAttentionSites([]);
+    setAttentionSitesState({ status: 'loading' });
+    setAttentionSiteId('');
+    listSites(auth.organization.id, controller.signal)
+      .then((result) => {
+        if (controller.signal.aborted) return;
+        setAttentionSites(result);
+        setAttentionSitesState({ status: 'success', data: result });
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        setAttentionSitesState({
+          status: 'error',
+          message: error instanceof Error ? error.message : 'Could not load site choices.',
+        });
+      });
+    return () => controller.abort();
+  }, [auth.organization?.id, attentionSitesReloadToken]);
 
   useEffect(() => {
     if (!auth.organization) return;
     const controller = new AbortController();
     setAttentionState({ status: 'loading' });
-    const request = attentionSiteId
-      ? getSiteAttention({ organizationId: auth.organization.id, siteId: attentionSiteId }, controller.signal)
+    // A selected site is valid only if it belongs to the currently active
+    // organization. This prevents a previous organization's UUID from being
+    // sent during the render before its site list has refreshed.
+    const selectedSiteIsInCurrentOrganization = attentionSites.some(
+      (site) => site.id === attentionSiteId && site.organization_id === auth.organization!.id,
+    );
+    const effectiveSiteId = selectedSiteIsInCurrentOrganization ? attentionSiteId : '';
+    const request = effectiveSiteId
+      ? getSiteAttention({ organizationId: auth.organization.id, siteId: effectiveSiteId }, controller.signal)
       : getAttention({ organizationId: auth.organization.id }, controller.signal);
     request
-      .then((result) => setAttentionState({ status: 'success', data: result }))
+      .then((result) => {
+        if (controller.signal.aborted) return;
+        setAttentionState({ status: 'success', data: result });
+      })
       .catch((error: unknown) => {
         if (controller.signal.aborted) return;
         setAttentionState({ status: 'error', message: error instanceof Error ? error.message : 'Could not load attention.' });
       });
     return () => controller.abort();
-  }, [auth.organization, attentionSiteId, attentionReloadToken]);
+  }, [auth.organization?.id, attentionSiteId, attentionSites, attentionReloadToken]);
 
   const isPermissionDenied = state.status === 'error' && state.message.toLowerCase().includes('missing') && state.message.toLowerCase().includes('permission');
 
@@ -130,12 +153,12 @@ export function IntelligencePage() {
           title="Attention"
           description="What deserves attention first, in the order SIE's own ranking already determined."
           action={
-            attentionSites.length > 0 ? (
+            attentionSitesState.status === 'success' && attentionSites.length > 0 ? (
               <div className="w-56">
                 <Select
                   label="Scope"
                   hideLabel
-                  value={attentionSiteId}
+                  value={attentionSites.some((site) => site.id === attentionSiteId && site.organization_id === auth.organization?.id) ? attentionSiteId : ''}
                   onChange={(event) => setAttentionSiteId(event.target.value)}
                   options={[{ value: '', label: 'Organization-wide' }, ...attentionSites.map((site) => ({ value: site.id, label: site.name }))]}
                 />
@@ -143,11 +166,54 @@ export function IntelligencePage() {
             ) : undefined
           }
         >
+          {attentionSitesState.status === 'loading' && <p className="mb-3 text-xs text-text-muted">Loading site choices…</p>}
+          {attentionSitesState.status === 'error' && (
+            <div className="mb-3">
+              <ErrorState
+                title="Could not load site choices"
+                description={attentionSitesState.message}
+                onRetry={() => setAttentionSitesReloadToken((token) => token + 1)}
+              />
+            </div>
+          )}
           {attentionState.status === 'loading' && <LoadingState label="Loading attention…" />}
           {attentionState.status === 'error' && (
             <ErrorState description={attentionState.message} onRetry={() => setAttentionReloadToken((t) => t + 1)} />
           )}
-          {attentionState.status === 'success' && <AttentionList items={attentionState.data.items} sites={attentionSites} />}
+          {attentionState.status === 'success' && (
+            <>
+              {attentionState.data.category_status.some((category) => category.status !== 'EVALUATED') && (
+                <div role="status" className="mb-3 rounded-md border border-informational/30 bg-informational-surface p-3 text-sm text-informational">
+                  <p className="font-medium">Partial attention evaluation</p>
+                  <p className="mt-1">Some categories could not be evaluated. An empty attention list does not mean all risk signals were checked.</p>
+                  <ul className="mt-2 list-disc pl-5">
+                    {attentionState.data.category_status
+                      .filter((category) => category.status !== 'EVALUATED')
+                      .map((category) => (
+                        <li key={category.category}>
+                          {formatCanonicalLabel(category.category)} — {category.status.replaceAll('_', ' ').toLowerCase()}
+                          {category.reason ? `: ${category.reason}` : ''}
+                        </li>
+                      ))}
+                  </ul>
+                </div>
+              )}
+              <AttentionList
+                items={attentionState.data.items}
+                sites={attentionSites}
+                emptyTitle={
+                  attentionState.data.category_status.some((category) => category.status !== 'EVALUATED')
+                    ? 'No attention items from the categories that were evaluated'
+                    : undefined
+                }
+                emptyDescription={
+                  attentionState.data.category_status.some((category) => category.status !== 'EVALUATED')
+                    ? 'Some categories were unavailable or not evaluated. Review the partial-evaluation details above before concluding there are no concerns.'
+                    : undefined
+                }
+              />
+            </>
+          )}
         </Section>
       )}
 
