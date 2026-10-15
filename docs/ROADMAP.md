@@ -4,7 +4,7 @@
 
 **Derived from:** a full audit of both repositories (security, product completeness, architecture) conducted 2026-10-15.
 
-**This document itself landed via PR #33** (merged `dd3d40d`); the README/LICENSE/rebrand item via PR #34 (merged `46ec220`); the Decision/Outcome/Verification UI fix via PR #35 (merged `15aa757`) — all three on `main` as of 2026-10-15.
+**This document itself landed via PR #33** (merged `dd3d40d`); the README/LICENSE/rebrand item via PR #34 (merged `46ec220`); the Decision/Outcome/Verification UI fix via PR #35 (merged `15aa757`) — all three on `main` as of 2026-10-15. Phase 1's Decisions wiring landed via PR #37 (merged `32f05dd`), on top of `Thundhai/SIE-Commercial-Core` PR #11 (merged `8a63aa7`).
 
 ---
 
@@ -15,12 +15,12 @@
 | Phase | Items | Done | % Complete | Last checked |
 |---|---|---|---|---|
 | Phase 0 — Stop the Bleeding | 3 | 3 | 100% | 2026-10-15 |
-| Phase 1 — Close the Decision Loop | 5 | 0 | 0% | 2026-10-15 |
+| Phase 1 — Close the Decision Loop | 5 | 1 | 20% | 2026-10-15 |
 | Phase 2 — Finish the Intelligence Loop | 4 | 0 | 0% | 2026-10-15 |
 | Phase 3 — Enterprise Readiness | 5 | 0 | 0% | 2026-10-15 |
 | Phase 4 — Strategic Decisions + Expansion | 5 | 0 | 0% | 2026-10-15 |
 | Phase 5 — Hygiene & Long-Term | 7 | 0 | 0% | 2026-10-15 |
-| **Overall** | **29** | **3** | **10%** | **2026-10-15** |
+| **Overall** | **29** | **4** | **14%** | **2026-10-15** |
 
 Priority legend: **P0** blocking/urgent · **P1** high value, this quarter · **P2** real but can wait · **P3** hygiene/cleanup/long-term.
 
@@ -36,7 +36,7 @@ Priority legend: **P0** blocking/urgent · **P1** high value, this quarter · **
 
 Decisions is fully built on both ends (contract DTO `DecisionReferenceDTO` + backend service both exist and are tested) — this is integration work, not new engineering, following the pattern already proven for Attention.
 
-- [ ] **(P0)** Wire Decisions end-to-end: `domain_service` route → `app/contract_adapters/decisions_adapter.py` → `cc_service/domain_client/decisions.py` → public HTTP client → unhide UI.
+- [x] **(P0)** Wire Decisions end-to-end: `domain_service` route → `app/contract_adapters/decisions_adapter.py` → `cc_service/domain_client/decisions.py` → public HTTP client → unhide UI. — `Thundhai/SIE-Commercial-Core` PR #11 (merged `8a63aa7`) + PR #37 here (merged `32f05dd`). Widened `sie_contract` 0.4.0 → 0.5.0 along the way (additive: `DecisionReferenceDTO` gained `scope`/`site_id`/`attention_category`/`attention_priority`/`attention_title`, all already public via Attention, plus a `DecisionListResultDTO` list envelope — see `BOUNDARY_DECISIONS.md` Section 13 in Commercial Core). `memory-context` stays a 501 stub pending Phase 2's Organizational Memory contract design.
 - [ ] **(P1)** Move production off Render's free tier (current intermittent 502s from idle spin-down).
 - [ ] **(P1)** Enforce real branch-protection / PR-merge discipline (all 24 closed PRs in history show `merged: false` — the review gate isn't actually the enforced merge path today).
 - [ ] **(P1)** Commit CodeQL + secret-scanning as version-controlled workflow config (currently active only via repo-settings "default setup" — invisible/unauditable from the code, silently disable-able).
