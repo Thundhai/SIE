@@ -12,13 +12,13 @@
 
 | Phase | Items | Done | % Complete | Last checked |
 |---|---|---|---|---|
-| Phase 0 — Stop the Bleeding | 3 | 2 | 67% | 2026-10-15 |
+| Phase 0 — Stop the Bleeding | 3 | 3 | 100% | 2026-10-15 |
 | Phase 1 — Close the Decision Loop | 5 | 0 | 0% | 2026-10-15 |
 | Phase 2 — Finish the Intelligence Loop | 4 | 0 | 0% | 2026-10-15 |
 | Phase 3 — Enterprise Readiness | 5 | 0 | 0% | 2026-10-15 |
 | Phase 4 — Strategic Decisions + Expansion | 5 | 0 | 0% | 2026-10-15 |
 | Phase 5 — Hygiene & Long-Term | 7 | 0 | 0% | 2026-10-15 |
-| **Overall** | **29** | **2** | **7%** | **2026-10-15** |
+| **Overall** | **29** | **3** | **10%** | **2026-10-15** |
 
 Priority legend: **P0** blocking/urgent · **P1** high value, this quarter · **P2** real but can wait · **P3** hygiene/cleanup/long-term.
 
@@ -26,7 +26,7 @@ Priority legend: **P0** blocking/urgent · **P1** high value, this quarter · **
 
 ## Phase 0 — Stop the Bleeding (days, not weeks)
 
-- [ ] **(P0)** Hide or clearly label the Decision/Outcome/Verification controls on Action Detail (`ActionOutcomeLifecycle.tsx`) — they're live, reachable, and every click currently 501s.
+- [x] **(P0)** Hide or clearly label the Decision/Outcome/Verification controls on Action Detail (`ActionOutcomeLifecycle.tsx`) — they're live, reachable, and every click currently 501s. — PR #35, open.
 - [x] **(P0)** ~~Re-vendor `sie-contract` into the public repo~~ — **already done.** Verified 2026-10-15: `backend/vendor/sie_contract/` is already at 0.4.0 (`PROVENANCE.json`: vendored 2026-10-03 from Commercial Core commit `8fd692a`), includes `decisions.py`/`rag.py`/`intelligence_context.py`/`status.py`/`tenancy.py`, and `test_sie_contract_vendored.py`'s 8 drift-check tests pass. The earlier audit finding (stale at 0.2.0) was itself stale. PR #14 ("Vendor sie-contract 0.2.0") appears fully superseded by what's already on `main` — flagged for disposition, not yet closed.
 - [x] **(P0)** Add root `README.md`, `LICENSE`, rebrand `package.json` (still named `react-example`, no description). — PR #34, open.
 
