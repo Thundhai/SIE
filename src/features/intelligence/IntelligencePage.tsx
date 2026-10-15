@@ -104,19 +104,27 @@ export function IntelligencePage() {
     return () => controller.abort();
   }, [auth.organization?.id, attentionSitesReloadToken]);
 
+  // A selected site is valid only if it belongs to the currently active
+  // organization. This prevents a previous organization's UUID from being
+  // sent during the render before its site list has refreshed. Computed
+  // here (a primitive string), rather than inside the effect depending on
+  // `attentionSites` itself, so that the effect below only re-runs when
+  // the *effective* site selection actually changes -- the sites-loading
+  // effect replaces `attentionSites` with a fresh array reference every
+  // time it resolves (even to equivalent content), and depending on that
+  // array directly caused attention to be re-fetched a second time on
+  // every mount, immediately after the sites list arrived.
+  const selectedSiteIsInCurrentOrganization = attentionSites.some(
+    (site) => site.id === attentionSiteId && site.organization_id === auth.organization?.id,
+  );
+  const effectiveAttentionSiteId = selectedSiteIsInCurrentOrganization ? attentionSiteId : '';
+
   useEffect(() => {
     if (!auth.organization) return;
     const controller = new AbortController();
     setAttentionState({ status: 'loading' });
-    // A selected site is valid only if it belongs to the currently active
-    // organization. This prevents a previous organization's UUID from being
-    // sent during the render before its site list has refreshed.
-    const selectedSiteIsInCurrentOrganization = attentionSites.some(
-      (site) => site.id === attentionSiteId && site.organization_id === auth.organization!.id,
-    );
-    const effectiveSiteId = selectedSiteIsInCurrentOrganization ? attentionSiteId : '';
-    const request = effectiveSiteId
-      ? getSiteAttention({ organizationId: auth.organization.id, siteId: effectiveSiteId }, controller.signal)
+    const request = effectiveAttentionSiteId
+      ? getSiteAttention({ organizationId: auth.organization.id, siteId: effectiveAttentionSiteId }, controller.signal)
       : getAttention({ organizationId: auth.organization.id }, controller.signal);
     request
       .then((result) => {
@@ -128,7 +136,7 @@ export function IntelligencePage() {
         setAttentionState({ status: 'error', message: error instanceof Error ? error.message : 'Could not load attention.' });
       });
     return () => controller.abort();
-  }, [auth.organization?.id, attentionSiteId, attentionSites, attentionReloadToken]);
+  }, [auth.organization?.id, effectiveAttentionSiteId, attentionReloadToken]);
 
   const isPermissionDenied = state.status === 'error' && state.message.toLowerCase().includes('missing') && state.message.toLowerCase().includes('permission');
 

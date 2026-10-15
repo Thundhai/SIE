@@ -296,9 +296,13 @@ describe('IntelligencePage', () => {
       renderPage();
 
       await waitFor(() => expect(screen.getByText('Partial attention evaluation')).toBeInTheDocument());
+      // Scoped to the partial-evaluation banner itself: the custom
+      // empty-state description below also legitimately contains the
+      // phrase "not evaluated", which an unscoped query would also match.
+      const partialEvaluationBanner = screen.getByText('Partial attention evaluation').closest('div') as HTMLElement;
       expect(screen.getByText(/No attention items from the categories that were evaluated/)).toBeInTheDocument();
-      expect(screen.getByText(/Insufficient site history/)).toBeInTheDocument();
-      expect(screen.getByText(/not evaluated/)).toBeInTheDocument();
+      expect(within(partialEvaluationBanner).getByText(/Insufficient site history/)).toBeInTheDocument();
+      expect(within(partialEvaluationBanner).getByText(/not evaluated/)).toBeInTheDocument();
       expect(screen.queryByText('Nothing needs attention right now')).not.toBeInTheDocument();
     });
 
