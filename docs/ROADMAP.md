@@ -4,6 +4,8 @@
 
 **Derived from:** a full audit of both repositories (security, product completeness, architecture) conducted 2026-10-15.
 
+**This document itself landed via PR #33** (merged `dd3d40d`); the README/LICENSE/rebrand item via PR #34 (merged `46ec220`); the Decision/Outcome/Verification UI fix via PR #35 (merged `15aa757`) — all three on `main` as of 2026-10-15.
+
 ---
 
 ## Status Summary
@@ -26,9 +28,9 @@ Priority legend: **P0** blocking/urgent · **P1** high value, this quarter · **
 
 ## Phase 0 — Stop the Bleeding (days, not weeks)
 
-- [x] **(P0)** Hide or clearly label the Decision/Outcome/Verification controls on Action Detail (`ActionOutcomeLifecycle.tsx`) — they're live, reachable, and every click currently 501s. — PR #35, open.
+- [x] **(P0)** Hide or clearly label the Decision/Outcome/Verification controls on Action Detail (`ActionOutcomeLifecycle.tsx`) — they're live, reachable, and every click currently 501s. — PR #35, merged into `main` (`15aa757`).
 - [x] **(P0)** ~~Re-vendor `sie-contract` into the public repo~~ — **already done.** Verified 2026-10-15: `backend/vendor/sie_contract/` is already at 0.4.0 (`PROVENANCE.json`: vendored 2026-10-03 from Commercial Core commit `8fd692a`), includes `decisions.py`/`rag.py`/`intelligence_context.py`/`status.py`/`tenancy.py`, and `test_sie_contract_vendored.py`'s 8 drift-check tests pass. The earlier audit finding (stale at 0.2.0) was itself stale. PR #14 ("Vendor sie-contract 0.2.0") appears fully superseded by what's already on `main` — flagged for disposition, not yet closed.
-- [x] **(P0)** Add root `README.md`, `LICENSE`, rebrand `package.json` (still named `react-example`, no description). — PR #34, open.
+- [x] **(P0)** Add root `README.md`, `LICENSE`, rebrand `package.json` (still named `react-example`, no description). — PR #34, merged into `main` (`46ec220`).
 
 ## Phase 1 — Close the Decision Loop (highest-leverage wiring)
 
