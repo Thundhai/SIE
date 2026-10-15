@@ -27,6 +27,14 @@ function dateAtNoonIso(value: string): string {
   return new Date(`${value}T12:00:00`).toISOString();
 }
 
+function isAbort(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'AbortError';
+}
+
+function describeError(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
+}
+
 function classificationLabel(value: IntelligenceOutcomeClassification): string {
   return {
     EFFECTIVE: 'Effective',
@@ -60,13 +68,21 @@ export function ActionOutcomeLifecycle({ action }: { action: SafetyAction }) {
   const [verificationState, setVerificationState] = useState<OutcomeVerificationState | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  // Decision recording/outcome tracking/verification are implemented in
-  // the private Commercial Core repository and have no client wired for
-  // them yet on this deployment (SIE M43-IP-03) — every call here 501s.
+  // Decisions are wired (Roadmap Phase 1); outcome tracking/verification
+  // are still implemented only in the private Commercial Core repository
+  // and have no client wired for them yet on this deployment (SIE
+  // M43-IP-03) — that half of the lifecycle still 501s. Decisions and
+  // outcomes are fetched independently (Promise.allSettled below) so one
+  // capability's availability is never masked by the other's — showing
+  // the decision honestly even while outcome recording stays unavailable.
   // Tracked separately from `error` so the UI can say so honestly
   // instead of showing a scary generic failure, and skip offering forms
   // that could never succeed.
   const [unavailable, setUnavailable] = useState(false);
+  // Narrower than `unavailable`: Decisions loaded fine, but outcome
+  // tracking specifically 501s on this deployment. Shown as an inline
+  // note next to the (real) decision, instead of hiding everything.
+  const [outcomesUnavailable, setOutcomesUnavailable] = useState(false);
 
   const [classification, setClassification] =
     useState<IntelligenceOutcomeClassification>('EFFECTIVE');
@@ -86,8 +102,9 @@ export function ActionOutcomeLifecycle({ action }: { action: SafetyAction }) {
     setLoading(true);
     setError(null);
     setUnavailable(false);
+    setOutcomesUnavailable(false);
 
-    Promise.all([
+    Promise.allSettled([
       listIntelligenceDecisions({
         organizationId: organization.id,
         linkedActionId: action.id,
@@ -101,17 +118,30 @@ export function ActionOutcomeLifecycle({ action }: { action: SafetyAction }) {
         pageSize: 25,
       }),
     ])
-      .then(([decisions, outcomes]) => {
-        setDecision(decisions.items[0] ?? null);
-        setOutcome(outcomes.items[0] ?? null);
-      })
-      .catch((requestError: unknown) => {
-        if (requestError instanceof DOMException && requestError.name === 'AbortError') return;
-        if (isUnavailableError(requestError)) {
-          setUnavailable(true);
-          return;
+      .then(([decisionsResult, outcomesResult]) => {
+        let hardError: string | null = null;
+
+        if (decisionsResult.status === 'fulfilled') {
+          setDecision(decisionsResult.value.items[0] ?? null);
+        } else if (!isAbort(decisionsResult.reason)) {
+          if (isUnavailableError(decisionsResult.reason)) {
+            setUnavailable(true);
+          } else {
+            hardError = describeError(decisionsResult.reason, 'Could not load the linked decision.');
+          }
         }
-        setError(requestError instanceof Error ? requestError.message : 'Could not load outcome lifecycle.');
+
+        if (outcomesResult.status === 'fulfilled') {
+          setOutcome(outcomesResult.value.items[0] ?? null);
+        } else if (!isAbort(outcomesResult.reason)) {
+          if (isUnavailableError(outcomesResult.reason)) {
+            setOutcomesUnavailable(true);
+          } else {
+            hardError = hardError ?? describeError(outcomesResult.reason, 'Could not load the recorded outcome.');
+          }
+        }
+
+        if (hardError) setError(hardError);
       })
       .finally(() => setLoading(false));
 
@@ -170,7 +200,7 @@ export function ActionOutcomeLifecycle({ action }: { action: SafetyAction }) {
       setEvidenceIds('');
     } catch (requestError) {
       if (isUnavailableError(requestError)) {
-        setUnavailable(true);
+        setOutcomesUnavailable(true);
       } else {
         setError(requestError instanceof Error ? requestError.message : 'Could not record the outcome.');
       }
@@ -208,7 +238,7 @@ export function ActionOutcomeLifecycle({ action }: { action: SafetyAction }) {
       setVerificationRationale('');
     } catch (requestError) {
       if (isUnavailableError(requestError)) {
-        setUnavailable(true);
+        setOutcomesUnavailable(true);
       } else {
         setError(requestError instanceof Error ? requestError.message : 'Could not record verification.');
       }
@@ -253,11 +283,18 @@ export function ActionOutcomeLifecycle({ action }: { action: SafetyAction }) {
               </p>
             </div>
 
-            {!canWrite && (
+            {outcomesUnavailable && (
+              <p className="text-sm text-text-secondary">
+                Outcome tracking isn't available on this deployment yet — the decision above is real, but recording
+                what happened next requires the private Commercial Core service's Outcomes capability, not configured here.
+              </p>
+            )}
+
+            {!outcomesUnavailable && !canWrite && (
               <p className="text-sm text-text-secondary">You do not have permission to record an intelligence outcome.</p>
             )}
 
-            {canWrite && (
+            {!outcomesUnavailable && canWrite && (
               <>
                 <div className="grid gap-3 sm:grid-cols-2">
                   <Select

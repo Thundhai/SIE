@@ -34,10 +34,13 @@ from functools import lru_cache
 import sie_contract
 from fastapi import HTTPException, status
 from sie_contract import (
+    ActorType,
     AnalyticsSignalsResultDTO,
     AnalyticsSummaryDTO,
     AnalyticsTrendDTO,
     AttentionResultDTO,
+    DecisionListResultDTO,
+    DecisionReferenceDTO,
     EnterpriseIntelligenceResultDTO,
     ErrorResponse,
     KnownErrorCode,
@@ -52,6 +55,9 @@ _ANALYTICS_SUMMARY_PATH = "/internal/v1/analytics/summary"
 _ANALYTICS_TRENDS_PATH = "/internal/v1/analytics/trends"
 _ANALYTICS_SIGNALS_PATH = "/internal/v1/analytics/signals"
 _ENTERPRISE_INTELLIGENCE_PATH = "/internal/v1/intelligence/enterprise"
+_DECISIONS_PATH = "/internal/v1/decisions"
+_DECISIONS_GET_PATH = "/internal/v1/decisions/get"
+_DECISIONS_LIST_PATH = "/internal/v1/decisions/list"
 
 
 class CommercialCoreUnavailable(HTTPException):
@@ -113,6 +119,15 @@ class CommercialCoreAuthorizationError(CommercialCoreIntegrationError):
 
 class CommercialCoreValidationError(CommercialCoreIntegrationError):
     """cc_service rejected the request body itself (422)."""
+
+
+class CommercialCoreNotFoundError(CommercialCoreIntegrationError):
+    """cc_service reported 404 -- Decisions' own create/get can both
+    404 (an unknown `decision_id`, `site_id`, or `linked_action_id`, or
+    an `attention_reference` that does not match any current Attention
+    item). The caller's own request being wrong, never a dependency
+    failure -- mapped to a 404, not treated as `MODEL_NOT_AVAILABLE`
+    like every other `CommercialCoreIntegrationError`."""
 
 
 class CommercialCoreDependencyUnavailableError(CommercialCoreIntegrationError):
@@ -206,6 +221,47 @@ class CommercialCoreClient:
     ) -> EnterpriseIntelligenceResultDTO:
         raise NotImplementedError
 
+    def create_decision(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        scope: str,
+        site_id: uuid.UUID | None,
+        as_of: datetime,
+        window_days: int,
+        attention_reference: str,
+        decision_type: str,
+        rationale: str,
+        linked_action_id: uuid.UUID | None,
+        actor_type: ActorType,
+        actor_id: uuid.UUID,
+        request_id: str | None,
+    ) -> DecisionReferenceDTO:
+        raise NotImplementedError
+
+    def get_decision(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        decision_id: uuid.UUID,
+        request_id: str | None,
+    ) -> DecisionReferenceDTO:
+        raise NotImplementedError
+
+    def list_decisions(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        site_id: uuid.UUID | None,
+        attention_reference: str | None,
+        decision_type: str | None,
+        linked_action_id: uuid.UUID | None,
+        page: int,
+        page_size: int,
+        request_id: str | None,
+    ) -> DecisionListResultDTO:
+        raise NotImplementedError
+
 
 class NotConfiguredCommercialCoreClient(CommercialCoreClient):
     """The fallback implementation this repository ships when Commercial
@@ -273,6 +329,47 @@ class NotConfiguredCommercialCoreClient(CommercialCoreClient):
         request_id: str | None,
     ) -> EnterpriseIntelligenceResultDTO:
         raise self.unavailable("Enterprise intelligence")
+
+    def create_decision(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        scope: str,
+        site_id: uuid.UUID | None,
+        as_of: datetime,
+        window_days: int,
+        attention_reference: str,
+        decision_type: str,
+        rationale: str,
+        linked_action_id: uuid.UUID | None,
+        actor_type: ActorType,
+        actor_id: uuid.UUID,
+        request_id: str | None,
+    ) -> DecisionReferenceDTO:
+        raise self.unavailable("Intelligence decision recording/history")
+
+    def get_decision(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        decision_id: uuid.UUID,
+        request_id: str | None,
+    ) -> DecisionReferenceDTO:
+        raise self.unavailable("Intelligence decision recording/history")
+
+    def list_decisions(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        site_id: uuid.UUID | None,
+        attention_reference: str | None,
+        decision_type: str | None,
+        linked_action_id: uuid.UUID | None,
+        page: int,
+        page_size: int,
+        request_id: str | None,
+    ) -> DecisionListResultDTO:
+        raise self.unavailable("Intelligence decision recording/history")
 
 
 class HttpCommercialCoreClient(CommercialCoreClient):
@@ -437,15 +534,31 @@ class HttpCommercialCoreClient(CommercialCoreClient):
             f"Commercial Core returned an unexpected HTTP status ({response.status_code})."
         ) from None
 
-    def _post_and_decode(self, path: str, body: dict, *, organization_id: uuid.UUID, request_id: str | None, log_name: str):
+    def _post_and_decode(
+        self,
+        path: str,
+        body: dict,
+        *,
+        organization_id: uuid.UUID,
+        request_id: str | None,
+        log_name: str,
+        expected_status: int = 200,
+    ):
         """Shared request/response mechanics for the three Analytics
         methods below -- headers, transport-failure mapping, and
         non-2xx mapping are identical to `get_attention()`'s own
         inline implementation above (kept separate, not refactored
         into this shared helper, so this addition cannot change that
         already-verified method's behavior). Returns the decoded JSON
-        body on a 200; raises the same typed exceptions `get_attention()`
-        raises, on every other outcome."""
+        body on `expected_status` (200 for every pre-existing caller;
+        Decisions' own create call passes 201, the one write in this
+        client); raises the same typed exceptions `get_attention()`
+        raises, on every other outcome. `404` additionally maps through
+        here (Decisions' own get/create can both 404 -- an unknown
+        `decision_id`, `site_id`, or `linked_action_id`) as a plain
+        `HTTPException` carrying Commercial Core's own safe message,
+        never a 503: this is the caller's own request being wrong, not
+        a dependency failure."""
         import httpx
 
         headers = {
@@ -471,7 +584,7 @@ class HttpCommercialCoreClient(CommercialCoreClient):
         if transport_failure is not None:
             raise transport_failure
 
-        if response.status_code == 200:
+        if response.status_code == expected_status:
             logger.info(f"commercial_core.{log_name}.response_received", extra=log_fields)
             try:
                 return response.json()
@@ -483,8 +596,11 @@ class HttpCommercialCoreClient(CommercialCoreClient):
                 ) from None
 
         error_code: str | None = None
+        error_message: str | None = None
         try:
-            error_code = ErrorResponse(**response.json()).error_code
+            parsed_error = ErrorResponse(**response.json())
+            error_code = parsed_error.error_code
+            error_message = parsed_error.message
         except Exception:
             pass  # Falls through to the generic, status-code-only handling below.
 
@@ -500,6 +616,9 @@ class HttpCommercialCoreClient(CommercialCoreClient):
                     "Commercial Core rejected this request's tenant binding."
                 ) from None
             raise CommercialCoreAuthorizationError("Commercial Core denied this request.") from None
+        if response.status_code == 404:
+            logger.warning(f"commercial_core.{log_name}.not_found", extra=log_fields)
+            raise CommercialCoreNotFoundError(error_message or "Commercial Core reported that the requested resource does not exist.") from None
         if response.status_code == 422:
             logger.warning(f"commercial_core.{log_name}.validation_failed", extra=log_fields)
             raise CommercialCoreValidationError("Commercial Core rejected the request as invalid.") from None
@@ -609,6 +728,92 @@ class HttpCommercialCoreClient(CommercialCoreClient):
         )
         try:
             return EnterpriseIntelligenceResultDTO(**decoded)
+        except Exception:
+            raise CommercialCoreMalformedResponseError(
+                "Commercial Core returned a successful response that does not match the expected contract shape."
+            ) from None
+
+    def create_decision(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        scope: str,
+        site_id: uuid.UUID | None,
+        as_of: datetime,
+        window_days: int,
+        attention_reference: str,
+        decision_type: str,
+        rationale: str,
+        linked_action_id: uuid.UUID | None,
+        actor_type: ActorType,
+        actor_id: uuid.UUID,
+        request_id: str | None,
+    ) -> DecisionReferenceDTO:
+        body = {
+            "scope": scope,
+            "site_id": str(site_id) if site_id is not None else None,
+            "as_of": as_of.isoformat(),
+            "window_days": window_days,
+            "attention_reference": attention_reference,
+            "decision_type": decision_type,
+            "rationale": rationale,
+            "linked_action_id": str(linked_action_id) if linked_action_id is not None else None,
+            "actor_type": actor_type.value,
+            "actor_id": str(actor_id),
+        }
+        decoded = self._post_and_decode(
+            _DECISIONS_PATH, body, organization_id=organization_id, request_id=request_id, log_name="decisions_create", expected_status=201
+        )
+        try:
+            return DecisionReferenceDTO(**decoded)
+        except Exception:
+            raise CommercialCoreMalformedResponseError(
+                "Commercial Core returned a successful response that does not match the expected contract shape."
+            ) from None
+
+    def get_decision(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        decision_id: uuid.UUID,
+        request_id: str | None,
+    ) -> DecisionReferenceDTO:
+        body = {"decision_id": str(decision_id)}
+        decoded = self._post_and_decode(
+            _DECISIONS_GET_PATH, body, organization_id=organization_id, request_id=request_id, log_name="decisions_get"
+        )
+        try:
+            return DecisionReferenceDTO(**decoded)
+        except Exception:
+            raise CommercialCoreMalformedResponseError(
+                "Commercial Core returned a successful response that does not match the expected contract shape."
+            ) from None
+
+    def list_decisions(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        site_id: uuid.UUID | None,
+        attention_reference: str | None,
+        decision_type: str | None,
+        linked_action_id: uuid.UUID | None,
+        page: int,
+        page_size: int,
+        request_id: str | None,
+    ) -> DecisionListResultDTO:
+        body = {
+            "site_id": str(site_id) if site_id is not None else None,
+            "attention_reference": attention_reference,
+            "decision_type": decision_type,
+            "linked_action_id": str(linked_action_id) if linked_action_id is not None else None,
+            "page": page,
+            "page_size": page_size,
+        }
+        decoded = self._post_and_decode(
+            _DECISIONS_LIST_PATH, body, organization_id=organization_id, request_id=request_id, log_name="decisions_list"
+        )
+        try:
+            return DecisionListResultDTO(**decoded)
         except Exception:
             raise CommercialCoreMalformedResponseError(
                 "Commercial Core returned a successful response that does not match the expected contract shape."

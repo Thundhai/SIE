@@ -2,9 +2,9 @@
   "source_repository": "Thundhai/SIE-Commercial-Core",
   "source_path": "sie-contract",
   "source_branch": "main",
-  "source_commit": "8fd692a49dd2d3b18734e723ccc3bdb94046608b",
-  "source_contract_version": "0.4.0",
-  "vendored_at": "2026-10-03",
+  "source_commit": "8a63aa77784508b5e9bcec94a5febaaacff7564e",
+  "source_contract_version": "0.5.0",
+  "vendored_at": "2026-10-15",
   "vendored_files": [
     "VERSION",
     "pyproject.toml",
@@ -21,7 +21,7 @@
     "src/sie_contract/tenancy.py",
     "src/sie_contract/version.py"
   ],
-  "source_tree_sha256": "90d5a98314a99c337e22edf2b53081d4336bb3b760b8f8a47ea4d88667daccd5",
+  "source_tree_sha256": "57c26c494e2adf521be9aa010b53aaa7d18d7dfbabab73d9b370ada88dc5e0b6",
   "hash_algorithm": "sha256 over each vendored_files entry, in listed order, as (relative_posix_path + '\\n' + raw_file_bytes)",
   "notice": "This is a controlled, vendored copy of Commercial Core's sie-contract package. Do not edit any file under this directory independently. A real change originates in Thundhai/SIE-Commercial-Core's sie-contract/ package and is re-vendored here as a fresh copy, with this file's source_commit, source_contract_version, vendored_at, and source_tree_sha256 all updated together. tests/test_sie_contract_vendored.py enforces this by recomputing source_tree_sha256 and failing if it disagrees with the value recorded here."
 }

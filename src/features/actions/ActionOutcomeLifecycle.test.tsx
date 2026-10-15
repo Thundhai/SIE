@@ -90,4 +90,41 @@ describe('ActionOutcomeLifecycle', () => {
     await waitFor(() => expect(screen.getByText(/No intelligence decision is linked/)).toBeInTheDocument());
     expect(screen.queryByText("Outcome tracking isn't available on this deployment")).not.toBeInTheDocument();
   });
+
+  // Roadmap Phase 1: Decisions is wired now, but Outcomes still 501s on
+  // most deployments (Roadmap Phase 2). The two must not be conflated --
+  // a real, linked decision should show even while outcome recording
+  // stays unavailable, instead of the whole section collapsing to the
+  // generic "not available" empty state.
+  it('shows the real decision even when outcome tracking specifically is still unavailable', async () => {
+    vi.mocked(listIntelligenceDecisions).mockResolvedValue({
+      items: [
+        {
+          id: 'dec-1',
+          organization_id: 'org-1',
+          attention_reference: 'attn:org:2026-06-01:trend:0',
+          scope: 'organization',
+          site_id: null,
+          attention_category: 'enterprise_trend',
+          attention_priority: 'HIGH',
+          attention_title: 'Rising incident rate',
+          decision: 'ACT',
+          rationale: 'Escalated to site manager.',
+          decided_at: '2026-06-01T00:00:00Z',
+          actor_type: 'human',
+          actor_id: 'user-1',
+        },
+      ],
+      total: 1,
+      page: 1,
+      page_size: 25,
+    });
+    vi.mocked(listIntelligenceOutcomes).mockRejectedValue(new ApiError('Not implemented.', { status: 501 }));
+    renderLifecycle();
+
+    await waitFor(() => expect(screen.getByText('Rising incident rate')).toBeInTheDocument());
+    expect(screen.getByText(/Outcome tracking isn't available on this deployment yet/)).toBeInTheDocument();
+    expect(screen.queryByText("Outcome tracking isn't available on this deployment", { exact: true })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /record outcome/i })).not.toBeInTheDocument();
+  });
 });
