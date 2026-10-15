@@ -612,7 +612,7 @@ export const APIIntegrationsView: React.FC<APIIntegrationsViewProps> = ({ onNavi
             {/* Quick Curl Snippet */}
             <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800 flex items-center justify-between text-[11px] font-mono text-slate-400 overflow-x-auto">
               <span className="truncate mr-2">
-                curl -X {selectedEndpoint.method} "https://api.safelytic.com{selectedEndpoint.path}" -H "Authorization: Bearer sie_live_..."
+                curl -X {selectedEndpoint.method} "https://api.safelytic.com{selectedEndpoint.path}" -H "Authorization: Bearer YOUR_API_KEY_NOT_CONFIGURED"
               </span>
               <button
                 onClick={() => handleCopyCode([
