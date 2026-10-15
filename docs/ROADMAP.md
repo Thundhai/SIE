@@ -15,12 +15,14 @@
 | Phase | Items | Done | % Complete | Last checked |
 |---|---|---|---|---|
 | Phase 0 — Stop the Bleeding | 3 | 3 | 100% | 2026-10-15 |
-| Phase 1 — Close the Decision Loop | 5 | 1 | 20% | 2026-10-15 |
+| Phase 1 — Close the Decision Loop | 5 | 3 | 60% | 2026-10-15 |
 | Phase 2 — Finish the Intelligence Loop | 4 | 0 | 0% | 2026-10-15 |
 | Phase 3 — Enterprise Readiness | 5 | 0 | 0% | 2026-10-15 |
 | Phase 4 — Strategic Decisions + Expansion | 5 | 0 | 0% | 2026-10-15 |
 | Phase 5 — Hygiene & Long-Term | 7 | 0 | 0% | 2026-10-15 |
-| **Overall** | **29** | **4** | **14%** | **2026-10-15** |
+| **Overall** | **29** | **6** | **21%** | **2026-10-15** |
+
+Phase 1's remaining count (2/5) is: 1 deferred by deliberate decision (Render), 1 needs a human with repo admin access (branch protection — not automatable from here).
 
 Priority legend: **P0** blocking/urgent · **P1** high value, this quarter · **P2** real but can wait · **P3** hygiene/cleanup/long-term.
 
@@ -37,10 +39,10 @@ Priority legend: **P0** blocking/urgent · **P1** high value, this quarter · **
 Decisions is fully built on both ends (contract DTO `DecisionReferenceDTO` + backend service both exist and are tested) — this is integration work, not new engineering, following the pattern already proven for Attention.
 
 - [x] **(P0)** Wire Decisions end-to-end: `domain_service` route → `app/contract_adapters/decisions_adapter.py` → `cc_service/domain_client/decisions.py` → public HTTP client → unhide UI. — `Thundhai/SIE-Commercial-Core` PR #11 (merged `8a63aa7`) + PR #37 here (merged `32f05dd`). Widened `sie_contract` 0.4.0 → 0.5.0 along the way (additive: `DecisionReferenceDTO` gained `scope`/`site_id`/`attention_category`/`attention_priority`/`attention_title`, all already public via Attention, plus a `DecisionListResultDTO` list envelope — see `BOUNDARY_DECISIONS.md` Section 13 in Commercial Core). `memory-context` stays a 501 stub pending Phase 2's Organizational Memory contract design.
-- [ ] **(P1)** Move production off Render's free tier (current intermittent 502s from idle spin-down).
-- [ ] **(P1)** Enforce real branch-protection / PR-merge discipline (all 24 closed PRs in history show `merged: false` — the review gate isn't actually the enforced merge path today).
-- [ ] **(P1)** Commit CodeQL + secret-scanning as version-controlled workflow config (currently active only via repo-settings "default setup" — invisible/unauditable from the code, silently disable-able).
-- [ ] **(P1)** Add Dependabot to both repos (neither has one).
+- [~] **(P1)** ~~Move production off Render's free tier~~ — **deliberately deferred, not forgotten.** Explicit decision 2026-10-15: no new recurring spend while pre-revenue/still in production validation. Revisit once there's a paying deployment to justify it.
+- [ ] **(P1)** Enforce real branch-protection / PR-merge discipline (all 24 closed PRs in history show `merged: false` — the review gate isn't actually the enforced merge path today). **Not automatable from here** — no GitHub MCP tool exposes branch-protection/ruleset management; this needs a human with repo admin access in Settings → Branches. Concretely, for `main` on both repos: require a PR before merging, require the `CI`/`backend`/`frontend` status checks to pass, require at least 1 approval, and (optionally) require branches to be up to date before merging.
+- [x] **(P1)** Commit CodeQL + secret-scanning as version-controlled workflow config — done for `Thundhai/SIE` (this repo): `.github/workflows/codeql.yml` (javascript-typescript/python/actions, matching what "default setup" already covered) + a `security-scan` (gitleaks) job added to `ci.yml`, both free on a public repo. Required a `.gitleaks.toml` allowlist for 5 previously-audited, confirmed-false-positive strings already in history (example API keys in docs/UI, a test fixture constant, a report UUID, a mock sensor ID — none real) so the new job doesn't permanently fail on old, harmless commits. **Not yet done for `Thundhai/SIE-Commercial-Core`** (already has version-controlled gitleaks; still lacks a version-controlled CodeQL workflow) — deliberately not added without checking first: it's a *private* repo, so new CI minutes there may draw on a paid Actions quota depending on the org's GitHub plan, unlike the public repo's unlimited minutes. Needs an explicit go-ahead given the no-new-spend decision above.
+- [x] **(P1)** Add Dependabot to both repos — `.github/dependabot.yml` added to both (npm/pip/github-actions for `Thundhai/SIE`; pip for the main package and the `sie-contract/` subpackage, plus github-actions, for `Thundhai/SIE-Commercial-Core`). Zero cost: Dependabot version/security updates don't consume Actions minutes on either public or private repos.
 
 ## Phase 2 — Finish the Rest of the Intelligence Loop
 

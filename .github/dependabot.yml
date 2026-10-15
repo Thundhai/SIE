@@ -1,0 +1,32 @@
+version: 2
+updates:
+  # Frontend (root package.json) — npm, weekly, grouped into one PR.
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      npm-dependencies:
+        patterns:
+          - "*"
+    open-pull-requests-limit: 5
+
+  # Backend (backend/requirements.txt) — pip, weekly, grouped into one PR.
+  - package-ecosystem: "pip"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+    groups:
+      pip-dependencies:
+        patterns:
+          - "*"
+    open-pull-requests-limit: 5
+
+  # This repository's own CI workflow actions (actions/checkout, etc.) —
+  # security-relevant and otherwise easy to forget, since nothing else
+  # here ever bumps them.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
