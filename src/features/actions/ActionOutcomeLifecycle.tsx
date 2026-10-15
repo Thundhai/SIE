@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../../auth/AuthContext';
 import { Button } from '../../components/ui/Button';
+import { EmptyState } from '../../components/ui/EmptyState';
 import { Input } from '../../components/ui/Input';
 import { Select } from '../../components/ui/Select';
 import { Textarea } from '../../components/ui/Textarea';
+import { isUnavailableError } from '../../services/api/errors';
 import {
   createIntelligenceOutcome,
   createOutcomeVerification,
@@ -58,6 +60,13 @@ export function ActionOutcomeLifecycle({ action }: { action: SafetyAction }) {
   const [verificationState, setVerificationState] = useState<OutcomeVerificationState | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Decision recording/outcome tracking/verification are implemented in
+  // the private Commercial Core repository and have no client wired for
+  // them yet on this deployment (SIE M43-IP-03) — every call here 501s.
+  // Tracked separately from `error` so the UI can say so honestly
+  // instead of showing a scary generic failure, and skip offering forms
+  // that could never succeed.
+  const [unavailable, setUnavailable] = useState(false);
 
   const [classification, setClassification] =
     useState<IntelligenceOutcomeClassification>('EFFECTIVE');
@@ -76,6 +85,7 @@ export function ActionOutcomeLifecycle({ action }: { action: SafetyAction }) {
     const controller = new AbortController();
     setLoading(true);
     setError(null);
+    setUnavailable(false);
 
     Promise.all([
       listIntelligenceDecisions({
@@ -97,6 +107,10 @@ export function ActionOutcomeLifecycle({ action }: { action: SafetyAction }) {
       })
       .catch((requestError: unknown) => {
         if (requestError instanceof DOMException && requestError.name === 'AbortError') return;
+        if (isUnavailableError(requestError)) {
+          setUnavailable(true);
+          return;
+        }
         setError(requestError instanceof Error ? requestError.message : 'Could not load outcome lifecycle.');
       })
       .finally(() => setLoading(false));
@@ -155,7 +169,11 @@ export function ActionOutcomeLifecycle({ action }: { action: SafetyAction }) {
       setSummary('');
       setEvidenceIds('');
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'Could not record the outcome.');
+      if (isUnavailableError(requestError)) {
+        setUnavailable(true);
+      } else {
+        setError(requestError instanceof Error ? requestError.message : 'Could not record the outcome.');
+      }
     } finally {
       setSubmitting(false);
     }
@@ -189,7 +207,11 @@ export function ActionOutcomeLifecycle({ action }: { action: SafetyAction }) {
       setVerificationState(refreshed);
       setVerificationRationale('');
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'Could not record verification.');
+      if (isUnavailableError(requestError)) {
+        setUnavailable(true);
+      } else {
+        setError(requestError instanceof Error ? requestError.message : 'Could not record verification.');
+      }
     } finally {
       setSubmitting(false);
     }
@@ -207,14 +229,21 @@ export function ActionOutcomeLifecycle({ action }: { action: SafetyAction }) {
       <div className="mt-3 rounded-lg border border-border bg-surface p-4">
         {loading && <p className="text-sm text-text-secondary">Loading outcome lifecycle…</p>}
 
-        {!loading && !decision && (
+        {!loading && unavailable && (
+          <EmptyState
+            title="Outcome tracking isn't available on this deployment"
+            description="Decision recording, outcome tracking, and verification are implemented in the private Commercial Core service, which isn't configured here yet. This section will activate once it is."
+          />
+        )}
+
+        {!loading && !unavailable && !decision && (
           <p className="text-sm text-text-secondary">
             No intelligence decision is linked to this action. An outcome requires an explicit Intelligence Decision reference;
             SIE will not infer one from action completion.
           </p>
         )}
 
-        {!loading && decision && !outcome && (
+        {!loading && !unavailable && decision && !outcome && (
           <div className="space-y-4">
             <div>
               <p className="text-xs font-medium uppercase tracking-wide text-text-muted">Decision</p>
@@ -273,7 +302,7 @@ export function ActionOutcomeLifecycle({ action }: { action: SafetyAction }) {
           </div>
         )}
 
-        {!loading && outcome && (
+        {!loading && !unavailable && outcome && (
           <div className="space-y-4">
             <div className="grid gap-4 sm:grid-cols-3">
               <div>
