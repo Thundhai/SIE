@@ -1,0 +1,63 @@
+name: CodeQL
+
+# Roadmap Phase 1: replaces GitHub's repo-settings "default setup" for
+# code scanning with a version-controlled workflow — visible in review,
+# auditable in git history, and not silently disable-able from outside
+# the codebase. Covers the same three categories default setup was
+# already running (javascript-typescript, python, actions) so this is a
+# like-for-like replacement, not a narrowing.
+#
+# Requires "default setup" to be switched OFF first (Settings > Code
+# security > Code scanning > Default setup > Disable) -- confirmed the
+# hard way: an earlier attempt at this workflow failed with "CodeQL
+# analyses from advanced configurations cannot be processed when the
+# default setup is enabled" (real job log, not assumed). GitHub does
+# NOT auto-disable default setup just because an advanced workflow
+# exists; that was a wrong assumption corrected after seeing this fail.
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  schedule:
+    # Weekly, independent of any push — catches newly-disclosed query
+    # patterns against code that hasn't changed recently.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: javascript-typescript
+            build-mode: none
+          - language: python
+            build-mode: none
+          - language: actions
+            build-mode: none
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{ matrix.language }}"
