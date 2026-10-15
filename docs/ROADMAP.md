@@ -15,14 +15,14 @@
 | Phase | Items | Done | % Complete | Last checked |
 |---|---|---|---|---|
 | Phase 0 — Stop the Bleeding | 3 | 3 | 100% | 2026-10-15 |
-| Phase 1 — Close the Decision Loop | 5 | 2 | 40% | 2026-10-15 |
+| Phase 1 — Close the Decision Loop | 5 | 3 | 60% | 2026-10-15 |
 | Phase 2 — Finish the Intelligence Loop | 4 | 0 | 0% | 2026-10-15 |
 | Phase 3 — Enterprise Readiness | 5 | 0 | 0% | 2026-10-15 |
 | Phase 4 — Strategic Decisions + Expansion | 5 | 0 | 0% | 2026-10-15 |
 | Phase 5 — Hygiene & Long-Term | 7 | 0 | 0% | 2026-10-15 |
-| **Overall** | **29** | **5** | **17%** | **2026-10-15** |
+| **Overall** | **29** | **6** | **21%** | **2026-10-15** |
 
-Phase 1's remaining count (3/5) is: 1 deferred by deliberate decision (Render), 1 needs a human with repo admin access (branch protection — not automatable from here), 1 half-done and blocked on a repo-settings switch (CodeQL half of the CodeQL+secrets item — secrets half is done).
+Phase 1's remaining count (2/5) is: 1 deferred by deliberate decision (Render), 1 half-done and blocked on a repo-settings switch (CodeQL half of the CodeQL+secrets item — secrets half is done).
 
 Priority legend: **P0** blocking/urgent · **P1** high value, this quarter · **P2** real but can wait · **P3** hygiene/cleanup/long-term.
 
@@ -40,7 +40,7 @@ Decisions is fully built on both ends (contract DTO `DecisionReferenceDTO` + bac
 
 - [x] **(P0)** Wire Decisions end-to-end: `domain_service` route → `app/contract_adapters/decisions_adapter.py` → `cc_service/domain_client/decisions.py` → public HTTP client → unhide UI. — `Thundhai/SIE-Commercial-Core` PR #11 (merged `8a63aa7`) + PR #37 here (merged `32f05dd`). Widened `sie_contract` 0.4.0 → 0.5.0 along the way (additive: `DecisionReferenceDTO` gained `scope`/`site_id`/`attention_category`/`attention_priority`/`attention_title`, all already public via Attention, plus a `DecisionListResultDTO` list envelope — see `BOUNDARY_DECISIONS.md` Section 13 in Commercial Core). `memory-context` stays a 501 stub pending Phase 2's Organizational Memory contract design.
 - [~] **(P1)** ~~Move production off Render's free tier~~ — **deliberately deferred, not forgotten.** Explicit decision 2026-10-15: no new recurring spend while pre-revenue/still in production validation. Revisit once there's a paying deployment to justify it.
-- [ ] **(P1)** Enforce real branch-protection / PR-merge discipline (all 24 closed PRs in history show `merged: false` — the review gate isn't actually the enforced merge path today). **Not automatable from here** — no GitHub MCP tool exposes branch-protection/ruleset management; this needs a human with repo admin access in Settings → Branches. Concretely, for `main` on both repos: require a PR before merging, require the `CI`/`backend`/`frontend` status checks to pass, require at least 1 approval, and (optionally) require branches to be up to date before merging.
+- [x] **(P1)** Enforce real branch-protection / PR-merge discipline on `main` for both repos — done manually by the user 2026-10-15 via Settings → Branches (required: PR before merging, 1 approval, status checks `backend`/`frontend`/`security-scan` and Commercial Core's equivalents, branches up to date before merging). Not independently verifiable from this session — confirmed `gh api repos/.../branches/main/protection` returns `403 Resource not accessible by integration` for both repos, the same admin-only boundary that made this unautomatable in the first place — so this is recorded on the user's confirmation, not a tool-verified read.
 - [~] **(P1)** Commit CodeQL + secret-scanning as version-controlled workflow config — **secret-scanning half done** for `Thundhai/SIE` (this repo): a `security-scan` (gitleaks) job added to `ci.yml`, free on a public repo, required a `.gitleaks.toml` allowlist for 5 previously-audited, confirmed-false-positive strings already in history (example API keys in docs/UI, a test fixture constant, a report UUID, a mock sensor ID — none real) so the new job doesn't permanently fail on old, harmless commits. **CodeQL half blocked, not merged**: a `.github/workflows/codeql.yml` was written and actually run on a PR here, but GitHub rejected its results outright — `"CodeQL analyses from advanced configurations cannot be processed when the default setup is enabled"` — confirmed from the real job log, not assumed. This repo's code-scanning default setup must be switched off first (Settings → Code security → Code scanning → Default setup → Disable), a repo-admin action no GitHub MCP tool here can perform. The workflow file lives on a separate branch/PR gated on that switch, not merged into `main`. **Not yet attempted for `Thundhai/SIE-Commercial-Core`** (already has version-controlled gitleaks; still lacks CodeQL) — being a private repo, new CI minutes there may draw on a paid Actions quota depending on the org's plan, so this needs an explicit go-ahead given the no-new-spend decision above, on top of the same default-setup switch-off this repo needs.
 - [x] **(P1)** Add Dependabot to both repos — `.github/dependabot.yml` added to both (npm/pip/github-actions for `Thundhai/SIE`; pip for the main package and the `sie-contract/` subpackage, plus github-actions, for `Thundhai/SIE-Commercial-Core`). Zero cost: Dependabot version/security updates don't consume Actions minutes on either public or private repos.
 
