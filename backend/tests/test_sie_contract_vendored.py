@@ -51,7 +51,7 @@ FORBIDDEN_PREFIXES = (
 )
 
 # The exact public API sie-contract/src/sie_contract/__init__.py's own
-# __all__ declares as of contract version 0.4.0 (see PROVENANCE.json).
+# __all__ declares as of contract version 0.5.0 (see PROVENANCE.json).
 EXPECTED_EXPORTS = {
     "__version__",
     "ActorType",
@@ -103,6 +103,7 @@ EXPECTED_EXPORTS = {
     "IntelligenceContextCategoryStatus",
     "IntelligenceContextCategoryStatusDTO",
     "IntelligenceContextSummaryDTO",
+    "DecisionListResultDTO",
     "DecisionReferenceDTO",
     "CitationReferenceDTO",
     "RAGAnswerDTO",
@@ -140,7 +141,7 @@ def test_sie_contract_imports_successfully():
 def test_sie_contract_version_matches_expected_contract_version():
     import sie_contract
 
-    assert sie_contract.__version__ == "0.4.0"
+    assert sie_contract.__version__ == "0.5.0"
 
 
 def test_sie_contract_exposes_the_expected_public_api():

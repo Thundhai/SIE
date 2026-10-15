@@ -26,7 +26,7 @@ from sie_contract.attention import (
     AttentionScope,
 )
 from sie_contract.common import AsOfWindow, EvidenceReference, EvidenceType, Page
-from sie_contract.decisions import DecisionReferenceDTO
+from sie_contract.decisions import DecisionListResultDTO, DecisionReferenceDTO
 from sie_contract.enterprise_intelligence import (
     ActionsContextDTO,
     ConcentrationClassification,
@@ -120,6 +120,7 @@ __all__ = [
     "IntelligenceContextCategoryStatusDTO",
     "IntelligenceContextSummaryDTO",
     # decisions
+    "DecisionListResultDTO",
     "DecisionReferenceDTO",
     # rag
     "CitationReferenceDTO",
