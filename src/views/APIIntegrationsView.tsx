@@ -40,6 +40,24 @@ interface APIIntegrationsViewProps {
   onNavigateToCanonicalModel?: () => void;
 }
 
+/**
+ * Safely embeds `value` as a single POSIX-shell single-quoted argument.
+ *
+ * Replacing `'` with `\'` (as this file previously did) does not escape
+ * anything inside single quotes -- backslash has no special meaning there,
+ * so `\'` ends the quoted string early and leaves the remainder as
+ * unquoted, literal shell syntax. The only correct way to embed a single
+ * quote inside a single-quoted argument is to close the quote, emit an
+ * escaped literal quote outside it, then reopen the quote: `'\''`.
+ *
+ * `requestBody` (the only caller of this function) is user-editable via
+ * the Request Payload textarea, so it's the one tainted value this
+ * generated "Copy cURL" example embeds.
+ */
+function shellQuoteSingle(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
 export const APIIntegrationsView: React.FC<APIIntegrationsViewProps> = ({ onNavigateToCanonicalModel }) => {
   const [endpoints] = useState<ApiEndpoint[]>(API_ENDPOINTS);
   const [selectedEndpoint, setSelectedEndpoint] = useState<ApiEndpoint>(API_ENDPOINTS[0]);
@@ -122,7 +140,7 @@ export const APIIntegrationsView: React.FC<APIIntegrationsViewProps> = ({ onNavi
         <div className="flex items-center gap-2 shrink-0">
           <div className="p-2.5 px-3.5 rounded-lg bg-slate-900 border border-slate-800 text-xs font-mono text-cyan-300 flex items-center gap-2 shadow-sm">
             <Key className="w-3.5 h-3.5 text-cyan-400" />
-            <span>Key: <strong className="text-slate-100">sie_live_9f82...3b1a</strong></span>
+            <span>Key: <strong className="text-slate-100">YOUR_API_KEY_NOT_CONFIGURED</strong></span>
           </div>
         </div>
       </div>
@@ -607,10 +625,10 @@ export const APIIntegrationsView: React.FC<APIIntegrationsViewProps> = ({ onNavi
             {/* Quick Curl Snippet */}
             <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800 flex items-center justify-between text-[11px] font-mono text-slate-400 overflow-x-auto">
               <span className="truncate mr-2">
-                curl -X {selectedEndpoint.method} "https://api.safelytic.com{selectedEndpoint.path}" -H "Authorization: Bearer sie_live_..."
+                curl -X {selectedEndpoint.method} "https://api.safelytic.com{selectedEndpoint.path}" -H "Authorization: Bearer YOUR_API_KEY_NOT_CONFIGURED"
               </span>
               <button 
-                onClick={() => handleCopyCode(`curl -X ${selectedEndpoint.method} "https://api.safelytic.com${selectedEndpoint.path}" \\\n  -H "Authorization: Bearer sie_live_9f823b1a" \\\n  -H "Content-Type: application/json" \\\n  -d '${requestBody.replace(/'/g, "\\'")}'`)}
+                onClick={() => handleCopyCode(`curl -X ${selectedEndpoint.method} "https://api.safelytic.com${selectedEndpoint.path}" \\\n  -H "Authorization: Bearer YOUR_API_KEY_NOT_CONFIGURED" \\\n  -H "Content-Type: application/json" \\\n  -d ${shellQuoteSingle(requestBody)}`)}
                 className="text-cyan-400 hover:text-cyan-300 shrink-0 font-sans text-xs underline"
               >
                 Copy cURL
