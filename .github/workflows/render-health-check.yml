@@ -1,0 +1,60 @@
+name: Render Health Check (Keep-Alive Experiment)
+
+# Zero-cost, Free-plan-only experiment: pings each production service's
+# unauthenticated, dependency-free liveness route on a schedule, aiming
+# to keep Render's Free-plan 15-minute idle timer from ever completing.
+#
+# This is NOT a guaranteed reliability fix. GitHub Actions schedules are
+# not guaranteed to fire at the exact minute, a successful ping does not
+# guarantee Render won't still spin the instance down, and this cannot
+# eliminate cold starts or 502s outright -- see the three services'
+# own health.py modules (cc_service, domain_service, backend/app/api/v1)
+# for why /health/live specifically was chosen: none of the three touch
+# a database or require authentication, unlike /health/ready on two of
+# them.
+#
+# Each service is checked in its own independent job (no `needs:`
+# between them) so one service being down never prevents the other two
+# from being checked and logged.
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sie-backend:
+    name: SIE backend
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Ping /health/live
+        run: ./.github/workflows/scripts/ping-health.sh "SIE backend" "https://sie-zhfr.onrender.com/health/live"
+        shell: bash
+
+  cc-service:
+    name: cc-service
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Ping /health/live
+        run: ./.github/workflows/scripts/ping-health.sh "cc-service" "https://cc-service-opki.onrender.com/health/live"
+        shell: bash
+
+  cc-domain-service:
+    name: cc-domain-service
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Ping /health/live
+        run: ./.github/workflows/scripts/ping-health.sh "cc-domain-service" "https://cc-domain-service.onrender.com/health/live"
+        shell: bash
