@@ -23,7 +23,13 @@ beforeEach(() => {
   // empty list is a valid response shape for every one of them.
   vi.stubGlobal(
     'fetch',
-    vi.fn().mockResolvedValue(new Response('[]', { status: 200, headers: { 'Content-Type': 'application/json' } })),
+    // A fresh Response per call, not one shared instance: a Response
+    // body can only be read once, and several routes now make more
+    // than one independent background call per render (e.g.
+    // IntelligencePage's enterprise-intelligence, sites, and attention
+    // calls) — sharing one instance across them throws "Body is
+    // unusable: Body has already been read" on the second reader.
+    vi.fn().mockImplementation(() => Promise.resolve(new Response('[]', { status: 200, headers: { 'Content-Type': 'application/json' } }))),
   );
 });
 

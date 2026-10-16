@@ -6,11 +6,15 @@ import { Section } from '../../components/layout/Section';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { ErrorState } from '../../components/ui/ErrorState';
 import { LoadingState } from '../../components/ui/LoadingState';
+import { Select } from '../../components/ui/Select';
 import { StatusBadge } from '../../components/ui/StatusBadge';
 import { Tabs } from '../../components/ui/Tabs';
+import { getAttention, getSiteAttention, type AttentionResult } from '../../services/api/attention';
 import { getEnterpriseIntelligence, type EnterpriseIntelligence } from '../../services/api/intelligence';
+import { listSites, type Site } from '../../services/api/sites';
 import type { AsyncState } from '../../types/common';
 import { formatCanonicalLabel } from '../events/eventStatus';
+import { AttentionList } from './AttentionList';
 import {
   anomalyDirectionLabel,
   anomalyStatusLabel,
@@ -52,6 +56,19 @@ export function IntelligencePage() {
   const [reloadToken, setReloadToken] = useState(0);
   const [tab, setTab] = useState('indicators');
 
+  // Attention — SIE Milestone 33's own ranked "what should I look at
+  // first?" list. A separate, independent lane from the enterprise
+  // intelligence state above: its own sites list, its own scope
+  // selector, its own loading/error state, so a failure in either never
+  // blanks the other (SIE §17 "PARTIAL_DATA" convention, same as the
+  // rest of this page).
+  const [attentionSites, setAttentionSites] = useState<Site[]>([]);
+  const [attentionSiteId, setAttentionSiteId] = useState('');
+  const [attentionSitesState, setAttentionSitesState] = useState<AsyncState<Site[]>>({ status: 'loading' });
+  const [attentionSitesReloadToken, setAttentionSitesReloadToken] = useState(0);
+  const [attentionState, setAttentionState] = useState<AsyncState<AttentionResult>>({ status: 'loading' });
+  const [attentionReloadToken, setAttentionReloadToken] = useState(0);
+
   useEffect(() => {
     if (!auth.organization) return;
     const controller = new AbortController();
@@ -64,6 +81,62 @@ export function IntelligencePage() {
       });
     return () => controller.abort();
   }, [auth.organization, reloadToken]);
+
+  useEffect(() => {
+    if (!auth.organization) return;
+    const controller = new AbortController();
+    setAttentionSites([]);
+    setAttentionSitesState({ status: 'loading' });
+    setAttentionSiteId('');
+    listSites(auth.organization.id, controller.signal)
+      .then((result) => {
+        if (controller.signal.aborted) return;
+        setAttentionSites(result);
+        setAttentionSitesState({ status: 'success', data: result });
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        setAttentionSitesState({
+          status: 'error',
+          message: error instanceof Error ? error.message : 'Could not load site choices.',
+        });
+      });
+    return () => controller.abort();
+  }, [auth.organization?.id, attentionSitesReloadToken]);
+
+  // A selected site is valid only if it belongs to the currently active
+  // organization. This prevents a previous organization's UUID from being
+  // sent during the render before its site list has refreshed. Computed
+  // here (a primitive string), rather than inside the effect depending on
+  // `attentionSites` itself, so that the effect below only re-runs when
+  // the *effective* site selection actually changes -- the sites-loading
+  // effect replaces `attentionSites` with a fresh array reference every
+  // time it resolves (even to equivalent content), and depending on that
+  // array directly caused attention to be re-fetched a second time on
+  // every mount, immediately after the sites list arrived.
+  const selectedSiteIsInCurrentOrganization = attentionSites.some(
+    (site) => site.id === attentionSiteId && site.organization_id === auth.organization?.id,
+  );
+  const effectiveAttentionSiteId = selectedSiteIsInCurrentOrganization ? attentionSiteId : '';
+
+  useEffect(() => {
+    if (!auth.organization) return;
+    const controller = new AbortController();
+    setAttentionState({ status: 'loading' });
+    const request = effectiveAttentionSiteId
+      ? getSiteAttention({ organizationId: auth.organization.id, siteId: effectiveAttentionSiteId }, controller.signal)
+      : getAttention({ organizationId: auth.organization.id }, controller.signal);
+    request
+      .then((result) => {
+        if (controller.signal.aborted) return;
+        setAttentionState({ status: 'success', data: result });
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        setAttentionState({ status: 'error', message: error instanceof Error ? error.message : 'Could not load attention.' });
+      });
+    return () => controller.abort();
+  }, [auth.organization?.id, effectiveAttentionSiteId, attentionReloadToken]);
 
   const isPermissionDenied = state.status === 'error' && state.message.toLowerCase().includes('missing') && state.message.toLowerCase().includes('permission');
 
@@ -81,6 +154,75 @@ export function IntelligencePage() {
           title="No organization context available"
           description="A development identity is not configured, or it could not be resolved against the backend. See docs/FRONTEND_ARCHITECTURE.md for setup."
         />
+      )}
+
+      {auth.organization && (
+        <Section
+          title="Attention"
+          description="What deserves attention first, in the order SIE's own ranking already determined."
+          action={
+            attentionSitesState.status === 'success' && attentionSites.length > 0 ? (
+              <div className="w-56">
+                <Select
+                  label="Scope"
+                  hideLabel
+                  value={attentionSites.some((site) => site.id === attentionSiteId && site.organization_id === auth.organization?.id) ? attentionSiteId : ''}
+                  onChange={(event) => setAttentionSiteId(event.target.value)}
+                  options={[{ value: '', label: 'Organization-wide' }, ...attentionSites.map((site) => ({ value: site.id, label: site.name }))]}
+                />
+              </div>
+            ) : undefined
+          }
+        >
+          {attentionSitesState.status === 'loading' && <p className="mb-3 text-xs text-text-muted">Loading site choices…</p>}
+          {attentionSitesState.status === 'error' && (
+            <div className="mb-3">
+              <ErrorState
+                title="Could not load site choices"
+                description={attentionSitesState.message}
+                onRetry={() => setAttentionSitesReloadToken((token) => token + 1)}
+              />
+            </div>
+          )}
+          {attentionState.status === 'loading' && <LoadingState label="Loading attention…" />}
+          {attentionState.status === 'error' && (
+            <ErrorState description={attentionState.message} onRetry={() => setAttentionReloadToken((t) => t + 1)} />
+          )}
+          {attentionState.status === 'success' && (
+            <>
+              {attentionState.data.category_status.some((category) => category.status !== 'EVALUATED') && (
+                <div role="status" className="mb-3 rounded-md border border-informational/30 bg-informational-surface p-3 text-sm text-informational">
+                  <p className="font-medium">Partial attention evaluation</p>
+                  <p className="mt-1">Some categories could not be evaluated. An empty attention list does not mean all risk signals were checked.</p>
+                  <ul className="mt-2 list-disc pl-5">
+                    {attentionState.data.category_status
+                      .filter((category) => category.status !== 'EVALUATED')
+                      .map((category) => (
+                        <li key={category.category}>
+                          {formatCanonicalLabel(category.category)} — {category.status.replaceAll('_', ' ').toLowerCase()}
+                          {category.reason ? `: ${category.reason}` : ''}
+                        </li>
+                      ))}
+                  </ul>
+                </div>
+              )}
+              <AttentionList
+                items={attentionState.data.items}
+                sites={attentionSites}
+                emptyTitle={
+                  attentionState.data.category_status.some((category) => category.status !== 'EVALUATED')
+                    ? 'No attention items from the categories that were evaluated'
+                    : undefined
+                }
+                emptyDescription={
+                  attentionState.data.category_status.some((category) => category.status !== 'EVALUATED')
+                    ? 'Some categories were unavailable or not evaluated. Review the partial-evaluation details above before concluding there are no concerns.'
+                    : undefined
+                }
+              />
+            </>
+          )}
+        </Section>
       )}
 
       {auth.organization && state.status === 'loading' && <LoadingState label="Loading intelligence data…" />}
