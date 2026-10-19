@@ -14,13 +14,15 @@
 
 | Phase | Items | Done | % Complete | Last checked |
 |---|---|---|---|---|
-| Phase 0 — Stop the Bleeding | 3 | 3 | 100% | 2026-10-15 |
-| Phase 1 — Close the Decision Loop | 5 | 3 | 60% | 2026-10-15 |
-| Phase 2 — Finish the Intelligence Loop | 4 | 0 | 0% | 2026-10-15 |
-| Phase 3 — Enterprise Readiness | 5 | 0 | 0% | 2026-10-15 |
-| Phase 4 — Strategic Decisions + Expansion | 5 | 0 | 0% | 2026-10-15 |
-| Phase 5 — Hygiene & Long-Term | 7 | 0 | 0% | 2026-10-15 |
-| **Overall** | **29** | **6** | **21%** | **2026-10-15** |
+| Phase 0 — Stop the Bleeding | 3 | 3 | 100% | 2026-10-19 |
+| Phase 1 — Close the Decision Loop | 5 | 3 | 60% | 2026-10-19 |
+| Phase 2 — Finish the Intelligence Loop | 4 | 0 | 0% | 2026-10-19 |
+| Phase 3 — Enterprise Readiness | 5 | 0 | 0% | 2026-10-19 |
+| Phase 4 — Strategic Decisions + Expansion | 5 | 0 | 0% | 2026-10-19 |
+| Phase 5 — Hygiene & Long-Term | 7 | 0 | 0% | 2026-10-19 |
+| **Overall** | **29** | **6** | **21%** | **2026-10-19** |
+
+**2026-10-19 check-in: no numeric change** from the 2026-10-16 check-in — re-verified against live GitHub state (PR states, CI, file contents), not just this file's checkboxes. One relevant development since then, not yet reflected in a checkbox: `Thundhai/SIE` PR #46 (draft) adds `docs/PHASE2_OUTCOMES_VERIFICATION_CONTRACT_SPEC.md` and a handoff doc proposing DTOs for Phase 2's first item below — specification only, explicitly not implemented pending the user's approval of the boundary/field-set questions it raises, so Phase 2 stays 0/4 until that lands for real. Also found three pre-existing open PRs outside the 29 tracked items (#30, #32, #39) under separate reconciliation, not counted in these numbers.
 
 Phase 1's remaining count (2/5) is: 1 deferred by deliberate decision (Render), 1 half-done and blocked on a repo-settings switch (CodeQL half of the CodeQL+secrets item — secrets half is done).
 
