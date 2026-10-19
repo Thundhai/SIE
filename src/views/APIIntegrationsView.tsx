@@ -36,6 +36,11 @@ import {
 import { API_ENDPOINTS } from '../mockData';
 import { ApiEndpoint } from '../types';
 
+/** Quote a value for a POSIX shell command using single-quote escaping. */
+function shellQuote(value: string): string {
+  return "'" + value.replace(/'/g, "'\\''") + "'";
+}
+
 interface APIIntegrationsViewProps {
   onNavigateToCanonicalModel?: () => void;
 }
@@ -122,7 +127,7 @@ export const APIIntegrationsView: React.FC<APIIntegrationsViewProps> = ({ onNavi
         <div className="flex items-center gap-2 shrink-0">
           <div className="p-2.5 px-3.5 rounded-lg bg-slate-900 border border-slate-800 text-xs font-mono text-cyan-300 flex items-center gap-2 shadow-sm">
             <Key className="w-3.5 h-3.5 text-cyan-400" />
-            <span>Key: <strong className="text-slate-100">sie_live_9f82...3b1a</strong></span>
+            <span>Key: <strong className="text-slate-100">YOUR_API_KEY_NOT_CONFIGURED</strong></span>
           </div>
         </div>
       </div>
@@ -607,10 +612,20 @@ export const APIIntegrationsView: React.FC<APIIntegrationsViewProps> = ({ onNavi
             {/* Quick Curl Snippet */}
             <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800 flex items-center justify-between text-[11px] font-mono text-slate-400 overflow-x-auto">
               <span className="truncate mr-2">
-                curl -X {selectedEndpoint.method} "https://api.safelytic.com{selectedEndpoint.path}" -H "Authorization: Bearer sie_live_..."
+                curl -X {selectedEndpoint.method} "https://api.safelytic.com{selectedEndpoint.path}" -H "Authorization: Bearer YOUR_API_KEY_NOT_CONFIGURED"
               </span>
-              <button 
-                onClick={() => handleCopyCode(`curl -X ${selectedEndpoint.method} "https://api.safelytic.com${selectedEndpoint.path}" \\\n  -H "Authorization: Bearer sie_live_9f823b1a" \\\n  -H "Content-Type: application/json" \\\n  -d '${requestBody.replace(/'/g, "\\'")}'`)}
+              <button
+                onClick={() => handleCopyCode([
+                  'curl -X',
+                  shellQuote(selectedEndpoint.method),
+                  shellQuote(`https://api.safelytic.com${selectedEndpoint.path}`),
+                  '-H',
+                  shellQuote('Authorization: Bearer YOUR_API_KEY_NOT_CONFIGURED'),
+                  '-H',
+                  shellQuote('Content-Type: application/json'),
+                  '--data-binary',
+                  shellQuote(requestBody),
+                ].join(' '))}
                 className="text-cyan-400 hover:text-cyan-300 shrink-0 font-sans text-xs underline"
               >
                 Copy cURL
