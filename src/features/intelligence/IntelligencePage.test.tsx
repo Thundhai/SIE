@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -122,6 +122,21 @@ function makeAttentionResult(
     items,
     category_status,
   };
+}
+
+/** Matches the `createDeferred` convention already used elsewhere in
+ * this codebase (e.g. `src/auth/OrganizationSwitchProvider.test.tsx`)
+ * for deterministically controlling when an in-flight mock resolves,
+ * instead of racing real timers. */
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  promise.catch(() => {});
+  return { promise, resolve, reject };
 }
 
 describe('IntelligencePage', () => {
@@ -361,6 +376,64 @@ describe('IntelligencePage', () => {
           expect.anything(),
         ),
       );
+    });
+
+    it('aborts the stale organization\'s in-flight attention request on an organization switch, and never lets its late result overwrite the new organization\'s data', async () => {
+      vi.mocked(getEnterpriseIntelligence).mockResolvedValue(baseIntelligence());
+      vi.mocked(listSites).mockResolvedValue([]);
+
+      const ORGANIZATION_B = { id: 'org-2', name: 'Globex' };
+      const deferredOrgA = createDeferred<AttentionResult>();
+      const deferredOrgB = createDeferred<AttentionResult>();
+      const capturedSignals: Record<string, AbortSignal> = {};
+      vi.mocked(getAttention).mockImplementation((params, signal) => {
+        capturedSignals[params.organizationId] = signal as AbortSignal;
+        return params.organizationId === ORGANIZATION.id ? deferredOrgA.promise : deferredOrgB.promise;
+      });
+
+      const { rerender } = renderPage();
+
+      await waitFor(() =>
+        expect(getAttention).toHaveBeenCalledWith(expect.objectContaining({ organizationId: ORGANIZATION.id }), expect.anything()),
+      );
+      const orgASignal = capturedSignals[ORGANIZATION.id];
+      expect(orgASignal.aborted).toBe(false);
+
+      // Switch the active organization before Organization A's request
+      // has resolved -- same tree shape (AuthProviderStub > MemoryRouter
+      // > IntelligencePage), only the auth context's `organization`
+      // changes, exactly like a real in-app organization switch.
+      rerender(
+        <AuthProviderStub value={{ isAuthenticated: true, organization: ORGANIZATION_B }}>
+          <MemoryRouter initialEntries={['/intelligence']}>
+            <IntelligencePage />
+          </MemoryRouter>
+        </AuthProviderStub>,
+      );
+
+      // The effect's cleanup aborts Organization A's controller
+      // synchronously on the organization-switching render -- before
+      // Organization B's request has even been issued, let alone resolved.
+      expect(orgASignal.aborted).toBe(true);
+
+      await waitFor(() =>
+        expect(getAttention).toHaveBeenCalledWith(expect.objectContaining({ organizationId: ORGANIZATION_B.id }), expect.anything()),
+      );
+
+      deferredOrgB.resolve(makeAttentionResult([makeAttentionItem({ title: 'Org B item', reference: 'ref-org-b' })]));
+      await waitFor(() => expect(screen.getByText('Org B item')).toBeInTheDocument());
+
+      // Organization A's request finally resolves after the switch (a
+      // slow response arriving late). Its success handler must discard
+      // it via the aborted-signal check rather than overwriting
+      // Organization B's already-rendered data.
+      await act(async () => {
+        deferredOrgA.resolve(makeAttentionResult([makeAttentionItem({ title: 'Org A item (STALE)', reference: 'ref-org-a' })]));
+        await deferredOrgA.promise;
+      });
+
+      expect(screen.queryByText('Org A item (STALE)')).not.toBeInTheDocument();
+      expect(screen.getByText('Org B item')).toBeInTheDocument();
     });
 
     it('never offers a "Review" or decision-recording control (decisions are not available on this deployment)', async () => {
