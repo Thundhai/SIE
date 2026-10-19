@@ -1,5 +1,6 @@
 {
-  "name": "react-example",
+  "name": "sie-frontend",
+  "description": "SIE (Safety Intelligence Engine) — frontend application for the public SIE Enterprise Safety Intelligence Platform.",
   "private": true,
   "version": "0.0.0",
   "type": "module",

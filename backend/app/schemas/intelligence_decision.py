@@ -1,10 +1,21 @@
 """HTTP request/response shapes for `POST /api/v1/intelligence/decisions`,
 `GET /api/v1/intelligence/decisions`, and
 `GET /api/v1/intelligence/decisions/{decision_id}` — SIE Milestone 34:
-Human Decision & Intervention Trace. Mirrors
-`app/models/intelligence_decision.py`'s own field set, the same
-internal-domain-object/API-schema split every other domain in this
-codebase already establishes.
+Human Decision & Intervention Trace.
+
+**Updated by Roadmap Phase 1 (Decisions wiring).** `IntelligenceDecisionRead`
+used to mirror `app/models/intelligence_decision.py`'s own full field
+set one-to-one (this route's pre-extraction shape, when the backing
+table was local). Recording a decision is now routed through the
+private Commercial Core service, whose own `sie_contract.
+DecisionReferenceDTO` is the actual wire shape this route receives --
+deliberately narrower (see that DTO's own docstring and
+`docs/M43_IP_03_PUBLIC_EXTRACTION.md`): no `calculation_version`,
+`evidence_*`, `linked_action`/`site_label` join, or
+`decided_by_user_id`/`decided_by_api_client_id` split (collapsed into
+`actor_type`/`actor_id`). `IntelligenceDecisionRead` below mirrors that
+DTO field-for-field instead -- it is honest about what this deployment
+can actually return, not what the pre-extraction monolith once could.
 """
 
 from __future__ import annotations
@@ -54,43 +65,29 @@ class IntelligenceDecisionCreate(BaseModel):
     )
 
 
-class IntelligenceDecisionActionRead(BaseModel):
-    """A small, stable summary of the linked `SafetyAction` -- never the
-    full `SafetyActionRead` shape (that stays `GET /actions/{id}`'s own
-    job); just enough to answer "which intervention resulted" without a
-    second request."""
-
-    id: uuid.UUID
-    title: str
-    status: str
-
-
 class IntelligenceDecisionRead(BaseModel):
+    """Field-for-field `sie_contract.DecisionReferenceDTO` -- see module
+    docstring for why this is narrower than the pre-extraction shape.
+    A caller that needs the linked `SafetyAction`'s own title/status
+    already holds `linked_action_id` itself (it supplied it when
+    creating the decision) and can resolve it via the existing
+    `GET /actions/{id}` route -- no Commercial Core round trip."""
+
     id: uuid.UUID
     organization_id: uuid.UUID
-    site_id: uuid.UUID | None
-    site_label: str | None
-    scope: str
     attention_reference: str
+    scope: str
+    site_id: uuid.UUID | None
     attention_category: str
     attention_priority: str
     attention_title: str
-    attention_explanation: str
-    intelligence_as_of: datetime
-    intelligence_window_days: int
-    calculation_version: str | None
-    evidence_source: str | None
-    evidence_entity_ids: list[str]
-    evidence_event_ids: list[str]
-    decision: IntelligenceDecisionType
+    decision: IntelligenceDecisionType = Field(validation_alias="decision_type")
     rationale: str
-    linked_action_id: uuid.UUID | None
-    linked_action: IntelligenceDecisionActionRead | None
-    decided_by_user_id: uuid.UUID | None
-    decided_by_api_client_id: uuid.UUID | None
     decided_at: datetime
-    created_at: datetime
-    updated_at: datetime
+    actor_type: str
+    actor_id: uuid.UUID
+
+    model_config = {"populate_by_name": True}
 
 
 class IntelligenceDecisionListRead(BaseModel):
@@ -102,7 +99,6 @@ class IntelligenceDecisionListRead(BaseModel):
 
 __all__ = [
     "IntelligenceDecisionCreate",
-    "IntelligenceDecisionActionRead",
     "IntelligenceDecisionRead",
     "IntelligenceDecisionListRead",
 ]

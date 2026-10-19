@@ -8,3 +8,20 @@ coverage/
 !.env.example
 !.env.development.example
 !.env.production.example
+
+# Generated evaluation/calibration reports -- real query/dataset content,
+# deliberately removed from this repo once already (commit 744f18b,
+# "Security: remove sensitive reports and internal architecture docs").
+# Running the backend test suite locally regenerates
+# backend/docs/SEMANTIC_EVALUATION_REPORT.{json,md} as a side effect
+# (tests/evaluation/test_semantic_embedding_evaluation.py); the other
+# three pairs below have no current generator but are ignored for the
+# same reason -- they're exactly what that commit scrubbed.
+backend/docs/SEMANTIC_EVALUATION_REPORT.json
+backend/docs/SEMANTIC_EVALUATION_REPORT.md
+backend/docs/CALIBRATION_EVALUATION_REPORT.json
+backend/docs/CALIBRATION_EVALUATION_REPORT.md
+backend/docs/REAL_ENTERPRISE_DATASET_EVALUATION_REPORT.json
+backend/docs/REAL_ENTERPRISE_DATASET_EVALUATION_REPORT.md
+backend/docs/REAL_ENTERPRISE_TERMINOLOGY_CALIBRATION_REPORT.json
+backend/docs/REAL_ENTERPRISE_TERMINOLOGY_CALIBRATION_REPORT.md

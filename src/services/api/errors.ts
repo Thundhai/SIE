@@ -44,6 +44,19 @@ export function isPermissionDeniedError(error: unknown): boolean {
   return error instanceof ApiError && error.status === 403;
 }
 
+/**
+ * True when the backend answered with 501 — a capability whose
+ * implementation lives in the private Commercial Core repository and
+ * has no client wired for it yet (`commercial_core_client.unavailable()`,
+ * `backend/app/integrations/commercial_core.py`), not a genuine failure.
+ * A caller uses this to show an honest "not available on this
+ * deployment" message instead of a scary generic error, and to skip
+ * offering a write action that could never succeed.
+ */
+export function isUnavailableError(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 501;
+}
+
 export async function apiErrorFromResponse(response: Response): Promise<ApiError> {
   const requestId = response.headers.get('X-Request-Id');
   let message = `Request failed with status ${response.status}`;

@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../../auth/AuthContext';
 import { Button } from '../../components/ui/Button';
+import { EmptyState } from '../../components/ui/EmptyState';
 import { Input } from '../../components/ui/Input';
 import { Select } from '../../components/ui/Select';
 import { Textarea } from '../../components/ui/Textarea';
+import { isUnavailableError } from '../../services/api/errors';
 import {
   createIntelligenceOutcome,
   createOutcomeVerification,
@@ -23,6 +25,14 @@ function todayDate(): string {
 
 function dateAtNoonIso(value: string): string {
   return new Date(`${value}T12:00:00`).toISOString();
+}
+
+function isAbort(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'AbortError';
+}
+
+function describeError(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
 }
 
 function classificationLabel(value: IntelligenceOutcomeClassification): string {
@@ -58,6 +68,21 @@ export function ActionOutcomeLifecycle({ action }: { action: SafetyAction }) {
   const [verificationState, setVerificationState] = useState<OutcomeVerificationState | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Decisions are wired (Roadmap Phase 1); outcome tracking/verification
+  // are still implemented only in the private Commercial Core repository
+  // and have no client wired for them yet on this deployment (SIE
+  // M43-IP-03) — that half of the lifecycle still 501s. Decisions and
+  // outcomes are fetched independently (Promise.allSettled below) so one
+  // capability's availability is never masked by the other's — showing
+  // the decision honestly even while outcome recording stays unavailable.
+  // Tracked separately from `error` so the UI can say so honestly
+  // instead of showing a scary generic failure, and skip offering forms
+  // that could never succeed.
+  const [unavailable, setUnavailable] = useState(false);
+  // Narrower than `unavailable`: Decisions loaded fine, but outcome
+  // tracking specifically 501s on this deployment. Shown as an inline
+  // note next to the (real) decision, instead of hiding everything.
+  const [outcomesUnavailable, setOutcomesUnavailable] = useState(false);
 
   const [classification, setClassification] =
     useState<IntelligenceOutcomeClassification>('EFFECTIVE');
@@ -76,8 +101,10 @@ export function ActionOutcomeLifecycle({ action }: { action: SafetyAction }) {
     const controller = new AbortController();
     setLoading(true);
     setError(null);
+    setUnavailable(false);
+    setOutcomesUnavailable(false);
 
-    Promise.all([
+    Promise.allSettled([
       listIntelligenceDecisions({
         organizationId: organization.id,
         linkedActionId: action.id,
@@ -91,13 +118,30 @@ export function ActionOutcomeLifecycle({ action }: { action: SafetyAction }) {
         pageSize: 25,
       }),
     ])
-      .then(([decisions, outcomes]) => {
-        setDecision(decisions.items[0] ?? null);
-        setOutcome(outcomes.items[0] ?? null);
-      })
-      .catch((requestError: unknown) => {
-        if (requestError instanceof DOMException && requestError.name === 'AbortError') return;
-        setError(requestError instanceof Error ? requestError.message : 'Could not load outcome lifecycle.');
+      .then(([decisionsResult, outcomesResult]) => {
+        let hardError: string | null = null;
+
+        if (decisionsResult.status === 'fulfilled') {
+          setDecision(decisionsResult.value.items[0] ?? null);
+        } else if (!isAbort(decisionsResult.reason)) {
+          if (isUnavailableError(decisionsResult.reason)) {
+            setUnavailable(true);
+          } else {
+            hardError = describeError(decisionsResult.reason, 'Could not load the linked decision.');
+          }
+        }
+
+        if (outcomesResult.status === 'fulfilled') {
+          setOutcome(outcomesResult.value.items[0] ?? null);
+        } else if (!isAbort(outcomesResult.reason)) {
+          if (isUnavailableError(outcomesResult.reason)) {
+            setOutcomesUnavailable(true);
+          } else {
+            hardError = hardError ?? describeError(outcomesResult.reason, 'Could not load the recorded outcome.');
+          }
+        }
+
+        if (hardError) setError(hardError);
       })
       .finally(() => setLoading(false));
 
@@ -155,7 +199,11 @@ export function ActionOutcomeLifecycle({ action }: { action: SafetyAction }) {
       setSummary('');
       setEvidenceIds('');
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'Could not record the outcome.');
+      if (isUnavailableError(requestError)) {
+        setOutcomesUnavailable(true);
+      } else {
+        setError(requestError instanceof Error ? requestError.message : 'Could not record the outcome.');
+      }
     } finally {
       setSubmitting(false);
     }
@@ -189,7 +237,11 @@ export function ActionOutcomeLifecycle({ action }: { action: SafetyAction }) {
       setVerificationState(refreshed);
       setVerificationRationale('');
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'Could not record verification.');
+      if (isUnavailableError(requestError)) {
+        setOutcomesUnavailable(true);
+      } else {
+        setError(requestError instanceof Error ? requestError.message : 'Could not record verification.');
+      }
     } finally {
       setSubmitting(false);
     }
@@ -207,14 +259,21 @@ export function ActionOutcomeLifecycle({ action }: { action: SafetyAction }) {
       <div className="mt-3 rounded-lg border border-border bg-surface p-4">
         {loading && <p className="text-sm text-text-secondary">Loading outcome lifecycle…</p>}
 
-        {!loading && !decision && (
+        {!loading && unavailable && (
+          <EmptyState
+            title="Outcome tracking isn't available on this deployment"
+            description="Decision recording, outcome tracking, and verification are implemented in the private Commercial Core service, which isn't configured here yet. This section will activate once it is."
+          />
+        )}
+
+        {!loading && !unavailable && !decision && (
           <p className="text-sm text-text-secondary">
             No intelligence decision is linked to this action. An outcome requires an explicit Intelligence Decision reference;
             SIE will not infer one from action completion.
           </p>
         )}
 
-        {!loading && decision && !outcome && (
+        {!loading && !unavailable && decision && !outcome && (
           <div className="space-y-4">
             <div>
               <p className="text-xs font-medium uppercase tracking-wide text-text-muted">Decision</p>
@@ -224,11 +283,18 @@ export function ActionOutcomeLifecycle({ action }: { action: SafetyAction }) {
               </p>
             </div>
 
-            {!canWrite && (
+            {outcomesUnavailable && (
+              <p className="text-sm text-text-secondary">
+                Outcome tracking isn't available on this deployment yet — the decision above is real, but recording
+                what happened next requires the private Commercial Core service's Outcomes capability, not configured here.
+              </p>
+            )}
+
+            {!outcomesUnavailable && !canWrite && (
               <p className="text-sm text-text-secondary">You do not have permission to record an intelligence outcome.</p>
             )}
 
-            {canWrite && (
+            {!outcomesUnavailable && canWrite && (
               <>
                 <div className="grid gap-3 sm:grid-cols-2">
                   <Select
@@ -273,7 +339,7 @@ export function ActionOutcomeLifecycle({ action }: { action: SafetyAction }) {
           </div>
         )}
 
-        {!loading && outcome && (
+        {!loading && !unavailable && outcome && (
           <div className="space-y-4">
             <div className="grid gap-4 sm:grid-cols-3">
               <div>

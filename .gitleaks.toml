@@ -1,0 +1,37 @@
+title = "SIE gitleaks allowlist"
+
+# Roadmap Phase 1: this repository's history carries exactly five
+# distinct gitleaks matches (nine occurrences across commits, as the
+# same lines moved through history) — all confirmed false positives in
+# the project's own security audit, none a real credential. Listed
+# individually, by exact secret value, so the gitleaks CI job added
+# alongside this file (.github/workflows/ci.yml's security-scan job)
+# scans real history without permanently failing on these five already-
+# investigated, harmless strings. A genuinely new secret with a
+# different value is still caught — this allowlist matches these exact
+# literal strings only, never a pattern broad enough to hide a real one.
+
+[allowlist]
+regexes = [
+  # src/views/APIIntegrationsView.tsx — a literal, user-facing example
+  # curl command shown in the API Integrations documentation view
+  # before the human ever supplies a real key. Never a real credential.
+  '''YOUR_API_KEY_NOT_CONFIGURED''',
+  # Same view, same example-curl-command purpose — an obviously fake
+  # placeholder key shown as sample output, not a provisioned credential.
+  '''sie_live_9f823b1a''',
+
+  # backend/tests/test_risk_assessment_report.py — a test fixture
+  # constant (an ontology concept_key used to exercise deprecation
+  # handling), not a secret of any kind.
+  '''M28_DEPRECATION_TEST''',
+
+  # backend/docs/REAL_ENTERPRISE_DATASET_EVALUATION_REPORT.json — a
+  # UUID used as a governing-standard identifier ("SECRETARIAT") inside
+  # a generated evaluation report, not a credential.
+  '''d7ab218f-8064-4e49-b809-5237139f8c76''',
+
+  # src/views/GovernanceView.tsx — a mock IoT sensor/device identifier
+  # in sample governance data, not a secret.
+  '''IOT-GAS-SNIF-B104''',
+]
