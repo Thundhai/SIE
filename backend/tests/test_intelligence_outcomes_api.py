@@ -68,3 +68,12 @@ def test_machine_caller_can_still_use_read_routes(client, db_session):
 
     response = client.get(f"/api/v1/intelligence/outcomes?organization_id={org['id']}", headers=_bearer(credential))
     assert response.status_code == 501
+
+
+def test_openapi_documents_the_human_only_writer_rule(client):
+    schema = client.get("/openapi.json").json()
+    for path in ("/api/v1/intelligence/outcomes", "/api/v1/intelligence/outcomes/{outcome_id}/verifications"):
+        forbidden = schema["paths"][path]["post"]["responses"]["403"]["description"]
+        assert "human user" in forbidden, path
+    tag = next(t for t in schema["tags"] if t["name"] == "intelligence-outcomes")
+    assert "human user" in tag["description"]

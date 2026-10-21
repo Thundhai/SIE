@@ -40,6 +40,15 @@ def _unavailable():
 
 _authorize_write = require_context_permission(Permission.INTELLIGENCE_DECISION_WRITE)
 
+_HUMAN_ONLY_WRITE_RESPONSES = {
+    403: {
+        "description": (
+            "Missing `intelligence:decision_write` in the organization, or the caller is an API client: "
+            "outcomes and verifications can only be recorded by a human user."
+        )
+    }
+}
+
 
 def _require_human_writer(context: RequestContext = Depends(_authorize_write)) -> RequestContext:
     """Normal permission check first (so an unauthorized caller still gets
@@ -53,7 +62,7 @@ def _require_human_writer(context: RequestContext = Depends(_authorize_write)) -
     return context
 
 
-@router.post("/outcomes", status_code=201)
+@router.post("/outcomes", status_code=201, responses=_HUMAN_ONLY_WRITE_RESPONSES)
 def create_intelligence_outcome(
     context: RequestContext = Depends(_require_human_writer),
     db: Session = Depends(get_db),
@@ -80,7 +89,7 @@ def get_intelligence_outcome(
     _unavailable()
 
 
-@router.post("/outcomes/{outcome_id}/verifications", status_code=201)
+@router.post("/outcomes/{outcome_id}/verifications", status_code=201, responses=_HUMAN_ONLY_WRITE_RESPONSES)
 def create_outcome_verification(
     outcome_id: uuid.UUID,
     context: RequestContext = Depends(_require_human_writer),
