@@ -13,9 +13,9 @@ A durable record of the owner's authorization decisions on PR #46's open questio
 
 Responding to PR #46 §4 ("Decisions required before approval"):
 
-1. **Boundary authorization — APPROVED.** The owner approves a limited exception in `Thundhai/SIE-Commercial-Core/docs/BOUNDARY_DECISIONS.md` admitting factual, human-authored Outcome/Verification governance records into `sie-contract`, despite the learning loop's current `REVIEW_REQUIRED` status. This exception covers only the four DTOs below — it does **not** extend to the learning loop, evidence-evaluation mechanics, learning-eligibility gating, or any model/scoring data, which stay excluded.
+1. **Boundary authorization — APPROVED.** The owner approves a limited exception in `Thundhai/SIE-Commercial-Core/docs/BOUNDARY_DECISIONS.md` admitting factual, human-authored Outcome/Verification governance records into `sie-contract`, despite the learning loop's current `REVIEW_REQUIRED` status. This exception covers only the four DTOs below — it does **not** extend to the learning loop, evidence-evaluation mechanics, learning-eligibility gating, or any model/scoring data, which stay excluded. Outcome and Verification records are **human-authored only**: the recording or verifying actor must be an authenticated human user (`ActorType.HUMAN`). Machine (API-client) actors are not permitted for these two record types. Decisions are unaffected and may continue to record machine actors where the existing Decisions authorization allows it.
 2. **`NO_OUTCOME_RECORDED` semantics — CLARIFIED.** This is an explicit, human-recorded classification meaning a reviewer affirmatively could not establish an outcome. It is **not** an automatic or inferred state for a missing record. The absence of an Outcome record remains absence (no row, no DTO instance) — it must never be synthesized as a `NO_OUTCOME_RECORDED` value. Implementation must keep this distinction enforceable (e.g. the enum value is only ever set by an explicit write, never defaulted).
-3. **Actor identity — CONDITIONALLY APPROVED.** `actor_type` + opaque `actor_id` is accepted in principle, aligned with the existing `DecisionReferenceDTO` convention (not `actor_reference` as PR #46's draft spec named it — the implementation task must validate the exact field name and type against `DecisionReferenceDTO` and `sie_contract.tenancy.ActorType` before finalizing, and confirm no drift between the two DTOs' actor representations).
+3. **Actor identity — CONDITIONALLY APPROVED, human-only.** `actor_type` + opaque `actor_id`, aligned with the existing `DecisionReferenceDTO` convention (not `actor_reference` as PR #46's draft spec named it). For `OutcomeReferenceDTO` and `OutcomeVerificationReferenceDTO`, `actor_type` must be `ActorType.HUMAN`. **Contract version `0.6.0` does not yet enforce this restriction**: it accepts `ActorType.MACHINE`, and the Commercial Core write services still accept an API-client actor. Enforcement must not be claimed until the contract validation, the Commercial Core service-layer checks and the relevant Public SIE and Commercial Core API write paths are implemented and tested.
 4. **Evidence references — APPROVED.** Restricted to `EvidenceType.SAFETY_EVENT` only, using the existing `EvidenceReference` shape from `sie_contract.common`. No new evidence-reference type without a demonstrated need.
 5. **Temporal semantics — APPROVED.** Timezone-aware UTC timestamps throughout; `outcome_at`/`verified_at` (event/review time) kept distinct from `recorded_at` (persistence time) on both DTOs.
 6. **Append-only history — APPROVED.** No update/PATCH DTO, no mutable status, no implicit supersession. A correction or re-review is a new record.
@@ -40,7 +40,7 @@ These refine PR #46's draft field tables with the owner's decisions above. The i
 | `evidence` | `list[EvidenceReference]` | restricted to `EvidenceType.SAFETY_EVENT` |
 | `outcome_at` | tz-aware UTC `datetime` | event time |
 | `recorded_at` | tz-aware UTC `datetime` | persistence time |
-| `actor_type` | existing `ActorType` | |
+| `actor_type` | existing `ActorType` | **HUMAN only** (not yet enforced in 0.6.0, see decision 3) |
 | `actor_id` | `UUID` | opaque; validate against `DecisionReferenceDTO` convention |
 
 ### `OutcomeListResultDTO`
@@ -56,7 +56,7 @@ These refine PR #46's draft field tables with the owner's decisions above. The i
 | `rationale` | `str`, 1–4000 chars | non-empty, human-authored |
 | `verified_at` | tz-aware UTC `datetime` | review time |
 | `recorded_at` | tz-aware UTC `datetime` | persistence time |
-| `actor_type` | existing `ActorType` | |
+| `actor_type` | existing `ActorType` | **HUMAN only** (not yet enforced in 0.6.0, see decision 3) |
 | `actor_id` | `UUID` | opaque |
 
 **Excluded from both DTOs:** evidence-evaluation details, `LearningEligibility` and its reasons, private learning gates, confidence/scoring, model internals, raw ORM fields, and any combined verification-state DTO.
@@ -98,10 +98,17 @@ Endpoint/adapter wiring; UI activation; database migrations; Organizational Memo
 
 This document is complete as an **authorization record** once committed. It does not complete Phase 2, does not implement anything, and does not authorize an implementation task to begin on its own — the owner's separate, explicit go-ahead is still required, per the instruction that produced this document.
 
+## Known limitations and integration block (2026-10-21)
+
+- **Actor identity after hard deletion is unresolved.** The actor links on Decisions, Outcomes and Verifications are `ON DELETE SET NULL`, with no stored actor type. A deleted user or API client therefore leaves a record that cannot be converted to its DTO. See the open review finding on PR #55.
+- **PR #55** (re-vendoring `sie-contract` 0.6.0) is conditionally accepted **for vendoring only**. Its actor-identity finding remains open.
+- **Outcomes/Verification integration is blocked.** No adapter, endpoint or UI may be wired until the actor-identity and human-only requirements are remediated and tested.
+- **Historical actor UUIDs:** retention and erasure treatment are deferred pending a documented privacy and retention review. Any future backfill must refuse rows with ambiguous actor identity rather than invent attribution, and must never relabel a human actor as a machine actor.
+
 ## Status
 
 - [x] Owner authorization decisions recorded (this document).
-- [ ] Explicit owner go-ahead to begin implementation — **pending**.
-- [ ] Commercial Core `sie-contract` 0.6.0 PR — not started.
-- [ ] Public SIE re-vendoring — not started.
-- [ ] Endpoint/adapter/UI wiring — not started (separate future task).
+- [x] Commercial Core `sie-contract` 0.6.0: merged (`Thundhai/SIE-Commercial-Core` PR #17, merge commit `d303545`). Does **not** yet enforce the human-only rule (decision 3).
+- [~] Public SIE re-vendoring: `Thundhai/SIE` PR #55, open; conditionally accepted for vendoring only.
+- [ ] Actor-identity and human-only remediation: not started; design pending privacy and retention review.
+- [ ] Endpoint/adapter/UI wiring: **blocked** until the remediation is implemented and tested.
