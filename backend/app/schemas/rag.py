@@ -19,10 +19,11 @@ not for exposure over HTTP.
 """
 
 import uuid
-from datetime import date
+from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.integrations.rag_contract_provisional import RAGOutcome
 from app.models.enums import ContentType, QualityStatus, VerificationStatus
 
 
@@ -109,3 +110,46 @@ class RAGQueryResponse(BaseModel):
     retrieval_metadata: dict
     model_metadata: dict | None
     prompt_version: str
+
+
+# --- Commercial Core RAG (PROVISIONAL, sie-contract 0.8.0) -------------------------------
+#
+# `RAGQueryResponse` above is the pre-extraction shape and is no longer
+# returned: it exposed similarity, source authority, extraction quality,
+# evidence counts, retrieval/model metadata and the prompt version. What
+# the route returns now is `RAGAnswerRead`, which carries exactly what
+# crosses the Commercial Core boundary (`RAGAnswerDTO`) and nothing else.
+
+
+class RAGCitationRead(BaseModel):
+    """What was cited -- never how strongly, or why it was chosen. Mirrors
+    `sie_contract.CitationReferenceDTO` field-for-field."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    citation_id: str = Field(description="Stable identifier used in the answer text, e.g. 'E1'.")
+    document_id: uuid.UUID
+    source: str
+    document: str
+    version: str
+    location: str | None
+
+
+class RAGAnswerRead(BaseModel):
+    """One evidence-grounded answer, or an honest non-answer.
+
+    - `ANSWERED`: `answer` is the generated text, supported by `citations`.
+    - `SOURCE_CONFLICT`: the sources disagree. `answer`, when present,
+      describes the disagreement and never resolves it; `citations` names
+      the sources involved.
+    - Every other outcome: `answer` is null and `explanation` says why.
+    """
+
+    organization_id: uuid.UUID
+    query: str
+    outcome: RAGOutcome
+    answer: str | None
+    explanation: str | None
+    citations: list[RAGCitationRead]
+    as_of: datetime
+    generated_at: datetime

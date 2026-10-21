@@ -47,6 +47,7 @@ from sie_contract import (
 )
 
 from app.core.config import settings
+from app.integrations.rag_contract_provisional import RAGAnswerDTO
 
 logger = logging.getLogger("sie.integrations.commercial_core")
 
@@ -58,6 +59,7 @@ _ENTERPRISE_INTELLIGENCE_PATH = "/internal/v1/intelligence/enterprise"
 _DECISIONS_PATH = "/internal/v1/decisions"
 _DECISIONS_GET_PATH = "/internal/v1/decisions/get"
 _DECISIONS_LIST_PATH = "/internal/v1/decisions/list"
+_RAG_QUERY_PATH = "/internal/v1/rag/query"
 
 
 class CommercialCoreUnavailable(HTTPException):
@@ -133,6 +135,15 @@ class CommercialCoreNotFoundError(CommercialCoreIntegrationError):
 class CommercialCoreDependencyUnavailableError(CommercialCoreIntegrationError):
     """cc_service reported its own downstream (the Domain Service)
     unavailable (503)."""
+
+
+class CommercialCoreCapabilityDisabledError(CommercialCoreDependencyUnavailableError):
+    """cc_service returned 503 with `retryable: false` -- the capability is
+    switched off (or not provisioned) on that Commercial Core deployment,
+    so retrying will not help until an operator turns it on. Today only
+    RAG reports this (`DOMAIN_SERVICE_RAG_ENABLED` off, or no production
+    model/embedding provider). Still a `CommercialCoreDependencyUnavailableError`,
+    so every existing caller keeps treating it as a 503."""
 
 
 class CommercialCoreTimeoutError(CommercialCoreIntegrationError):
@@ -262,6 +273,16 @@ class CommercialCoreClient:
     ) -> DecisionListResultDTO:
         raise NotImplementedError
 
+    def query_rag(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        query: str,
+        top_k: int | None,
+        request_id: str | None,
+    ) -> RAGAnswerDTO:
+        raise NotImplementedError
+
 
 class NotConfiguredCommercialCoreClient(CommercialCoreClient):
     """The fallback implementation this repository ships when Commercial
@@ -370,6 +391,16 @@ class NotConfiguredCommercialCoreClient(CommercialCoreClient):
         request_id: str | None,
     ) -> DecisionListResultDTO:
         raise self.unavailable("Intelligence decision recording/history")
+
+    def query_rag(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        query: str,
+        top_k: int | None,
+        request_id: str | None,
+    ) -> RAGAnswerDTO:
+        raise self.unavailable("Evidence-grounded RAG query")
 
 
 class HttpCommercialCoreClient(CommercialCoreClient):
@@ -597,10 +628,12 @@ class HttpCommercialCoreClient(CommercialCoreClient):
 
         error_code: str | None = None
         error_message: str | None = None
+        error_retryable: bool | None = None
         try:
             parsed_error = ErrorResponse(**response.json())
             error_code = parsed_error.error_code
             error_message = parsed_error.message
+            error_retryable = parsed_error.retryable
         except Exception:
             pass  # Falls through to the generic, status-code-only handling below.
 
@@ -622,6 +655,11 @@ class HttpCommercialCoreClient(CommercialCoreClient):
         if response.status_code == 422:
             logger.warning(f"commercial_core.{log_name}.validation_failed", extra=log_fields)
             raise CommercialCoreValidationError("Commercial Core rejected the request as invalid.") from None
+        if response.status_code == 503 and error_retryable is False:
+            logger.warning(f"commercial_core.{log_name}.capability_disabled", extra=log_fields)
+            raise CommercialCoreCapabilityDisabledError(
+                "This Commercial Core capability is not enabled on its deployment."
+            ) from None
         if response.status_code == 503:
             logger.warning(f"commercial_core.{log_name}.dependency_unavailable", extra=log_fields)
             raise CommercialCoreDependencyUnavailableError(
@@ -818,6 +856,41 @@ class HttpCommercialCoreClient(CommercialCoreClient):
             raise CommercialCoreMalformedResponseError(
                 "Commercial Core returned a successful response that does not match the expected contract shape."
             ) from None
+
+    def query_rag(
+        self,
+        *,
+        organization_id: uuid.UUID,
+        query: str,
+        top_k: int | None,
+        request_id: str | None,
+    ) -> RAGAnswerDTO:
+        """One evidence-grounded question to cc_service's
+        `POST /internal/v1/rag/query`. The body is `query`/`top_k` only:
+        cc_service takes the organization from its own credential's
+        `TenantContext` and rejects a body `organization_id`, so it travels
+        only as the usual `X-Organization-Id` verify-and-reject header.
+
+        Decodes against the PROVISIONAL 0.8.0 `RAGAnswerDTO`
+        (`app/integrations/rag_contract_provisional.py`). A response for a
+        different organization than the one asked about is treated as
+        malformed, never returned. The query text is never logged."""
+        body = {"query": query, "top_k": top_k}
+        decoded = self._post_and_decode(
+            _RAG_QUERY_PATH, body, organization_id=organization_id, request_id=request_id, log_name="rag_query"
+        )
+        try:
+            dto = RAGAnswerDTO(**decoded)
+        except Exception:
+            raise CommercialCoreMalformedResponseError(
+                "Commercial Core returned a successful response that does not match the expected contract shape."
+            ) from None
+        if dto.organization_id != organization_id:
+            logger.error("commercial_core.rag_query.organization_mismatch", extra={"request_id": request_id})
+            raise CommercialCoreMalformedResponseError(
+                "Commercial Core returned an answer for a different organization than the one requested."
+            )
+        return dto
 
 
 commercial_core_client: CommercialCoreClient = NotConfiguredCommercialCoreClient()
