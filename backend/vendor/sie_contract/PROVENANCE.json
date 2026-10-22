@@ -2,9 +2,9 @@
   "source_repository": "Thundhai/SIE-Commercial-Core",
   "source_path": "sie-contract",
   "source_branch": "main",
-  "source_commit": "8a63aa77784508b5e9bcec94a5febaaacff7564e",
-  "source_contract_version": "0.5.0",
-  "vendored_at": "2026-10-15",
+  "source_commit": "96223a772eeb8b289454adb26258f051ea5adeb7",
+  "source_contract_version": "0.8.0",
+  "vendored_at": "2026-10-22",
   "vendored_files": [
     "VERSION",
     "pyproject.toml",
@@ -16,12 +16,13 @@
     "src/sie_contract/enterprise_intelligence.py",
     "src/sie_contract/errors.py",
     "src/sie_contract/intelligence_context.py",
+    "src/sie_contract/outcomes.py",
     "src/sie_contract/rag.py",
     "src/sie_contract/status.py",
     "src/sie_contract/tenancy.py",
     "src/sie_contract/version.py"
   ],
-  "source_tree_sha256": "57c26c494e2adf521be9aa010b53aaa7d18d7dfbabab73d9b370ada88dc5e0b6",
+  "source_tree_sha256": "43ab3f3d88a888785bba4b7adb556962c48d9e32567f81e7ffae122b08df6145",
   "hash_algorithm": "sha256 over each vendored_files entry, in listed order, as (relative_posix_path + '\\n' + raw_file_bytes)",
   "notice": "This is a controlled, vendored copy of Commercial Core's sie-contract package. Do not edit any file under this directory independently. A real change originates in Thundhai/SIE-Commercial-Core's sie-contract/ package and is re-vendored here as a fresh copy, with this file's source_commit, source_contract_version, vendored_at, and source_tree_sha256 all updated together. tests/test_sie_contract_vendored.py enforces this by recomputing source_tree_sha256 and failing if it disagrees with the value recorded here."
 }
