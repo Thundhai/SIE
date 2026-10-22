@@ -93,7 +93,7 @@ function parseCitation(value: unknown): RagCitation {
 /** Validates a raw response against the RAG answer rules — the same
  * rules `RAGAnswerDTO`'s own validator enforces server-side, checked
  * again here so a malformed body is never rendered as an answer. */
-export function parseRagAnswer(raw: unknown, expectedOrganizationId: string): RagAnswer {
+export function parseRagAnswer(raw: unknown, expectedOrganizationId: string, expectedQuery: string): RagAnswer {
   if (!isObject(raw)) throw new RagMalformedResponseError();
   const outcome = raw.outcome;
   if (typeof outcome !== 'string' || !(RAG_OUTCOMES as readonly string[]).includes(outcome)) {
@@ -103,6 +103,9 @@ export function parseRagAnswer(raw: unknown, expectedOrganizationId: string): Ra
   if (typeof raw.query !== 'string' || typeof raw.as_of !== 'string' || typeof raw.generated_at !== 'string') {
     throw new RagMalformedResponseError();
   }
+  // An answer to a different question (a stale or mis-correlated reply)
+  // is never shown as the answer to this one.
+  if (raw.query !== expectedQuery) throw new RagMalformedResponseError();
   if (!isNullableString(raw.answer) || !isNullableString(raw.explanation) || !Array.isArray(raw.citations)) {
     throw new RagMalformedResponseError();
   }
@@ -111,6 +114,9 @@ export function parseRagAnswer(raw: unknown, expectedOrganizationId: string): Ra
 
   if (outcome === 'ANSWERED') {
     if (!isNonEmptyString(answer)) throw new RagMalformedResponseError();
+    // The panel presents an answer as generated from its cited sources,
+    // so an answer citing nothing is not shown at all.
+    if (raw.citations.length === 0) throw new RagMalformedResponseError();
   } else {
     if (!isNonEmptyString(explanation)) throw new RagMalformedResponseError();
     if (outcome !== 'SOURCE_CONFLICT' && answer !== null) throw new RagMalformedResponseError();
@@ -146,7 +152,7 @@ export async function askKnowledgeQuestion(
     if (error instanceof SyntaxError) throw new RagMalformedResponseError();
     throw error;
   }
-  return parseRagAnswer(raw, organizationId);
+  return parseRagAnswer(raw, organizationId, query);
 }
 
 /** Why a question could not be answered at all — distinct from an

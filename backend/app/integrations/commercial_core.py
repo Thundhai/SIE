@@ -45,6 +45,7 @@ from sie_contract import (
     ErrorResponse,
     KnownErrorCode,
     RAGAnswerDTO,
+    RAGOutcome,
 )
 
 from app.core.config import settings
@@ -889,8 +890,9 @@ class HttpCommercialCoreClient(CommercialCoreClient):
         only as the usual `X-Organization-Id` verify-and-reject header.
 
         Decodes against `sie_contract.RAGAnswerDTO` (contract 0.8.0). A
-        response for a different organization than the one asked about is treated as
-        malformed, never returned. The query text is never logged. Uses
+        response for a different organization or a different question, or
+        an `ANSWERED` one citing no evidence, is treated as malformed,
+        never returned. The query text is never logged. Uses
         RAG's own, longer timeout (`COMMERCIAL_CORE_RAG_TIMEOUT_SECONDS`)
         because the answer includes a model call."""
         body = {"query": query, "top_k": top_k}
@@ -912,6 +914,19 @@ class HttpCommercialCoreClient(CommercialCoreClient):
             logger.error("commercial_core.rag_query.organization_mismatch", extra={"request_id": request_id})
             raise CommercialCoreMalformedResponseError(
                 "Commercial Core returned an answer for a different organization than the one requested."
+            )
+        if dto.query != query:
+            logger.error("commercial_core.rag_query.query_mismatch", extra={"request_id": request_id})
+            raise CommercialCoreMalformedResponseError(
+                "Commercial Core returned an answer to a different question than the one asked."
+            )
+        if dto.outcome is RAGOutcome.ANSWERED and not dto.citations:
+            # Commercial Core never answers without citing evidence (an
+            # uncited answer becomes UNSUPPORTED_CLAIM_REJECTED), so one
+            # that arrives uncited is not evidence-grounded.
+            logger.error("commercial_core.rag_query.answer_without_citations", extra={"request_id": request_id})
+            raise CommercialCoreMalformedResponseError(
+                "Commercial Core returned an answer that cites no evidence."
             )
         return dto
 

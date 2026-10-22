@@ -223,6 +223,13 @@ def test_a_retrieval_filter_is_rejected_rather_than_silently_dropped(client, mem
     assert fake.calls == []
 
 
+def test_the_published_schema_states_commercial_cores_top_k_limit(client):
+    schema = client.get("/openapi.json").json()["components"]["schemas"]["RAGQueryRequest"]
+    top_k = schema["properties"]["top_k"]
+    bounds = [part.get("maximum") for part in top_k.get("anyOf", [top_k]) if "maximum" in part]
+    assert bounds == [20]
+
+
 def test_top_k_above_commercial_cores_limit_is_rejected(client, member, monkeypatch):
     org, user = member
     fake = _install(monkeypatch, _FakeRAGClient(result=_dto(org.id)))

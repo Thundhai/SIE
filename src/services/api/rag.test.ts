@@ -8,6 +8,7 @@ vi.mock('./client', () => ({
 }));
 
 const ORG = 'org-1';
+const QUERY = 'What PPE is required?';
 
 function answer(overrides: Record<string, unknown> = {}) {
   return {
@@ -59,18 +60,18 @@ describe('parseRagAnswer', () => {
       ],
       model_metadata: { provider: 'acme' },
     });
-    const result = parseRagAnswer(raw, ORG);
+    const result = parseRagAnswer(raw, ORG, QUERY);
     expect(result.citations[0]).toEqual({ citation_id: 'E1', document_id: 'd', source: 's', document: 'doc', version: 'v', location: null });
     expect(result).not.toHaveProperty('model_metadata');
   });
 
   it('accepts a source conflict that describes the disagreement', () => {
-    const result = parseRagAnswer(answer({ outcome: 'SOURCE_CONFLICT', answer: 'E1 and E2 disagree.', explanation: 'Sources disagree.' }), ORG);
+    const result = parseRagAnswer(answer({ outcome: 'SOURCE_CONFLICT', answer: 'E1 and E2 disagree.', explanation: 'Sources disagree.' }), ORG, QUERY);
     expect(result.outcome).toBe('SOURCE_CONFLICT');
   });
 
   it('accepts an abstention with an explanation and no answer', () => {
-    const result = parseRagAnswer(answer({ outcome: 'INSUFFICIENT_EVIDENCE', answer: null, explanation: 'Not enough evidence.', citations: [] }), ORG);
+    const result = parseRagAnswer(answer({ outcome: 'INSUFFICIENT_EVIDENCE', answer: null, explanation: 'Not enough evidence.', citations: [] }), ORG, QUERY);
     expect(result.answer).toBeNull();
   });
 
@@ -83,10 +84,12 @@ describe('parseRagAnswer', () => {
     ['another organization', answer({ organization_id: 'org-2' })],
     ['citations not an array', answer({ citations: null })],
     ['citation missing identity', answer({ citations: [{ citation_id: 'E1' }] })],
+    ['ANSWERED citing nothing', answer({ citations: [] })],
+    ['an answer to a different question', answer({ query: 'Something else?' })],
     ['not an object', ['a']],
     ['null', null],
   ])('rejects %s', (_label, raw) => {
-    expect(() => parseRagAnswer(raw, ORG)).toThrow(RagMalformedResponseError);
+    expect(() => parseRagAnswer(raw, ORG, QUERY)).toThrow(RagMalformedResponseError);
   });
 });
 

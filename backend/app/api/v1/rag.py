@@ -31,8 +31,9 @@ operative organization is resolved with `resolve_authorized_organization_id()`
   `query` and `top_k`. Silently dropping a filter would answer from wider
   evidence than the caller asked for, so a request carrying one is
   rejected with 422.
-- *`top_k` above 20*, Commercial Core's own limit (this API's schema
-  allows 50). Rejected here with 422 rather than relayed.
+- *`top_k` above 20*, Commercial Core's own limit. `RAGQueryRequest`
+  declares that bound, so the published schema states it and FastAPI
+  rejects a larger value with 422 before this route runs.
 
 **Every RAG outcome is HTTP 200**, as it was before extraction: abstaining
 (insufficient evidence, a source conflict, a rejected unsupported claim, a
@@ -67,8 +68,6 @@ from app.services.permissions import Permission
 
 router = APIRouter(prefix="/knowledge/rag", tags=["rag"])
 
-# Commercial Core's own `RAGQueryRequestBody.top_k` bound (`le=20`).
-COMMERCIAL_CORE_MAX_TOP_K = 20
 
 RAG_NOT_ENABLED_REASON = "RAG_NOT_ENABLED"
 GLOBAL_QUERY_NOT_SUPPORTED_REASON = "GLOBAL_QUERY_NOT_SUPPORTED"
@@ -152,12 +151,6 @@ def query_knowledge(
             code=ErrorCode.VALIDATION_ERROR,
             message="These retrieval filters are not supported by evidence-grounded RAG yet: " + ", ".join(unsupported) + ".",
             details={"unsupported_filters": unsupported},
-        )
-    if payload.top_k is not None and payload.top_k > COMMERCIAL_CORE_MAX_TOP_K:
-        raise ApiError(
-            status_code=422,
-            code=ErrorCode.VALIDATION_ERROR,
-            message=f"top_k must be at most {COMMERCIAL_CORE_MAX_TOP_K} for evidence-grounded RAG.",
         )
 
     organization_id = resolve_authorized_organization_id(context, requested_organization_id)

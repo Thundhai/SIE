@@ -49,7 +49,8 @@ class RAGFiltersRequest(BaseModel):
 class RAGQueryRequest(BaseModel):
     # At least one non-whitespace character: embedding providers reject blank text.
     query: str = Field(..., min_length=1, max_length=2000, pattern=r"\S")
-    top_k: int | None = Field(default=None, ge=1, le=50)
+    # Commercial Core's own `RAGQueryRequestBody.top_k` bound.
+    top_k: int | None = Field(default=None, ge=1, le=20)
     filters: RAGFiltersRequest = Field(default_factory=RAGFiltersRequest)
 
 

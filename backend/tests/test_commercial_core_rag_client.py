@@ -190,6 +190,8 @@ def test_every_non_answer_outcome_decodes(monkeypatch, overrides):
         _answer_body(outcome="INSUFFICIENT_EVIDENCE", answer="Made up.", explanation="x"),  # abstention with text
         _answer_body(outcome="NOT_A_REAL_OUTCOME"),
         _answer_body(citations=[{"citation_id": "E1"}]),
+        _answer_body(citations=[]),  # an "answer" citing nothing is not evidence-grounded
+        _answer_body(query="A different question?"),  # a stale or mis-correlated reply
         {"answer": "no outcome, no as_of"},
         ["not", "an", "object"],
     ],
