@@ -17,9 +17,9 @@ See `PROVENANCE.json` for the machine-readable record
 
 - **Source repository:** `Thundhai/SIE-Commercial-Core`
 - **Source path:** `sie-contract/` (that repository's own contract package)
-- **Source commit:** `8fd692a49dd2d3b18734e723ccc3bdb94046608b` (`main` — the merge commit carrying both Task 01D-F2's Analytics boundary and Task 01D-F3's Enterprise Intelligence boundary)
-- **Source contract version:** `0.4.0`
-- **Vendored:** 2026-10-03
+- **Source commit:** `96223a772eeb8b289454adb26258f051ea5adeb7` (`main`). `sie-contract/` there is identical to `8d8074f`, the merge of Commercial Core PR #19 that introduced 0.8.0 (RAG outcomes); the only later commit is a Dependabot `requirements.txt` bump outside `sie-contract/`. Also carries 0.6.0's Outcome/Verification DTOs (`outcomes.py`, PR #17) and 0.7.0's human-only actors (PR #18).
+- **Source contract version:** `0.8.0`
+- **Vendored:** 2026-10-22
 
 ## Why this exists, and why it is not a decision to redesign anything
 

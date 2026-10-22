@@ -44,10 +44,10 @@ from sie_contract import (
     EnterpriseIntelligenceResultDTO,
     ErrorResponse,
     KnownErrorCode,
+    RAGAnswerDTO,
 )
 
 from app.core.config import settings
-from app.integrations.rag_contract_provisional import RAGAnswerDTO
 
 logger = logging.getLogger("sie.integrations.commercial_core")
 
@@ -449,10 +449,21 @@ class HttpCommercialCoreClient(CommercialCoreClient):
     here and belongs to a future Commercial Core milestone.
     """
 
-    def __init__(self, *, base_url: str, client_id: str, client_secret: str, timeout_seconds: float) -> None:
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        client_id: str,
+        client_secret: str,
+        timeout_seconds: float,
+        rag_timeout_seconds: float | None = None,
+    ) -> None:
         self._base_url = base_url.rstrip("/")
         self._authorization_header = f"Bearer {client_id}:{client_secret}"
         self._timeout_seconds = timeout_seconds
+        self._rag_timeout_seconds = (
+            rag_timeout_seconds if rag_timeout_seconds is not None else settings.COMMERCIAL_CORE_RAG_TIMEOUT_SECONDS
+        )
 
     def unavailable(self, capability: str) -> CommercialCoreUnavailable:
         return CommercialCoreUnavailable(capability)
@@ -574,6 +585,7 @@ class HttpCommercialCoreClient(CommercialCoreClient):
         request_id: str | None,
         log_name: str,
         expected_status: int = 200,
+        timeout_seconds: float | None = None,
     ):
         """Shared request/response mechanics for the three Analytics
         methods below -- headers, transport-failure mapping, and
@@ -605,7 +617,12 @@ class HttpCommercialCoreClient(CommercialCoreClient):
 
         transport_failure: CommercialCoreIntegrationError | None = None
         try:
-            response = httpx.post(f"{self._base_url}{path}", json=body, headers=headers, timeout=self._timeout_seconds)
+            response = httpx.post(
+                f"{self._base_url}{path}",
+                json=body,
+                headers=headers,
+                timeout=timeout_seconds if timeout_seconds is not None else self._timeout_seconds,
+            )
         except httpx.TimeoutException:
             logger.warning(f"commercial_core.{log_name}.timeout", extra=log_fields)
             transport_failure = CommercialCoreTimeoutError("Commercial Core did not respond in time.")
@@ -871,13 +888,19 @@ class HttpCommercialCoreClient(CommercialCoreClient):
         `TenantContext` and rejects a body `organization_id`, so it travels
         only as the usual `X-Organization-Id` verify-and-reject header.
 
-        Decodes against the PROVISIONAL 0.8.0 `RAGAnswerDTO`
-        (`app/integrations/rag_contract_provisional.py`). A response for a
-        different organization than the one asked about is treated as
-        malformed, never returned. The query text is never logged."""
+        Decodes against `sie_contract.RAGAnswerDTO` (contract 0.8.0). A
+        response for a different organization than the one asked about is treated as
+        malformed, never returned. The query text is never logged. Uses
+        RAG's own, longer timeout (`COMMERCIAL_CORE_RAG_TIMEOUT_SECONDS`)
+        because the answer includes a model call."""
         body = {"query": query, "top_k": top_k}
         decoded = self._post_and_decode(
-            _RAG_QUERY_PATH, body, organization_id=organization_id, request_id=request_id, log_name="rag_query"
+            _RAG_QUERY_PATH,
+            body,
+            organization_id=organization_id,
+            request_id=request_id,
+            log_name="rag_query",
+            timeout_seconds=self._rag_timeout_seconds,
         )
         try:
             dto = RAGAnswerDTO(**decoded)
@@ -902,6 +925,7 @@ def build_commercial_core_client(
     client_id: str | None = None,
     client_secret: str | None = None,
     timeout_seconds: float | None = None,
+    rag_timeout_seconds: float | None = None,
 ) -> CommercialCoreClient:
     """Construct a client from explicit arguments, falling back to app
     settings for anything omitted -- mirrors
@@ -924,6 +948,9 @@ def build_commercial_core_client(
     client_id = client_id if client_id is not None else settings.COMMERCIAL_CORE_CLIENT_ID
     client_secret = client_secret if client_secret is not None else settings.COMMERCIAL_CORE_CLIENT_SECRET
     timeout_seconds = timeout_seconds if timeout_seconds is not None else settings.COMMERCIAL_CORE_TIMEOUT_SECONDS
+    rag_timeout_seconds = (
+        rag_timeout_seconds if rag_timeout_seconds is not None else settings.COMMERCIAL_CORE_RAG_TIMEOUT_SECONDS
+    )
 
     fields = (
         ("COMMERCIAL_CORE_BASE_URL", base_url),
@@ -941,7 +968,11 @@ def build_commercial_core_client(
         )
 
     return HttpCommercialCoreClient(
-        base_url=base_url, client_id=client_id, client_secret=client_secret, timeout_seconds=timeout_seconds
+        base_url=base_url,
+        client_id=client_id,
+        client_secret=client_secret,
+        timeout_seconds=timeout_seconds,
+        rag_timeout_seconds=rag_timeout_seconds,
     )
 
 

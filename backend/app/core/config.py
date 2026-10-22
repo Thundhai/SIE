@@ -568,6 +568,12 @@ class Settings(BaseSettings):
     COMMERCIAL_CORE_CLIENT_ID: str | None = None
     COMMERCIAL_CORE_CLIENT_SECRET: str | None = None
     COMMERCIAL_CORE_TIMEOUT_SECONDS: float = 5.0
+    # RAG's own budget. One RAG query runs retrieval and a model call on
+    # Commercial Core, whose relay allows it 45s
+    # (CC_SERVICE_DOMAIN_CLIENT_RAG_TIMEOUT_SECONDS). Keep this above that,
+    # or a slow but valid answer surfaces here as a 503 while it is still
+    # being generated. Every other capability keeps the 5s budget above.
+    COMMERCIAL_CORE_RAG_TIMEOUT_SECONDS: float = 50.0
 
     @property
     def sqlalchemy_database_uri(self) -> str:

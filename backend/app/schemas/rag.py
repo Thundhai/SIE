@@ -22,8 +22,8 @@ import uuid
 from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field
+from sie_contract import RAGOutcome
 
-from app.integrations.rag_contract_provisional import RAGOutcome
 from app.models.enums import ContentType, QualityStatus, VerificationStatus
 
 
@@ -47,7 +47,8 @@ class RAGFiltersRequest(BaseModel):
 
 
 class RAGQueryRequest(BaseModel):
-    query: str = Field(..., min_length=1, max_length=2000)
+    # At least one non-whitespace character: embedding providers reject blank text.
+    query: str = Field(..., min_length=1, max_length=2000, pattern=r"\S")
     top_k: int | None = Field(default=None, ge=1, le=50)
     filters: RAGFiltersRequest = Field(default_factory=RAGFiltersRequest)
 
@@ -112,7 +113,7 @@ class RAGQueryResponse(BaseModel):
     prompt_version: str
 
 
-# --- Commercial Core RAG (PROVISIONAL, sie-contract 0.8.0) -------------------------------
+# --- Commercial Core RAG (sie-contract 0.8.0) --------------------------------------------
 #
 # `RAGQueryResponse` above is the pre-extraction shape and is no longer
 # returned: it exposed similarity, source authority, extraction quality,

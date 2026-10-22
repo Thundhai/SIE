@@ -1,7 +1,6 @@
 """Roadmap Phase 2, item 4: `HttpCommercialCoreClient.query_rag()` -- the
-Public SIE -> Commercial Core RAG call, decoded against the PROVISIONAL
-`sie-contract` 0.8.0 `RAGAnswerDTO`
-(`app/integrations/rag_contract_provisional.py`).
+Public SIE -> Commercial Core RAG call, decoded against
+`sie_contract.RAGAnswerDTO` (contract 0.8.0).
 
 Mirrors `tests/test_commercial_core_client.py`: `httpx.post` is
 monkeypatched, so nothing here needs a live Commercial Core. Request and
@@ -19,7 +18,7 @@ from datetime import datetime, timezone
 
 import httpx
 import pytest
-from sie_contract import ErrorResponse, KnownErrorCode
+from sie_contract import ErrorResponse, KnownErrorCode, RAGAnswerDTO, RAGOutcome
 
 from app.integrations.commercial_core import (
     CommercialCoreAuthenticationError,
@@ -34,7 +33,6 @@ from app.integrations.commercial_core import (
     HttpCommercialCoreClient,
     NotConfiguredCommercialCoreClient,
 )
-from app.integrations.rag_contract_provisional import RAGAnswerDTO, RAGOutcome
 
 _ORG_ID = uuid.uuid4()
 _SECRET = "super-secret-value-must-never-leak"
@@ -93,7 +91,11 @@ class _FakeResponse:
 def _client(monkeypatch, post_impl) -> HttpCommercialCoreClient:
     monkeypatch.setattr(httpx, "post", post_impl)
     return HttpCommercialCoreClient(
-        base_url="https://cc.example.com", client_id="cid", client_secret=_SECRET, timeout_seconds=2.0
+        base_url="https://cc.example.com",
+        client_id="cid",
+        client_secret=_SECRET,
+        timeout_seconds=2.0,
+        rag_timeout_seconds=60.0,
     )
 
 
@@ -127,7 +129,35 @@ def test_request_shape_carries_no_organization_in_the_body(monkeypatch):
     assert captured["headers"]["X-Organization-Id"] == str(_ORG_ID)
     assert captured["headers"]["Authorization"] == f"Bearer cid:{_SECRET}"
     assert captured["headers"]["X-Request-Id"] == "req-1"
+    # RAG's own budget, never the 2.0s read timeout the other methods use.
+    assert captured["timeout"] == 60.0
+
+
+def test_the_other_methods_keep_the_short_read_timeout(monkeypatch):
+    captured = {}
+
+    def fake_post(url, *, json, headers, timeout):
+        captured["timeout"] = timeout
+        return _FakeResponse(503, ValueError("no body"))
+
+    client = _client(monkeypatch, fake_post)
+    with pytest.raises(CommercialCoreDependencyUnavailableError):
+        client.get_decision(organization_id=_ORG_ID, decision_id=uuid.uuid4(), request_id=None)
     assert captured["timeout"] == 2.0
+
+
+def test_the_default_rag_timeout_outlasts_commercial_cores_own_rag_budget():
+    """cc_service gives RAG 45s (CC_SERVICE_DOMAIN_CLIENT_RAG_TIMEOUT_SECONDS,
+    Commercial Core PR #19). Public SIE must wait longer than that, or a slow
+    but valid answer surfaces here as a retryable 503 while it is still
+    being generated."""
+    from app.core.config import settings
+    from app.integrations.commercial_core import build_commercial_core_client
+
+    assert settings.COMMERCIAL_CORE_RAG_TIMEOUT_SECONDS > 45.0
+    built = build_commercial_core_client(base_url="https://cc.example.com", client_id="cid", client_secret=_SECRET)
+    assert built._rag_timeout_seconds == settings.COMMERCIAL_CORE_RAG_TIMEOUT_SECONDS
+    assert built._timeout_seconds == settings.COMMERCIAL_CORE_TIMEOUT_SECONDS
 
 
 @pytest.mark.parametrize(

@@ -11,9 +11,9 @@ through `app.integrations.commercial_core`, the same seam Attention,
 Analytics, Enterprise Intelligence and Decisions use. When Commercial Core
 is not configured for this deployment the route still returns that 501.
 
-**PROVISIONAL contract.** The answer shape is `sie-contract` 0.8.0's
-`RAGAnswerDTO`, which is proposed in Commercial Core PR #19 and not yet
-vendored -- see `app/integrations/rag_contract_provisional.py`.
+**Contract.** The answer shape is `sie_contract.RAGAnswerDTO` (contract
+0.8.0, Commercial Core PR #19), whose `outcome` says whether an answer was
+produced at all.
 
 **Authorization is unchanged** and still runs first: `filters.organization_id`
 is authorized via `authorize_context(..., KNOWLEDGE_READ, ...)`, then the
@@ -42,6 +42,7 @@ Commercial Core is an HTTP error.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sie_contract import RAGAnswerDTO
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
@@ -61,7 +62,6 @@ from app.integrations.commercial_core import (
     CommercialCoreValidationError,
     get_commercial_core_client,
 )
-from app.integrations.rag_contract_provisional import RAGAnswerDTO
 from app.schemas.rag import RAGAnswerRead, RAGCitationRead, RAGQueryRequest
 from app.services.permissions import Permission
 

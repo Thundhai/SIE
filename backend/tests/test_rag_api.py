@@ -1,6 +1,6 @@
 """Roadmap Phase 2, item 4: `POST /api/v1/knowledge/rag/query` wired to
 Commercial Core's RAG through `CommercialCoreClient.query_rag()`, against
-the PROVISIONAL `sie-contract` 0.8.0 `RAGAnswerDTO`.
+`sie_contract.RAGAnswerDTO` (contract 0.8.0).
 
 Mirrors `tests/test_intelligence_decisions_api.py`: a fake client is
 monkeypatched over `app.api.v1.rag.get_commercial_core_client`, so these
@@ -14,7 +14,7 @@ import uuid
 from datetime import datetime, timezone
 
 import pytest
-from sie_contract import AsOfWindow, CitationReferenceDTO
+from sie_contract import AsOfWindow, CitationReferenceDTO, RAGAnswerDTO, RAGOutcome
 
 from app.integrations.commercial_core import (
     CommercialCoreAuthenticationError,
@@ -27,7 +27,6 @@ from app.integrations.commercial_core import (
     CommercialCoreUnexpectedStatusError,
     CommercialCoreValidationError,
 )
-from app.integrations.rag_contract_provisional import RAGAnswerDTO, RAGOutcome
 from app.services.permissions import Permission
 from tests.conftest import dev_auth_headers
 from tests.intelligence_test_helpers import make_authorized_user, make_org
@@ -230,6 +229,25 @@ def test_top_k_above_commercial_cores_limit_is_rejected(client, member, monkeypa
     response = client.post(_URL, json=_body(org.id, top_k=21), headers=dev_auth_headers(user.id))
     assert response.status_code == 422
     assert fake.calls == []
+
+
+@pytest.mark.parametrize("query", ["   ", "\n\t "])
+def test_a_whitespace_only_query_is_rejected(client, member, monkeypatch, query):
+    """Commercial Core rejects it too (PR #19), but it must never reach the
+    boundary: an embedding provider raises on blank text."""
+    org, user = member
+    fake = _install(monkeypatch, _FakeRAGClient(result=_dto(org.id)))
+    response = client.post(_URL, json=_body(org.id, query=query), headers=dev_auth_headers(user.id))
+    assert response.status_code == 422
+    assert fake.calls == []
+
+
+def test_surrounding_whitespace_on_a_real_question_is_accepted_unchanged(client, member, monkeypatch):
+    org, user = member
+    fake = _install(monkeypatch, _FakeRAGClient(result=_dto(org.id)))
+    response = client.post(_URL, json=_body(org.id, query="  What PPE?  "), headers=dev_auth_headers(user.id))
+    assert response.status_code == 200
+    assert fake.calls[0]["query"] == "  What PPE?  "
 
 
 def test_an_empty_query_is_rejected(client, member, monkeypatch):

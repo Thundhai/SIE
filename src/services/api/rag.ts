@@ -5,10 +5,8 @@ import { ApiError } from './errors';
  * Evidence-grounded question answering — `POST /knowledge/rag/query`
  * (Roadmap Phase 2, item 4).
  *
- * PROVISIONAL: the response mirrors `sie-contract` 0.8.0's
- * `RAGAnswerDTO` as proposed in Commercial Core PR #19 (see
- * `backend/app/integrations/rag_contract_provisional.py`). It is not yet
- * the vendored contract.
+ * The response mirrors `sie_contract.RAGAnswerDTO` (contract 0.8.0,
+ * Commercial Core PR #19), flattened by `backend/app/schemas/rag.py`.
  *
  * Deliberately absent: similarity scores, source-authority and
  * extraction-quality signals, evidence counts, provider/model names,

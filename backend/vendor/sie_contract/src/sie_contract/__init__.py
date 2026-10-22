@@ -56,7 +56,15 @@ from sie_contract.intelligence_context import (
     IntelligenceContextCategoryStatusDTO,
     IntelligenceContextSummaryDTO,
 )
-from sie_contract.rag import CitationReferenceDTO, RAGAnswerDTO
+from sie_contract.outcomes import (
+    OutcomeClassification,
+    OutcomeListResultDTO,
+    OutcomeReferenceDTO,
+    OutcomeVerificationListResultDTO,
+    OutcomeVerificationReferenceDTO,
+    OutcomeVerificationStatus,
+)
+from sie_contract.rag import CitationReferenceDTO, RAGAnswerDTO, RAGOutcome
 from sie_contract.status import IntelligenceOverallStatus, IntelligenceStatusDTO
 from sie_contract.tenancy import ActorType, ServiceIdentity, TenantContext
 from sie_contract.version import __version__
@@ -122,9 +130,17 @@ __all__ = [
     # decisions
     "DecisionListResultDTO",
     "DecisionReferenceDTO",
+    # outcomes / verification
+    "OutcomeClassification",
+    "OutcomeListResultDTO",
+    "OutcomeReferenceDTO",
+    "OutcomeVerificationListResultDTO",
+    "OutcomeVerificationReferenceDTO",
+    "OutcomeVerificationStatus",
     # rag
     "CitationReferenceDTO",
     "RAGAnswerDTO",
+    "RAGOutcome",
     # status
     "IntelligenceOverallStatus",
     "IntelligenceStatusDTO",
