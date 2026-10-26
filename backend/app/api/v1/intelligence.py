@@ -112,7 +112,9 @@ def _not_available() -> HTTPException:
     return commercial_core_client.unavailable("Enterprise intelligence analytics/attention/context")
 
 
-def _map_commercial_core_attention_error(exc: CommercialCoreIntegrationError) -> ApiError:
+def _map_commercial_core_attention_error(
+    exc: CommercialCoreIntegrationError, *, site_scoped: bool = False
+) -> ApiError:
     """Maps a `CommercialCoreIntegrationError` onto Public SIE's existing
     error vocabulary (`app.core.errors.ErrorCode`) -- no new error code
     introduced.
@@ -134,6 +136,12 @@ def _map_commercial_core_attention_error(exc: CommercialCoreIntegrationError) ->
     as `intelligence_decisions.py::_map_commercial_core_decision_error()`
     already does: the caller named a resource that is not theirs to read,
     which is neither a dependency outage nor something retrying fixes.
+    Only when `site_scoped` -- the request named a `site_id`. cc_service
+    serializes every 404 with the same generic body, including its own
+    framework's unmatched-route 404, so an organization-wide read that
+    404s can only be an integration problem (e.g. this deployment calling
+    an endpoint the deployed Commercial Core does not have), and stays a
+    503 like the rest.
 
     Every other subclass (auth, authorization, dependency-unavailable,
     timeout, connection, malformed-response, unexpected-status -- see
@@ -148,7 +156,7 @@ def _map_commercial_core_attention_error(exc: CommercialCoreIntegrationError) ->
     own fixed, safe messages, or (for a 404) Commercial Core's own
     generic not-found message -- never a Commercial Core stack trace,
     credential, or URL, for any branch."""
-    if isinstance(exc, CommercialCoreNotFoundError):
+    if site_scoped and isinstance(exc, CommercialCoreNotFoundError):
         return ApiError(
             status_code=404,
             code=ErrorCode.RESOURCE_NOT_FOUND,
@@ -428,7 +436,7 @@ def analytics_summary(
     except CommercialCoreUnavailable:
         raise
     except CommercialCoreIntegrationError as exc:
-        raise _map_commercial_core_attention_error(exc) from exc
+        raise _map_commercial_core_attention_error(exc, site_scoped=site_id is not None) from exc
     return _analytics_summary_response(dto)
 
 
@@ -456,7 +464,7 @@ def analytics_trends(
     except CommercialCoreUnavailable:
         raise
     except CommercialCoreIntegrationError as exc:
-        raise _map_commercial_core_attention_error(exc) from exc
+        raise _map_commercial_core_attention_error(exc, site_scoped=site_id is not None) from exc
     return dto.model_dump(mode="json")
 
 
@@ -482,7 +490,7 @@ def analytics_signals(
     except CommercialCoreUnavailable:
         raise
     except CommercialCoreIntegrationError as exc:
-        raise _map_commercial_core_attention_error(exc) from exc
+        raise _map_commercial_core_attention_error(exc, site_scoped=site_id is not None) from exc
     # Task 01D-F2: the existing frontend (src/services/api/analytics.ts::
     # getAnalyticsSignals()) expects a bare `RiskSignal[]` array, not an
     # organization/as_of-enveloped object -- the envelope is the
@@ -637,4 +645,4 @@ def site_attention(
     except CommercialCoreUnavailable:
         raise
     except CommercialCoreIntegrationError as exc:
-        raise _map_commercial_core_attention_error(exc) from exc
+        raise _map_commercial_core_attention_error(exc, site_scoped=True) from exc
