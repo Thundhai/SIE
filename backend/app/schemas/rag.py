@@ -19,9 +19,10 @@ not for exposure over HTTP.
 """
 
 import uuid
-from datetime import date
+from datetime import date, datetime
 
 from pydantic import BaseModel, ConfigDict, Field
+from sie_contract import RAGOutcome
 
 from app.models.enums import ContentType, QualityStatus, VerificationStatus
 
@@ -46,8 +47,10 @@ class RAGFiltersRequest(BaseModel):
 
 
 class RAGQueryRequest(BaseModel):
-    query: str = Field(..., min_length=1, max_length=2000)
-    top_k: int | None = Field(default=None, ge=1, le=50)
+    # At least one non-whitespace character: embedding providers reject blank text.
+    query: str = Field(..., min_length=1, max_length=2000, pattern=r"\S")
+    # Commercial Core's own `RAGQueryRequestBody.top_k` bound.
+    top_k: int | None = Field(default=None, ge=1, le=20)
     filters: RAGFiltersRequest = Field(default_factory=RAGFiltersRequest)
 
 
@@ -109,3 +112,46 @@ class RAGQueryResponse(BaseModel):
     retrieval_metadata: dict
     model_metadata: dict | None
     prompt_version: str
+
+
+# --- Commercial Core RAG (sie-contract 0.8.0) --------------------------------------------
+#
+# `RAGQueryResponse` above is the pre-extraction shape and is no longer
+# returned: it exposed similarity, source authority, extraction quality,
+# evidence counts, retrieval/model metadata and the prompt version. What
+# the route returns now is `RAGAnswerRead`, which carries exactly what
+# crosses the Commercial Core boundary (`RAGAnswerDTO`) and nothing else.
+
+
+class RAGCitationRead(BaseModel):
+    """What was cited -- never how strongly, or why it was chosen. Mirrors
+    `sie_contract.CitationReferenceDTO` field-for-field."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    citation_id: str = Field(description="Stable identifier used in the answer text, e.g. 'E1'.")
+    document_id: uuid.UUID
+    source: str
+    document: str
+    version: str
+    location: str | None
+
+
+class RAGAnswerRead(BaseModel):
+    """One evidence-grounded answer, or an honest non-answer.
+
+    - `ANSWERED`: `answer` is the generated text, supported by `citations`.
+    - `SOURCE_CONFLICT`: the sources disagree. `answer`, when present,
+      describes the disagreement and never resolves it; `citations` names
+      the sources involved.
+    - Every other outcome: `answer` is null and `explanation` says why.
+    """
+
+    organization_id: uuid.UUID
+    query: str
+    outcome: RAGOutcome
+    answer: str | None
+    explanation: str | None
+    citations: list[RAGCitationRead]
+    as_of: datetime
+    generated_at: datetime

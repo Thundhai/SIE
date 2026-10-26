@@ -18,6 +18,7 @@ import {
   type VerificationStatus,
 } from '../../services/api/knowledge';
 import { isPermissionDeniedError } from '../../services/api/errors';
+import { KnowledgeQuestionPanel } from './KnowledgeQuestionPanel';
 
 export function KnowledgePage() {
   const auth = useAuth();
@@ -105,6 +106,8 @@ export function KnowledgePage() {
           description="Ask an administrator for knowledge:read access in this organization."
         />
       )}
+
+      {!permissionDenied && <KnowledgeQuestionPanel organizationId={auth.organization.id} />}
 
       {!permissionDenied && loading && <LoadingState label="Loading knowledge sources…" />}
 
