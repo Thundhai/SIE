@@ -128,9 +128,13 @@ class CommercialCoreNotFoundError(CommercialCoreIntegrationError):
     """cc_service reported 404 -- Decisions' own create/get can both
     404 (an unknown `decision_id`, `site_id`, or `linked_action_id`, or
     an `attention_reference` that does not match any current Attention
-    item). The caller's own request being wrong, never a dependency
-    failure -- mapped to a 404, not treated as `MODEL_NOT_AVAILABLE`
-    like every other `CommercialCoreIntegrationError`."""
+    item), and every site-scoped Attention, Analytics and Enterprise
+    Intelligence read 404s for a `site_id` that is not a site of the
+    request's organization (Commercial Core's own site-ownership check --
+    a missing site and another organization's site look identical). The
+    caller's own request being wrong, never a dependency failure --
+    mapped to a 404, not treated as `MODEL_NOT_AVAILABLE` like every
+    other `CommercialCoreIntegrationError`."""
 
 
 class CommercialCoreDependencyUnavailableError(CommercialCoreIntegrationError):
@@ -541,8 +545,11 @@ class HttpCommercialCoreClient(CommercialCoreClient):
                 ) from None
 
         error_code: str | None = None
+        error_message: str | None = None
         try:
-            error_code = ErrorResponse(**response.json()).error_code
+            parsed_error = ErrorResponse(**response.json())
+            error_code = parsed_error.error_code
+            error_message = parsed_error.message
         except Exception:
             pass  # Falls through to the generic, status-code-only handling below.
 
@@ -560,6 +567,11 @@ class HttpCommercialCoreClient(CommercialCoreClient):
                     "Commercial Core rejected this request's tenant binding."
                 ) from None
             raise CommercialCoreAuthorizationError("Commercial Core denied this request.") from None
+        if response.status_code == 404:
+            logger.warning("commercial_core.attention.not_found", extra=log_fields)
+            raise CommercialCoreNotFoundError(
+                error_message or "Commercial Core reported that the requested resource does not exist."
+            ) from None
         if response.status_code == 422:
             logger.warning("commercial_core.attention.validation_failed", extra=log_fields)
             raise CommercialCoreValidationError("Commercial Core rejected the request as invalid.") from None
@@ -597,12 +609,11 @@ class HttpCommercialCoreClient(CommercialCoreClient):
         body on `expected_status` (200 for every pre-existing caller;
         Decisions' own create call passes 201, the one write in this
         client); raises the same typed exceptions `get_attention()`
-        raises, on every other outcome. `404` additionally maps through
-        here (Decisions' own get/create can both 404 -- an unknown
-        `decision_id`, `site_id`, or `linked_action_id`) as a plain
-        `HTTPException` carrying Commercial Core's own safe message,
-        never a 503: this is the caller's own request being wrong, not
-        a dependency failure."""
+        raises, on every other outcome. `404` maps to
+        `CommercialCoreNotFoundError` carrying Commercial Core's own safe
+        message, never a 503: this is the caller's own request being
+        wrong (an unknown `decision_id`, or a `site_id` outside the
+        request's organization), not a dependency failure."""
         import httpx
 
         headers = {

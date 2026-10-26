@@ -23,6 +23,7 @@ from app.integrations.commercial_core import (
     CommercialCoreConnectionError,
     CommercialCoreDependencyUnavailableError,
     CommercialCoreMalformedResponseError,
+    CommercialCoreNotFoundError,
     CommercialCoreTimeoutError,
     CommercialCoreUnavailable,
     CommercialCoreUnexpectedStatusError,
@@ -246,6 +247,20 @@ def test_unexpected_status_maps_to_a_typed_error(monkeypatch):
 
     client = _client(monkeypatch, fake_post)
     with pytest.raises(CommercialCoreUnexpectedStatusError):
+        _call(client)
+
+
+def test_not_found_maps_to_a_typed_error(monkeypatch):
+    def fake_post(url, *, json, headers, timeout):
+        return _FakeResponse(
+            404,
+            ErrorResponse(
+                error_code="NOT_FOUND", message="The requested resource was not found.", request_id="r", retryable=False
+            ).model_dump(mode="json"),
+        )
+
+    client = _client(monkeypatch, fake_post)
+    with pytest.raises(CommercialCoreNotFoundError):
         _call(client)
 
 

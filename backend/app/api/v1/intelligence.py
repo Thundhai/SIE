@@ -85,6 +85,7 @@ from app.core.errors import ApiError, ErrorCode
 from app.core.request_id import get_request_id
 from app.integrations.commercial_core import (
     CommercialCoreIntegrationError,
+    CommercialCoreNotFoundError,
     CommercialCoreUnavailable,
     CommercialCoreValidationError,
     commercial_core_client,
@@ -126,6 +127,14 @@ def _map_commercial_core_attention_error(exc: CommercialCoreIntegrationError) ->
     dependency outage, resubmitting the exact same request will not
     succeed by simply waiting and retrying.
 
+    `CommercialCoreNotFoundError` (cc_service's own 404 -- a site-scoped
+    request whose `site_id` is not a site of the request's organization;
+    Commercial Core answers a missing site and another organization's
+    site identically) is mapped to `ErrorCode.RESOURCE_NOT_FOUND` at 404,
+    as `intelligence_decisions.py::_map_commercial_core_decision_error()`
+    already does: the caller named a resource that is not theirs to read,
+    which is neither a dependency outage nor something retrying fixes.
+
     Every other subclass (auth, authorization, dependency-unavailable,
     timeout, connection, malformed-response, unexpected-status -- see
     that module's own docstrings) maps to `ErrorCode.MODEL_NOT_AVAILABLE`
@@ -136,8 +145,15 @@ def _map_commercial_core_attention_error(exc: CommercialCoreIntegrationError) ->
     if their own request were invalid or unauthorized.
 
     `str(exc)` is always one of `app/integrations/commercial_core.py`'s
-    own fixed, safe messages -- never a Commercial Core stack trace,
-    credential, or URL, for either branch."""
+    own fixed, safe messages, or (for a 404) Commercial Core's own
+    generic not-found message -- never a Commercial Core stack trace,
+    credential, or URL, for any branch."""
+    if isinstance(exc, CommercialCoreNotFoundError):
+        return ApiError(
+            status_code=404,
+            code=ErrorCode.RESOURCE_NOT_FOUND,
+            message=str(exc),
+        )
     if isinstance(exc, CommercialCoreValidationError):
         return ApiError(
             status_code=422,
