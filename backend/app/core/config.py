@@ -9,6 +9,13 @@ from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+#: APP_ENV values that mean "a real deployment" to
+#: `validate_startup_settings()` below.
+PRODUCTION_APP_ENVS = frozenset({"production", "prod"})
+
+#: The local-development fallback password (see POSTGRES_PASSWORD below).
+_DEFAULT_POSTGRES_PASSWORD = "sie"
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -99,6 +106,11 @@ class Settings(BaseSettings):
     # to its real frontend origin(s), or browser-based access is refused
     # entirely (fail closed, the same posture DEV_MODE already takes).
     CORS_ALLOWED_ORIGINS: str = "http://localhost:3000"
+
+    # FastAPI's /docs, /redoc and /openapi.json. Unset means on, except in
+    # production (APP_ENV in PRODUCTION_APP_ENVS), where the API surface
+    # is not published to anonymous callers unless this is set to true.
+    API_DOCS_ENABLED: bool | None = None
 
     # Ingestion (see app/ingestion/storage.py, app/ingestion/pipeline.py)
     #
@@ -416,7 +428,9 @@ class Settings(BaseSettings):
     DATABASE_URL: str | None = None
 
     POSTGRES_USER: str = "sie"
-    POSTGRES_PASSWORD: str = "sie"
+    # Local development only: production refuses to start on this default
+    # (see validate_startup_settings()).
+    POSTGRES_PASSWORD: str = _DEFAULT_POSTGRES_PASSWORD
     POSTGRES_DB: str = "sie"
     POSTGRES_HOST: str = "localhost"
     POSTGRES_PORT: int = 5432
@@ -604,6 +618,51 @@ class Settings(BaseSettings):
         docstring. Blank entries are dropped the same way
         `cors_allowed_origins_list` drops them."""
         return [alg.strip() for alg in self.OIDC_ALGORITHMS.split(",") if alg.strip()]
+
+    @property
+    def is_production(self) -> bool:
+        return self.APP_ENV.strip().lower() in PRODUCTION_APP_ENVS
+
+    @property
+    def api_docs_enabled(self) -> bool:
+        if self.API_DOCS_ENABLED is not None:
+            return self.API_DOCS_ENABLED
+        return not self.is_production
+
+
+class UnsafeConfigurationError(RuntimeError):
+    """The process must not start with this configuration."""
+
+
+def validate_startup_settings(settings: "Settings") -> None:
+    """Refuses to start a misconfigured deployment, the same fail-closed
+    shape DEV_MODE and the hashing embedding provider already use.
+
+    Everywhere: CORS_ALLOWED_ORIGINS may not contain `*` (its docstring
+    already promised exact origins only; with `allow_credentials=True` a
+    wildcard would let any site make credentialed requests).
+
+    In production only: DEV_MODE and SIE_DEV_DEMO_DATA must be off (the
+    first trusts an unauthenticated user-id header), and the database must
+    not be reached with the built-in development password.
+
+    Called from `app/main.py` before the app is built, so uvicorn exits
+    instead of serving; migrations and scripts that only import settings
+    are unaffected. Reports every problem at once, never a value."""
+    problems: list[str] = []
+    if "*" in settings.cors_allowed_origins_list:
+        problems.append("CORS_ALLOWED_ORIGINS contains '*'; list exact origins instead.")
+    if settings.is_production:
+        if settings.DEV_MODE:
+            problems.append("DEV_MODE is true, which trusts an unauthenticated user-id header.")
+        if settings.SIE_DEV_DEMO_DATA:
+            problems.append("SIE_DEV_DEMO_DATA is true.")
+        if not settings.DATABASE_URL and settings.POSTGRES_PASSWORD == _DEFAULT_POSTGRES_PASSWORD:
+            problems.append("DATABASE_URL is unset and POSTGRES_PASSWORD is the development default.")
+    if problems:
+        raise UnsafeConfigurationError(
+            f"Refusing to start with APP_ENV={settings.APP_ENV!r}: " + " ".join(problems)
+        )
 
 
 @lru_cache
