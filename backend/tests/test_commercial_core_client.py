@@ -34,6 +34,7 @@ from app.integrations.commercial_core import (
     CommercialCoreConnectionError,
     CommercialCoreDependencyUnavailableError,
     CommercialCoreMalformedResponseError,
+    CommercialCoreNotFoundError,
     CommercialCoreTimeoutError,
     CommercialCoreUnavailable,
     CommercialCoreUnexpectedStatusError,
@@ -406,6 +407,40 @@ def test_unexpected_status_maps_to_a_typed_error(monkeypatch):
         )
 
 
+def test_not_found_maps_to_a_typed_error_carrying_commercial_cores_own_message(monkeypatch):
+    """cc_service's 404 for a `site_id` outside the request's organization
+    (its generic `NOT_FOUND` body) -- the caller's own request, not an
+    unexpected status and not a dependency failure."""
+
+    def fake_post(url, *, json, headers, timeout):
+        return _FakeResponse(
+            404,
+            ErrorResponse(
+                error_code="NOT_FOUND", message="The requested resource was not found.", request_id="r", retryable=False
+            ).model_dump(mode="json"),
+        )
+
+    client = _client(monkeypatch, fake_post)
+    with pytest.raises(CommercialCoreNotFoundError) as exc_info:
+        client.get_attention(
+            organization_id=_ORG_ID, scope="site", site_id=uuid.uuid4(), as_of=None, window_days=None, request_id=None
+        )
+    assert str(exc_info.value) == "The requested resource was not found."
+    assert exc_info.value.__context__ is None
+
+
+def test_not_found_without_a_contract_body_still_maps_to_a_typed_error(monkeypatch):
+    def fake_post(url, *, json, headers, timeout):
+        return _FakeResponse(404, {"detail": "Not Found"})
+
+    client = _client(monkeypatch, fake_post)
+    with pytest.raises(CommercialCoreNotFoundError) as exc_info:
+        client.get_attention(
+            organization_id=_ORG_ID, scope="site", site_id=uuid.uuid4(), as_of=None, window_days=None, request_id=None
+        )
+    assert str(exc_info.value) == "Commercial Core reported that the requested resource does not exist."
+
+
 # --- Security: the credential never appears in an exception message or a log line ----
 
 
@@ -413,6 +448,7 @@ def test_secret_never_appears_in_any_raised_exception_message(monkeypatch):
     scenarios = [
         (401, ErrorResponse(error_code="AUTHENTICATION_FAILURE", message="x", request_id="r", retryable=False).model_dump(mode="json")),
         (403, ErrorResponse(error_code=KnownErrorCode.AUTHORIZATION_FAILURE, message="x", request_id="r", retryable=False).model_dump(mode="json")),
+        (404, ErrorResponse(error_code="NOT_FOUND", message="x", request_id="r", retryable=False).model_dump(mode="json")),
         (422, ErrorResponse(error_code=KnownErrorCode.VALIDATION_ERROR, message="x", request_id="r", retryable=False).model_dump(mode="json")),
         (503, ErrorResponse(error_code=KnownErrorCode.DEPENDENCY_UNAVAILABLE, message="x", request_id="r", retryable=True).model_dump(mode="json")),
         (418, {"detail": "teapot"}),
