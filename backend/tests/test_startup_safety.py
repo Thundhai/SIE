@@ -42,11 +42,35 @@ def test_demo_data_is_refused_in_production():
         validate_startup_settings(_settings(SIE_DEV_DEMO_DATA=True))
 
 
+def test_debug_is_refused_in_production():
+    with pytest.raises(UnsafeConfigurationError, match="DEBUG is true"):
+        validate_startup_settings(_settings(DEBUG=True))
+
+
 def test_the_development_database_password_is_refused_in_production():
     with pytest.raises(UnsafeConfigurationError, match="POSTGRES_PASSWORD is the development default"):
         validate_startup_settings(_settings(DATABASE_URL=None))
     # Components with a real password are a valid production configuration.
     validate_startup_settings(_settings(DATABASE_URL=None, POSTGRES_PASSWORD="a-real-password"))
+
+
+def test_the_development_password_inside_database_url_is_refused_in_production():
+    with pytest.raises(UnsafeConfigurationError, match="DATABASE_URL uses the development default password"):
+        validate_startup_settings(_settings(DATABASE_URL="postgresql+psycopg://sie:sie@db.internal:5432/sie"))
+    # A URL without a password (e.g. a socket or IAM login) is not refused.
+    validate_startup_settings(_settings(DATABASE_URL="postgresql+psycopg://app@db.internal:5432/sie"))
+
+
+def test_app_env_means_the_same_to_every_production_guard(monkeypatch):
+    """The startup checks and the embedding/LLM provider guards share
+    `settings.is_production`, so a padded or capitalised APP_ENV cannot
+    satisfy one and slip past the other."""
+    from app.embeddings.provider import HashingProviderInProductionError, build_embedding_provider
+
+    monkeypatch.setattr("app.core.config.settings.EMBEDDING_PROVIDER", "hashing")
+    monkeypatch.setattr("app.core.config.settings.APP_ENV", " Production ")
+    with pytest.raises(HashingProviderInProductionError):
+        build_embedding_provider()
 
 
 @pytest.mark.parametrize("app_env", ["production", "development"])
@@ -59,16 +83,20 @@ def test_a_cors_wildcard_is_refused_everywhere(app_env, origins):
 def test_every_problem_is_reported_at_once_and_no_value_is_echoed():
     with pytest.raises(UnsafeConfigurationError) as raised:
         validate_startup_settings(
-            _settings(DEV_MODE=True, SIE_DEV_DEMO_DATA=True, DATABASE_URL=None, CORS_ALLOWED_ORIGINS="*")
+            _settings(DEV_MODE=True, SIE_DEV_DEMO_DATA=True, DEBUG=True, DATABASE_URL=None, CORS_ALLOWED_ORIGINS="*")
         )
     message = str(raised.value)
-    for fragment in ("CORS_ALLOWED_ORIGINS", "DEV_MODE", "SIE_DEV_DEMO_DATA", "POSTGRES_PASSWORD"):
+    for fragment in ("CORS_ALLOWED_ORIGINS", "DEV_MODE", "SIE_DEV_DEMO_DATA", "DEBUG", "POSTGRES_PASSWORD"):
         assert fragment in message
-    assert "not-the-default" not in message
+    with pytest.raises(UnsafeConfigurationError) as raised:
+        validate_startup_settings(_settings(DATABASE_URL="postgresql+psycopg://sie:sie@db.internal:5432/sie"))
+    assert "db.internal" not in str(raised.value)
 
 
 def test_development_keeps_its_conveniences():
-    validate_startup_settings(_settings(APP_ENV="development", DEV_MODE=True, SIE_DEV_DEMO_DATA=True, DATABASE_URL=None))
+    validate_startup_settings(
+        _settings(APP_ENV="development", DEV_MODE=True, SIE_DEV_DEMO_DATA=True, DEBUG=True, DATABASE_URL=None)
+    )
 
 
 @pytest.mark.parametrize(
@@ -89,7 +117,8 @@ def _import_app(**env: str) -> subprocess.CompletedProcess:
     clean = {
         key: value
         for key, value in os.environ.items()
-        if key not in {"APP_ENV", "DEV_MODE", "SIE_DEV_DEMO_DATA", "DATABASE_URL", "CORS_ALLOWED_ORIGINS", "API_DOCS_ENABLED"}
+        if key
+        not in {"APP_ENV", "DEV_MODE", "SIE_DEV_DEMO_DATA", "DEBUG", "DATABASE_URL", "CORS_ALLOWED_ORIGINS", "API_DOCS_ENABLED"}
     }
     code = "import app.main as m; print('docs', m.app.docs_url, m.app.openapi_url)"
     return subprocess.run(

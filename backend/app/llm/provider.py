@@ -63,12 +63,8 @@ from typing import Protocol, runtime_checkable
 
 from app.core.config import settings
 
-# Same APP_ENV convention as app/embeddings/provider.py's
-# _PRODUCTION_APP_ENVS — kept as an identical, separately-defined
-# constant here (not imported from that module) so app/llm/ has no
-# dependency on app/embeddings/ at all; the two guards are conceptually
-# identical but operate on unrelated settings.
-_PRODUCTION_APP_ENVS = frozenset({"production", "prod"})
+# "Is this a real deployment" is `settings.is_production`
+# (app/core/config.py), the one predicate every production guard shares.
 
 
 class FakeLLMProviderInProductionError(RuntimeError):
@@ -378,7 +374,7 @@ def build_llm_provider(
     configured instance — mirrors
     `app.embeddings.provider.build_embedding_provider()` exactly."""
     provider = provider or settings.LLM_PROVIDER
-    if provider == "fake" and settings.APP_ENV.lower() in _PRODUCTION_APP_ENVS:
+    if provider == "fake" and settings.is_production:
         raise FakeLLMProviderInProductionError(
             f"LLM_PROVIDER=fake with APP_ENV={settings.APP_ENV!r}. FakeLLMProvider "
             "is a deterministic, offline test/dev provider — it is NOT a real AI "

@@ -634,6 +634,18 @@ class UnsafeConfigurationError(RuntimeError):
     """The process must not start with this configuration."""
 
 
+def _database_url_password(url: str) -> str | None:
+    """The URL's password, or None if it has none or does not parse (a
+    malformed URL fails on its own at the first connection)."""
+    from sqlalchemy.engine import make_url
+    from sqlalchemy.exc import ArgumentError
+
+    try:
+        return make_url(url).password
+    except ArgumentError:
+        return None
+
+
 def validate_startup_settings(settings: "Settings") -> None:
     """Refuses to start a misconfigured deployment, the same fail-closed
     shape DEV_MODE and the hashing embedding provider already use.
@@ -642,9 +654,10 @@ def validate_startup_settings(settings: "Settings") -> None:
     already promised exact origins only; with `allow_credentials=True` a
     wildcard would let any site make credentialed requests).
 
-    In production only: DEV_MODE and SIE_DEV_DEMO_DATA must be off (the
-    first trusts an unauthenticated user-id header), and the database must
-    not be reached with the built-in development password.
+    In production only: DEV_MODE, SIE_DEV_DEMO_DATA and DEBUG must be off
+    (the first trusts an unauthenticated user-id header, the last returns
+    tracebacks), and the database must not be reached with the built-in
+    development password, whether assembled or inside DATABASE_URL.
 
     Called from `app/main.py` before the app is built, so uvicorn exits
     instead of serving; migrations and scripts that only import settings
@@ -657,8 +670,12 @@ def validate_startup_settings(settings: "Settings") -> None:
             problems.append("DEV_MODE is true, which trusts an unauthenticated user-id header.")
         if settings.SIE_DEV_DEMO_DATA:
             problems.append("SIE_DEV_DEMO_DATA is true.")
+        if settings.DEBUG:
+            problems.append("DEBUG is true, which returns tracebacks to callers.")
         if not settings.DATABASE_URL and settings.POSTGRES_PASSWORD == _DEFAULT_POSTGRES_PASSWORD:
             problems.append("DATABASE_URL is unset and POSTGRES_PASSWORD is the development default.")
+        if settings.DATABASE_URL and _database_url_password(settings.DATABASE_URL) == _DEFAULT_POSTGRES_PASSWORD:
+            problems.append("DATABASE_URL uses the development default password.")
     if problems:
         raise UnsafeConfigurationError(
             f"Refusing to start with APP_ENV={settings.APP_ENV!r}: " + " ".join(problems)

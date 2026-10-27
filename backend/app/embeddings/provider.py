@@ -78,14 +78,13 @@ from app.core.config import settings
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 
-# APP_ENV values treated as "this is a real deployment", for the
-# production-hashing-provider guard below. Unlike DEV_MODE (an
+# "Is this a real deployment" (for the production-hashing-provider guard
+# below) is `settings.is_production` (app/core/config.py), the one
+# predicate every production guard shares. Unlike DEV_MODE (an
 # auth-safety setting that fails *closed* by defaulting to the safe
 # value), EMBEDDING_PROVIDER's safe-for-tests default ("hashing") is
 # also the value that must never be *silently* carried into a real
-# deployment — so this is the one place APP_ENV is actually read for
-# behavior, not just recorded.
-_PRODUCTION_APP_ENVS = frozenset({"production", "prod"})
+# deployment.
 
 
 class EmbeddingProviderError(RuntimeError):
@@ -410,7 +409,7 @@ def build_embedding_provider(
     (which is cached) so tests can build an uncached, differently-configured
     instance without disturbing the process-wide cache."""
     provider = provider or settings.EMBEDDING_PROVIDER
-    if provider == "hashing" and settings.APP_ENV.lower() in _PRODUCTION_APP_ENVS:
+    if provider == "hashing" and settings.is_production:
         # A hard failure, not a warning: HashingEmbeddingProvider is a
         # real, working implementation (tenant isolation, provenance,
         # retrieval all function correctly with it) — just not a trained
