@@ -163,10 +163,14 @@ def _load_private_jwk(value: str) -> Ed25519PrivateKey:
         'COMMERCIAL_CORE_TENANT_ASSERTION_SIGNING_KEY must be an Ed25519 private JWK: '
         '{"kty": "OKP", "crv": "Ed25519", "x": ..., "d": ...}.'
     )
+    # Each error is raised after its `try`, never inside the handler: a
+    # JSONDecodeError keeps the whole input (the private `d` included) in
+    # `.doc`, and raising inside the handler would leave it reachable as
+    # `__context__` even with `from None`.
     try:
         jwk = json.loads(value)
     except ValueError:
-        raise error from None
+        jwk = None
     if not isinstance(jwk, dict) or jwk.get("kty") != "OKP" or jwk.get("crv") != "Ed25519":
         raise error
     raw = {}
@@ -174,7 +178,10 @@ def _load_private_jwk(value: str) -> Ed25519PrivateKey:
         part = jwk.get(name)
         if not isinstance(part, str) or not _B64URL.match(part):
             raise error
-        raw[name] = base64.urlsafe_b64decode(part + "=" * (-len(part) % 4))
+        try:
+            raw[name] = base64.urlsafe_b64decode(part + "=" * (-len(part) % 4))
+        except ValueError:  # binascii.Error: an impossible base64 length
+            raw[name] = b""
         if len(raw[name]) != 32:
             raise error
     private_key = Ed25519PrivateKey.from_private_bytes(raw["d"])

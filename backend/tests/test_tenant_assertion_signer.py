@@ -219,6 +219,20 @@ def test_a_malformed_signing_key_is_refused(key, value):
     assert jwk["d"] not in str(raised.value)
 
 
+@pytest.mark.parametrize("variant", ["truncated_json", "bad_base64_length"])
+def test_a_refused_key_leaves_no_secret_in_the_exception_chain(key, variant):
+    """An error tracker may walk `__context__`/`__cause__`, and a
+    JSONDecodeError keeps its whole input in `.doc`, so the sanitized
+    error must have no chained exception at all."""
+    jwk = _private_jwk(key)
+    secret = json.loads(jwk)["d"]
+    value = jwk[:-2] if variant == "truncated_json" else json.dumps({**json.loads(jwk), "d": secret[:-38]})
+    with pytest.raises(TenantAssertionConfigurationError) as raised:
+        build_tenant_assertion_signer(signing_key=value, key_id=KID, issuer=ISSUER)
+    assert raised.value.__context__ is None and raised.value.__cause__ is None
+    assert secret[:16] not in str(raised.value)
+
+
 def test_a_key_whose_x_is_not_its_own_public_half_is_refused(key):
     other = Ed25519PrivateKey.generate()
     mismatched = _private_jwk(key, x=_b64(other.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)))
