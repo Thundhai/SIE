@@ -235,8 +235,9 @@ class Settings(BaseSettings):
     # HTTP `/embeddings` API in the OpenAI request/response shape, so a
     # deployment needs no local model or extra memory. EMBEDDING_MODEL_NAME
     # is the API's model id, EMBEDDING_BATCH_SIZE caps texts per request,
-    # and EMBEDDING_INFERENCE_TIMEOUT_SECONDS is enforced here (an HTTP
-    # timeout, unlike local inference). The key is an environment
+    # and EMBEDDING_INFERENCE_TIMEOUT_SECONDS is enforced here, as one
+    # deadline across all of a call's requests (unlike local inference).
+    # An external API must be https://. The key is an environment
     # variable only, never committed and never logged.
     EMBEDDING_API_BASE_URL: str | None = None
     EMBEDDING_API_KEY: str | None = None
@@ -251,7 +252,8 @@ class Settings(BaseSettings):
     # by a third party. Same posture as ALLOW_EXTERNAL_LLM_FOR_PRIVATE_DATA
     # below: an external provider is refused at construction unless the
     # owner has explicitly allowed it. Set EMBEDDING_PROVIDER_IS_EXTERNAL
-    # to false only for a self-hosted API inside the deployment boundary.
+    # to false only for a self-hosted API inside the deployment boundary;
+    # EMBEDDING_API_BASE_URL is then required.
     EMBEDDING_PROVIDER_IS_EXTERNAL: bool = True
     ALLOW_EXTERNAL_EMBEDDINGS_FOR_PRIVATE_DATA: bool = False
 

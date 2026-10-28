@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import math
+import types
 
 import httpx
 import pytest
@@ -16,6 +17,7 @@ from app.embeddings.provider import (
     EmbeddingInferenceError,
     EmbeddingModelLoadError,
     EmbeddingOutputValidationError,
+    EmbeddingProviderUnavailableError,
     ExternalEmbeddingsNotAllowedError,
     HashingProviderInProductionError,
     OpenAICompatibleEmbeddingProvider,
@@ -103,7 +105,21 @@ def test_an_external_api_is_refused_unless_allowed():
     with pytest.raises(ExternalEmbeddingsNotAllowedError, match="ALLOW_EXTERNAL_EMBEDDINGS_FOR_PRIVATE_DATA"):
         _provider([], allow_external=False)
     # A self-hosted API inside the deployment boundary is not external.
-    _provider([], allow_external=False, is_external=False).embed_text("alpha")
+    _provider([], allow_external=False, is_external=False, api_base_url="http://embeddings.internal:8080/v1").embed_text(
+        "alpha"
+    )
+
+
+def test_a_self_hosted_api_must_name_its_url():
+    # Otherwise the OpenAI default would get the text with the gate skipped.
+    with pytest.raises(EmbeddingModelLoadError, match="EMBEDDING_API_BASE_URL"):
+        _provider([], allow_external=False, is_external=False)
+
+
+@pytest.mark.parametrize("url", ["http://llm.example/v1", " HTTP://llm.example/v1", "ftp://llm.example"])
+def test_an_external_api_must_use_https(url):
+    with pytest.raises(EmbeddingModelLoadError, match="https://"):
+        _provider([], api_base_url=url)
 
 
 def test_a_missing_key_is_refused():
@@ -114,11 +130,12 @@ def test_a_missing_key_is_refused():
 @pytest.mark.parametrize(
     "kwargs,texts,error,fragment",
     [
-        ({"status": 401}, ["alpha", "beta"], EmbeddingInferenceError, "HTTP 401"),
+        ({"status": 400}, ["alpha", "beta"], EmbeddingInferenceError, "HTTP 400"),
         ({"dims": DIMS + 1}, ["alpha", "beta"], EmbeddingOutputValidationError, "5-dimensional"),
         ({"body": {"unexpected": True}}, ["alpha"], EmbeddingOutputValidationError, "malformed"),
         ({"body": {"data": [{"index": 0, "embedding": _vector(1)}]}}, ["alpha", "beta"], EmbeddingOutputValidationError, "count mismatch"),
         ({"body": {"data": [{"index": 0, "embedding": [0.0] * DIMS}]}}, ["alpha"], EmbeddingOutputValidationError, "all-zero"),
+        ({"body": {"data": [{"index": 0, "embedding": [1e200] * DIMS}]}}, ["alpha"], EmbeddingOutputValidationError, "overflowing"),
     ],
 )
 def test_bad_responses_fail_closed_without_leaking_the_key(kwargs, texts, error, fragment):
@@ -127,13 +144,48 @@ def test_bad_responses_fail_closed_without_leaking_the_key(kwargs, texts, error,
     assert KEY not in str(raised.value)
 
 
-def test_a_network_failure_is_a_typed_error():
+@pytest.mark.parametrize("token", ["NaN", "Infinity", "-Infinity"])
+def test_non_finite_values_are_rejected(token):
+    # Python's json module accepts these tokens, so they reach the vector.
+    raw = '{"data": [{"index": 0, "embedding": [1.0, %s, 1.0, 1.0]}]}' % token
+    client = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200, text=raw)))
+    with pytest.raises(EmbeddingOutputValidationError, match="non-finite"):
+        _provider([], client=client).embed_text("alpha")
+
+
+@pytest.mark.parametrize("status", [401, 403, 404, 408, 429, 500, 503])
+def test_request_wide_failures_are_unavailable_errors(status):
+    with pytest.raises(EmbeddingProviderUnavailableError, match=f"HTTP {status}") as raised:
+        _provider([], status=status).embed_texts(["alpha", "beta"])
+    assert KEY not in str(raised.value)
+
+
+def test_a_network_failure_is_an_unavailable_error():
     def boom(request):
         raise httpx.ConnectError("unreachable")
 
     provider = _provider([], client=httpx.Client(transport=httpx.MockTransport(boom)))
-    with pytest.raises(EmbeddingInferenceError, match="ConnectError"):
+    with pytest.raises(EmbeddingProviderUnavailableError, match="ConnectError"):
         provider.embed_text("alpha")
+
+
+def test_the_timeout_bounds_the_whole_call(monkeypatch):
+    requests: list[dict] = []
+    timeouts: list[float] = []
+    clock = iter([100.0, 100.0, 107.0, 111.0])
+    # A stand-in for the module's `time`, so httpx keeps the real clock.
+    monkeypatch.setattr("app.embeddings.provider.time", types.SimpleNamespace(monotonic=lambda: next(clock)))
+    provider = _provider(requests, batch_size=1, timeout_seconds=10)
+    real_post = provider._client.post
+
+    def post(*args, timeout, **kwargs):
+        timeouts.append(timeout)
+        return real_post(*args, timeout=timeout, **kwargs)
+
+    provider._client.post = post
+    with pytest.raises(EmbeddingProviderUnavailableError, match="10s budget"):
+        provider.embed_texts(["a", "b", "c"])
+    assert timeouts == [10.0, 3.0] and len(requests) == 2
 
 
 def test_empty_text_is_rejected_before_any_request():
@@ -161,7 +213,7 @@ def test_build_embedding_provider_wires_every_setting(monkeypatch):
     assert isinstance(provider, OpenAICompatibleEmbeddingProvider)
     assert (provider.model_name, provider.dimensions, provider.is_external) == ("text-embedding-3-small", 256, True)
     assert provider._url == "https://llm.example/v1/embeddings"
-    assert provider._send_dimensions is True and provider._batch_size == 16
+    assert provider._send_dimensions is True and provider.max_batch_size == 16
 
     # The production guard still refuses the hashing provider.
     monkeypatch.setattr("app.core.config.settings.EMBEDDING_PROVIDER", "hashing")
