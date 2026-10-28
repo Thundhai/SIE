@@ -635,15 +635,21 @@ class UnsafeConfigurationError(RuntimeError):
 
 
 def _database_url_password(url: str) -> str | None:
-    """The URL's password, or None if it has none or does not parse (a
-    malformed URL fails on its own at the first connection)."""
+    """The password the connection will actually use, or None if it has
+    none or does not parse (a malformed URL fails on its own at the first
+    connection). The psycopg dialect lets a `?password=` query parameter
+    override the authority's, so that is checked first."""
     from sqlalchemy.engine import make_url
     from sqlalchemy.exc import ArgumentError
 
     try:
-        return make_url(url).password
+        parsed = make_url(url)
     except ArgumentError:
         return None
+    query_password = parsed.query.get("password")
+    if isinstance(query_password, tuple):
+        query_password = query_password[-1] if query_password else None
+    return query_password if query_password is not None else parsed.password
 
 
 def validate_startup_settings(settings: "Settings") -> None:
