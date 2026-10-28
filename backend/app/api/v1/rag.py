@@ -59,10 +59,13 @@ from app.core.request_id import get_request_id
 from app.integrations.commercial_core import (
     CommercialCoreCapabilityDisabledError,
     CommercialCoreIntegrationError,
+    CommercialCoreTenantNotEntitledError,
     CommercialCoreUnavailable,
     CommercialCoreValidationError,
     get_commercial_core_client,
+    tenant_not_entitled_error,
 )
+from app.integrations.tenant_assertion import tenant_actor_from_context
 from app.schemas.rag import RAGAnswerRead, RAGCitationRead, RAGQueryRequest
 from app.services.permissions import Permission
 
@@ -79,7 +82,10 @@ def _map_commercial_core_rag_error(exc: CommercialCoreIntegrationError) -> ApiEr
     `MODEL_NOT_AVAILABLE` with the client's fixed, safe message. One
     addition: RAG being switched off on Commercial Core (503,
     `retryable: false`) gets its own message and `details.reason`, so a
-    caller can tell "not enabled here" from "temporarily unreachable"."""
+    caller can tell "not enabled here" from "temporarily unreachable".
+    Not being entitled (SIE-2) is a 403, as in the other routers."""
+    if isinstance(exc, CommercialCoreTenantNotEntitledError):
+        return tenant_not_entitled_error()
     if isinstance(exc, CommercialCoreCapabilityDisabledError):
         return ApiError(
             status_code=503,
@@ -157,7 +163,11 @@ def query_knowledge(
     try:
         client = get_commercial_core_client()
         dto = client.query_rag(
-            organization_id=organization_id, query=payload.query, top_k=payload.top_k, request_id=request_id
+            organization_id=organization_id,
+            query=payload.query,
+            top_k=payload.top_k,
+            request_id=request_id,
+            tenant_actor=tenant_actor_from_context(context, Permission.KNOWLEDGE_READ),
         )
     except CommercialCoreUnavailable:
         raise

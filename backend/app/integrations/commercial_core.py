@@ -34,6 +34,8 @@ from functools import lru_cache
 import sie_contract
 from fastapi import HTTPException, status
 from sie_contract import (
+    TENANT_ASSERTION_HEADER,
+    TenantCapability,
     ActorType,
     AnalyticsSignalsResultDTO,
     AnalyticsSummaryDTO,
@@ -49,6 +51,12 @@ from sie_contract import (
 )
 
 from app.core.config import settings
+from app.core.errors import ApiError, ErrorCode
+from app.integrations.tenant_assertion import (
+    TenantActor,
+    TenantAssertionSigner,
+    build_tenant_assertion_signer,
+)
 
 logger = logging.getLogger("sie.integrations.commercial_core")
 
@@ -120,6 +128,18 @@ class CommercialCoreAuthorizationError(CommercialCoreIntegrationError):
     result) a tenant-mismatch rejection."""
 
 
+class CommercialCoreTenantAssertionRejectedError(CommercialCoreAuthenticationError):
+    """Commercial Core rejected the signed tenant assertion (401
+    `TENANT_ASSERTION_INVALID`): a signing-key, issuer or clock problem
+    on this deployment, never the caller's fault. Commercial Core's
+    message never says which check failed."""
+
+
+class CommercialCoreTenantNotEntitledError(CommercialCoreAuthorizationError):
+    """Commercial Core is not enabled for this organization, or not for
+    this capability (403 `TENANT_NOT_ENTITLED`)."""
+
+
 class CommercialCoreValidationError(CommercialCoreIntegrationError):
     """cc_service rejected the request body itself (422)."""
 
@@ -188,6 +208,7 @@ class CommercialCoreClient:
         as_of: datetime | None,
         window_days: int | None,
         request_id: str | None,
+        tenant_actor: TenantActor | None = None,
     ) -> AttentionResultDTO:
         raise NotImplementedError
 
@@ -199,6 +220,7 @@ class CommercialCoreClient:
         as_of: datetime | None,
         window_days: int | None,
         request_id: str | None,
+        tenant_actor: TenantActor | None = None,
     ) -> AnalyticsSummaryDTO:
         raise NotImplementedError
 
@@ -211,6 +233,7 @@ class CommercialCoreClient:
         as_of: datetime | None,
         window_days: int | None,
         request_id: str | None,
+        tenant_actor: TenantActor | None = None,
     ) -> AnalyticsTrendDTO:
         raise NotImplementedError
 
@@ -222,6 +245,7 @@ class CommercialCoreClient:
         as_of: datetime | None,
         window_days: int | None,
         request_id: str | None,
+        tenant_actor: TenantActor | None = None,
     ) -> AnalyticsSignalsResultDTO:
         raise NotImplementedError
 
@@ -234,6 +258,7 @@ class CommercialCoreClient:
         as_of: datetime | None,
         window_days: int | None,
         request_id: str | None,
+        tenant_actor: TenantActor | None = None,
     ) -> EnterpriseIntelligenceResultDTO:
         raise NotImplementedError
 
@@ -252,6 +277,7 @@ class CommercialCoreClient:
         actor_type: ActorType,
         actor_id: uuid.UUID,
         request_id: str | None,
+        tenant_actor: TenantActor | None = None,
     ) -> DecisionReferenceDTO:
         raise NotImplementedError
 
@@ -261,6 +287,7 @@ class CommercialCoreClient:
         organization_id: uuid.UUID,
         decision_id: uuid.UUID,
         request_id: str | None,
+        tenant_actor: TenantActor | None = None,
     ) -> DecisionReferenceDTO:
         raise NotImplementedError
 
@@ -275,6 +302,7 @@ class CommercialCoreClient:
         page: int,
         page_size: int,
         request_id: str | None,
+        tenant_actor: TenantActor | None = None,
     ) -> DecisionListResultDTO:
         raise NotImplementedError
 
@@ -285,6 +313,7 @@ class CommercialCoreClient:
         query: str,
         top_k: int | None,
         request_id: str | None,
+        tenant_actor: TenantActor | None = None,
     ) -> RAGAnswerDTO:
         raise NotImplementedError
 
@@ -307,6 +336,7 @@ class NotConfiguredCommercialCoreClient(CommercialCoreClient):
         as_of: datetime | None,
         window_days: int | None,
         request_id: str | None,
+        tenant_actor: TenantActor | None = None,
     ) -> AttentionResultDTO:
         raise self.unavailable("Attention")
 
@@ -318,6 +348,7 @@ class NotConfiguredCommercialCoreClient(CommercialCoreClient):
         as_of: datetime | None,
         window_days: int | None,
         request_id: str | None,
+        tenant_actor: TenantActor | None = None,
     ) -> AnalyticsSummaryDTO:
         raise self.unavailable("Analytics summary")
 
@@ -330,6 +361,7 @@ class NotConfiguredCommercialCoreClient(CommercialCoreClient):
         as_of: datetime | None,
         window_days: int | None,
         request_id: str | None,
+        tenant_actor: TenantActor | None = None,
     ) -> AnalyticsTrendDTO:
         raise self.unavailable("Analytics trends")
 
@@ -341,6 +373,7 @@ class NotConfiguredCommercialCoreClient(CommercialCoreClient):
         as_of: datetime | None,
         window_days: int | None,
         request_id: str | None,
+        tenant_actor: TenantActor | None = None,
     ) -> AnalyticsSignalsResultDTO:
         raise self.unavailable("Analytics signals")
 
@@ -353,6 +386,7 @@ class NotConfiguredCommercialCoreClient(CommercialCoreClient):
         as_of: datetime | None,
         window_days: int | None,
         request_id: str | None,
+        tenant_actor: TenantActor | None = None,
     ) -> EnterpriseIntelligenceResultDTO:
         raise self.unavailable("Enterprise intelligence")
 
@@ -371,6 +405,7 @@ class NotConfiguredCommercialCoreClient(CommercialCoreClient):
         actor_type: ActorType,
         actor_id: uuid.UUID,
         request_id: str | None,
+        tenant_actor: TenantActor | None = None,
     ) -> DecisionReferenceDTO:
         raise self.unavailable("Intelligence decision recording/history")
 
@@ -380,6 +415,7 @@ class NotConfiguredCommercialCoreClient(CommercialCoreClient):
         organization_id: uuid.UUID,
         decision_id: uuid.UUID,
         request_id: str | None,
+        tenant_actor: TenantActor | None = None,
     ) -> DecisionReferenceDTO:
         raise self.unavailable("Intelligence decision recording/history")
 
@@ -394,6 +430,7 @@ class NotConfiguredCommercialCoreClient(CommercialCoreClient):
         page: int,
         page_size: int,
         request_id: str | None,
+        tenant_actor: TenantActor | None = None,
     ) -> DecisionListResultDTO:
         raise self.unavailable("Intelligence decision recording/history")
 
@@ -404,6 +441,7 @@ class NotConfiguredCommercialCoreClient(CommercialCoreClient):
         query: str,
         top_k: int | None,
         request_id: str | None,
+        tenant_actor: TenantActor | None = None,
     ) -> RAGAnswerDTO:
         raise self.unavailable("Evidence-grounded RAG query")
 
@@ -462,8 +500,10 @@ class HttpCommercialCoreClient(CommercialCoreClient):
         client_secret: str,
         timeout_seconds: float,
         rag_timeout_seconds: float | None = None,
+        tenant_assertion_signer: TenantAssertionSigner | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
+        self._tenant_assertion_signer = tenant_assertion_signer
         self._authorization_header = f"Bearer {client_id}:{client_secret}"
         self._timeout_seconds = timeout_seconds
         self._rag_timeout_seconds = (
@@ -482,6 +522,7 @@ class HttpCommercialCoreClient(CommercialCoreClient):
         as_of: datetime | None,
         window_days: int | None,
         request_id: str | None,
+        tenant_actor: TenantActor | None = None,
     ) -> AttentionResultDTO:
         import httpx
 
@@ -492,6 +533,13 @@ class HttpCommercialCoreClient(CommercialCoreClient):
         }
         if request_id:
             headers["X-Request-Id"] = request_id
+        self._add_tenant_assertion(
+            headers,
+            organization_id=organization_id,
+            capability=TenantCapability.ATTENTION_READ,
+            tenant_actor=tenant_actor,
+            request_id=request_id,
+        )
 
         body = {
             "scope": scope,
@@ -553,6 +601,11 @@ class HttpCommercialCoreClient(CommercialCoreClient):
         except Exception:
             pass  # Falls through to the generic, status-code-only handling below.
 
+        if response.status_code == 401 and error_code == KnownErrorCode.TENANT_ASSERTION_INVALID:
+            logger.error("commercial_core.attention.tenant_assertion_rejected", extra=log_fields)
+            raise CommercialCoreTenantAssertionRejectedError(
+                "Commercial Core rejected this deployment's tenant assertion."
+            ) from None
         if response.status_code == 401:
             logger.error("commercial_core.attention.authentication_failed", extra=log_fields)
             raise CommercialCoreAuthenticationError(
@@ -562,6 +615,10 @@ class HttpCommercialCoreClient(CommercialCoreClient):
             logger.error(
                 "commercial_core.attention.authorization_failed", extra={**log_fields, "error_code": error_code}
             )
+            if error_code == KnownErrorCode.TENANT_NOT_ENTITLED:
+                raise CommercialCoreTenantNotEntitledError(
+                    "Commercial Core is not enabled for this organization."
+                ) from None
             if error_code == KnownErrorCode.TENANT_MISMATCH:
                 raise CommercialCoreAuthorizationError(
                     "Commercial Core rejected this request's tenant binding."
@@ -589,6 +646,29 @@ class HttpCommercialCoreClient(CommercialCoreClient):
             f"Commercial Core returned an unexpected HTTP status ({response.status_code})."
         ) from None
 
+    def _add_tenant_assertion(
+        self,
+        headers: dict[str, str],
+        *,
+        organization_id: uuid.UUID,
+        capability: TenantCapability,
+        tenant_actor: TenantActor | None,
+        request_id: str | None,
+    ) -> None:
+        """Adds the signed tenant assertion (SIE-2) when this deployment
+        signs them. Without a signer nothing is added and Commercial
+        Core's `legacy`/`dual` modes serve the call as before."""
+        if self._tenant_assertion_signer is None:
+            return
+        if tenant_actor is None:
+            # Every router passes its actor; a call without one goes
+            # unsigned, which Commercial Core's `multi` mode refuses.
+            logger.warning("commercial_core.tenant_assertion.no_actor", extra={"capability": capability.value})
+            return
+        headers[TENANT_ASSERTION_HEADER] = self._tenant_assertion_signer.sign(
+            organization_id=organization_id, actor=tenant_actor, capability=capability, request_id=request_id
+        )
+
     def _post_and_decode(
         self,
         path: str,
@@ -597,6 +677,8 @@ class HttpCommercialCoreClient(CommercialCoreClient):
         organization_id: uuid.UUID,
         request_id: str | None,
         log_name: str,
+        capability: TenantCapability,
+        tenant_actor: TenantActor | None,
         expected_status: int = 200,
         timeout_seconds: float | None = None,
     ):
@@ -623,6 +705,13 @@ class HttpCommercialCoreClient(CommercialCoreClient):
         }
         if request_id:
             headers["X-Request-Id"] = request_id
+        self._add_tenant_assertion(
+            headers,
+            organization_id=organization_id,
+            capability=capability,
+            tenant_actor=tenant_actor,
+            request_id=request_id,
+        )
 
         log_fields = {"endpoint": f"{self._base_url}{path}", "request_id": request_id}
         logger.info(f"commercial_core.{log_name}.request_started", extra=log_fields)
@@ -666,6 +755,11 @@ class HttpCommercialCoreClient(CommercialCoreClient):
         except Exception:
             pass  # Falls through to the generic, status-code-only handling below.
 
+        if response.status_code == 401 and error_code == KnownErrorCode.TENANT_ASSERTION_INVALID:
+            logger.error(f"commercial_core.{log_name}.tenant_assertion_rejected", extra=log_fields)
+            raise CommercialCoreTenantAssertionRejectedError(
+                "Commercial Core rejected this deployment's tenant assertion."
+            ) from None
         if response.status_code == 401:
             logger.error(f"commercial_core.{log_name}.authentication_failed", extra=log_fields)
             raise CommercialCoreAuthenticationError(
@@ -673,6 +767,10 @@ class HttpCommercialCoreClient(CommercialCoreClient):
             ) from None
         if response.status_code == 403:
             logger.error(f"commercial_core.{log_name}.authorization_failed", extra={**log_fields, "error_code": error_code})
+            if error_code == KnownErrorCode.TENANT_NOT_ENTITLED:
+                raise CommercialCoreTenantNotEntitledError(
+                    "Commercial Core is not enabled for this organization."
+                ) from None
             if error_code == KnownErrorCode.TENANT_MISMATCH:
                 raise CommercialCoreAuthorizationError(
                     "Commercial Core rejected this request's tenant binding."
@@ -708,6 +806,7 @@ class HttpCommercialCoreClient(CommercialCoreClient):
         as_of: datetime | None,
         window_days: int | None,
         request_id: str | None,
+        tenant_actor: TenantActor | None = None,
     ) -> AnalyticsSummaryDTO:
         body = {
             "site_id": str(site_id) if site_id is not None else None,
@@ -715,7 +814,13 @@ class HttpCommercialCoreClient(CommercialCoreClient):
             "window_days": window_days,
         }
         decoded = self._post_and_decode(
-            _ANALYTICS_SUMMARY_PATH, body, organization_id=organization_id, request_id=request_id, log_name="analytics_summary"
+            _ANALYTICS_SUMMARY_PATH,
+            body,
+            organization_id=organization_id,
+            request_id=request_id,
+            log_name="analytics_summary",
+            capability=TenantCapability.ANALYTICS_READ,
+            tenant_actor=tenant_actor,
         )
         try:
             return AnalyticsSummaryDTO(**decoded)
@@ -733,6 +838,7 @@ class HttpCommercialCoreClient(CommercialCoreClient):
         as_of: datetime | None,
         window_days: int | None,
         request_id: str | None,
+        tenant_actor: TenantActor | None = None,
     ) -> AnalyticsTrendDTO:
         body = {
             "metric": metric,
@@ -741,7 +847,13 @@ class HttpCommercialCoreClient(CommercialCoreClient):
             "period_days": window_days,
         }
         decoded = self._post_and_decode(
-            _ANALYTICS_TRENDS_PATH, body, organization_id=organization_id, request_id=request_id, log_name="analytics_trends"
+            _ANALYTICS_TRENDS_PATH,
+            body,
+            organization_id=organization_id,
+            request_id=request_id,
+            log_name="analytics_trends",
+            capability=TenantCapability.ANALYTICS_READ,
+            tenant_actor=tenant_actor,
         )
         try:
             return AnalyticsTrendDTO(**decoded)
@@ -758,6 +870,7 @@ class HttpCommercialCoreClient(CommercialCoreClient):
         as_of: datetime | None,
         window_days: int | None,
         request_id: str | None,
+        tenant_actor: TenantActor | None = None,
     ) -> AnalyticsSignalsResultDTO:
         body = {
             "site_id": str(site_id) if site_id is not None else None,
@@ -765,7 +878,13 @@ class HttpCommercialCoreClient(CommercialCoreClient):
             "window_days": window_days,
         }
         decoded = self._post_and_decode(
-            _ANALYTICS_SIGNALS_PATH, body, organization_id=organization_id, request_id=request_id, log_name="analytics_signals"
+            _ANALYTICS_SIGNALS_PATH,
+            body,
+            organization_id=organization_id,
+            request_id=request_id,
+            log_name="analytics_signals",
+            capability=TenantCapability.ANALYTICS_READ,
+            tenant_actor=tenant_actor,
         )
         try:
             return AnalyticsSignalsResultDTO(**decoded)
@@ -783,6 +902,7 @@ class HttpCommercialCoreClient(CommercialCoreClient):
         as_of: datetime | None,
         window_days: int | None,
         request_id: str | None,
+        tenant_actor: TenantActor | None = None,
     ) -> EnterpriseIntelligenceResultDTO:
         body = {
             "scope": scope,
@@ -791,7 +911,13 @@ class HttpCommercialCoreClient(CommercialCoreClient):
             "window_days": window_days,
         }
         decoded = self._post_and_decode(
-            _ENTERPRISE_INTELLIGENCE_PATH, body, organization_id=organization_id, request_id=request_id, log_name="enterprise_intelligence"
+            _ENTERPRISE_INTELLIGENCE_PATH,
+            body,
+            organization_id=organization_id,
+            request_id=request_id,
+            log_name="enterprise_intelligence",
+            capability=TenantCapability.ENTERPRISE_INTELLIGENCE_READ,
+            tenant_actor=tenant_actor,
         )
         try:
             return EnterpriseIntelligenceResultDTO(**decoded)
@@ -815,6 +941,7 @@ class HttpCommercialCoreClient(CommercialCoreClient):
         actor_type: ActorType,
         actor_id: uuid.UUID,
         request_id: str | None,
+        tenant_actor: TenantActor | None = None,
     ) -> DecisionReferenceDTO:
         body = {
             "scope": scope,
@@ -829,7 +956,14 @@ class HttpCommercialCoreClient(CommercialCoreClient):
             "actor_id": str(actor_id),
         }
         decoded = self._post_and_decode(
-            _DECISIONS_PATH, body, organization_id=organization_id, request_id=request_id, log_name="decisions_create", expected_status=201
+            _DECISIONS_PATH,
+            body,
+            organization_id=organization_id,
+            request_id=request_id,
+            log_name="decisions_create",
+            capability=TenantCapability.DECISIONS_WRITE,
+            tenant_actor=tenant_actor,
+            expected_status=201,
         )
         try:
             return DecisionReferenceDTO(**decoded)
@@ -844,10 +978,17 @@ class HttpCommercialCoreClient(CommercialCoreClient):
         organization_id: uuid.UUID,
         decision_id: uuid.UUID,
         request_id: str | None,
+        tenant_actor: TenantActor | None = None,
     ) -> DecisionReferenceDTO:
         body = {"decision_id": str(decision_id)}
         decoded = self._post_and_decode(
-            _DECISIONS_GET_PATH, body, organization_id=organization_id, request_id=request_id, log_name="decisions_get"
+            _DECISIONS_GET_PATH,
+            body,
+            organization_id=organization_id,
+            request_id=request_id,
+            log_name="decisions_get",
+            capability=TenantCapability.DECISIONS_READ,
+            tenant_actor=tenant_actor,
         )
         try:
             return DecisionReferenceDTO(**decoded)
@@ -867,6 +1008,7 @@ class HttpCommercialCoreClient(CommercialCoreClient):
         page: int,
         page_size: int,
         request_id: str | None,
+        tenant_actor: TenantActor | None = None,
     ) -> DecisionListResultDTO:
         body = {
             "site_id": str(site_id) if site_id is not None else None,
@@ -877,7 +1019,13 @@ class HttpCommercialCoreClient(CommercialCoreClient):
             "page_size": page_size,
         }
         decoded = self._post_and_decode(
-            _DECISIONS_LIST_PATH, body, organization_id=organization_id, request_id=request_id, log_name="decisions_list"
+            _DECISIONS_LIST_PATH,
+            body,
+            organization_id=organization_id,
+            request_id=request_id,
+            log_name="decisions_list",
+            capability=TenantCapability.DECISIONS_READ,
+            tenant_actor=tenant_actor,
         )
         try:
             return DecisionListResultDTO(**decoded)
@@ -893,6 +1041,7 @@ class HttpCommercialCoreClient(CommercialCoreClient):
         query: str,
         top_k: int | None,
         request_id: str | None,
+        tenant_actor: TenantActor | None = None,
     ) -> RAGAnswerDTO:
         """One evidence-grounded question to cc_service's
         `POST /internal/v1/rag/query`. The body is `query`/`top_k` only:
@@ -913,6 +1062,8 @@ class HttpCommercialCoreClient(CommercialCoreClient):
             organization_id=organization_id,
             request_id=request_id,
             log_name="rag_query",
+            capability=TenantCapability.RAG_QUERY,
+            tenant_actor=tenant_actor,
             timeout_seconds=self._rag_timeout_seconds,
         )
         try:
@@ -940,6 +1091,21 @@ class HttpCommercialCoreClient(CommercialCoreClient):
                 "Commercial Core returned an answer that cites no evidence."
             )
         return dto
+
+
+TENANT_NOT_ENTITLED_REASON = "TENANT_NOT_ENTITLED"
+
+
+def tenant_not_entitled_error() -> ApiError:
+    """What a router returns for `CommercialCoreTenantNotEntitledError`:
+    a 403 that says the feature is not enabled for this organization,
+    distinct from the 503 every dependency failure gets."""
+    return ApiError(
+        status_code=403,
+        code=ErrorCode.TENANT_ACCESS_DENIED,
+        message="This feature is not enabled for this organization.",
+        details={"reason": TENANT_NOT_ENTITLED_REASON},
+    )
 
 
 commercial_core_client: CommercialCoreClient = NotConfiguredCommercialCoreClient()
@@ -999,6 +1165,7 @@ def build_commercial_core_client(
         client_secret=client_secret,
         timeout_seconds=timeout_seconds,
         rag_timeout_seconds=rag_timeout_seconds,
+        tenant_assertion_signer=build_tenant_assertion_signer(),
     )
 
 

@@ -620,6 +620,18 @@ class Settings(BaseSettings):
     # or a slow but valid answer surfaces here as a 503 while it is still
     # being generated. Every other capability keeps the 5s budget above.
     COMMERCIAL_CORE_RAG_TIMEOUT_SECONDS: float = 50.0
+    # SIE-2: the signed tenant assertion sent with every Commercial Core
+    # call (app/integrations/tenant_assertion.py). Off while all three are
+    # unset; partially set fails at first use. SIGNING_KEY is an Ed25519
+    # private JWK, secret, never committed or logged. Commercial Core's
+    # verifiers list its public half under KEY_ID and must be configured
+    # with the same ISSUER (CC_SERVICE_TENANT_ASSERTION_* and
+    # DOMAIN_SERVICE_TENANT_ASSERTION_*). LIFETIME_SECONDS is at most the
+    # contract's 60.
+    COMMERCIAL_CORE_TENANT_ASSERTION_SIGNING_KEY: str | None = None
+    COMMERCIAL_CORE_TENANT_ASSERTION_KEY_ID: str | None = None
+    COMMERCIAL_CORE_TENANT_ASSERTION_ISSUER: str | None = None
+    COMMERCIAL_CORE_TENANT_ASSERTION_LIFETIME_SECONDS: int = 60
 
     @property
     def sqlalchemy_database_uri(self) -> str:
