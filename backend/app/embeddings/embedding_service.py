@@ -29,7 +29,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.embeddings.provider import EmbeddingProvider, get_embedding_provider
+from app.embeddings.provider import (
+    EmbeddingProvider,
+    EmbeddingProviderUnavailableError,
+    get_embedding_provider,
+)
 from app.ingestion.hashing import sha256_hex
 from app.models.embedding import KnowledgeChunkEmbedding
 from app.models.enums import QualityStatus
@@ -395,9 +399,25 @@ class EmbeddingService:
         real batch call. On failure, isolate: retry one chunk at a time
         so a single bad input is reported against just that chunk rather
         than failing chunks that would have succeeded — see
-        `embed_chunks_batch`'s own docstring."""
+        `embed_chunks_batch`'s own docstring.
+
+        A provider that sends texts in API requests of `max_batch_size`
+        gets them that many at a time, so a later request failing never
+        repeats the ones that already succeeded. A request-wide failure
+        (`EmbeddingProviderUnavailableError`: outage, rate limit, timeout,
+        bad key) fails the batch as it is, since retrying each text alone
+        would only multiply the failing traffic."""
         if not pending:
             return []
+
+        max_batch_size = getattr(provider, "max_batch_size", None)
+        if isinstance(max_batch_size, int) and 0 < max_batch_size < len(pending):
+            outcomes: list[EmbeddingOutcome] = []
+            for start in range(0, len(pending), max_batch_size):
+                outcomes.extend(
+                    self._embed_pending(db, provider=provider, pending=pending[start : start + max_batch_size])
+                )
+            return outcomes
 
         contents = [item.content for item in pending]
         try:
@@ -409,6 +429,25 @@ class EmbeddingService:
                 )
             return self._write_rows(db, provider=provider, pending=pending, vectors=vectors)
         except Exception as exc:  # noqa: BLE001 - isolated/reported below, never swallowed
+            if len(pending) > 1 and isinstance(exc, EmbeddingProviderUnavailableError):
+                logger.warning(
+                    "embedding_batch_provider_unavailable",
+                    extra={
+                        "provider": provider.provider_name,
+                        "model_name": provider.model_name,
+                        "model_version": provider.model_version,
+                        "batch_size": len(pending),
+                        "error": f"{type(exc).__name__}: {exc}",
+                    },
+                )
+                return [
+                    EmbeddingOutcome(
+                        chunk_id=item.chunk.id,
+                        status=EmbeddingOutcomeStatus.FAILED,
+                        reason=f"{type(exc).__name__}: {exc}",
+                    )
+                    for item in pending
+                ]
             if len(pending) == 1:
                 # Safe structured logging (never the chunk's own content):
                 # chunk id and error type/message only.
@@ -440,7 +479,7 @@ class EmbeddingService:
                     "error": f"{type(exc).__name__}: {exc}",
                 },
             )
-            outcomes: list[EmbeddingOutcome] = []
+            outcomes = []
             for item in pending:
                 outcomes.extend(self._embed_pending(db, provider=provider, pending=[item]))
             return outcomes
