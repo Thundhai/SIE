@@ -133,6 +133,61 @@ def test_api_docs_are_off_in_production_unless_enabled(app_env, flag, expected):
     assert _settings(APP_ENV=app_env, API_DOCS_ENABLED=flag).api_docs_enabled is expected
 
 
+def _render_settings(**overrides) -> Settings:
+    """A Render service: RENDER=true and, unless given, no APP_ENV at all
+    (not even the default passed explicitly)."""
+    values = {"RENDER": True, "DATABASE_URL": _PROD_DB, "CORS_ALLOWED_ORIGINS": "https://app.example.com"}
+    values.update(overrides)
+    return Settings(_env_file=None, **values)
+
+
+def test_render_without_app_env_counts_as_a_real_deployment():
+    settings = _render_settings()
+    assert settings.APP_ENV == "development"
+    assert settings.is_deployed and not settings.is_production
+    validate_startup_settings(settings)
+
+
+@pytest.mark.parametrize(
+    "flag,fragment",
+    [
+        ({"DEV_MODE": True}, "DEV_MODE is true"),
+        ({"SIE_DEV_DEMO_DATA": True}, "SIE_DEV_DEMO_DATA is true"),
+        ({"DEBUG": True}, "DEBUG is true"),
+        ({"DATABASE_URL": None}, "POSTGRES_PASSWORD is the development default"),
+    ],
+)
+def test_render_without_app_env_gets_the_production_checks(flag, fragment):
+    with pytest.raises(UnsafeConfigurationError, match=fragment):
+        validate_startup_settings(_render_settings(**flag))
+
+
+def test_an_explicit_non_production_app_env_on_render_opts_out():
+    """A deliberately configured staging service on Render keeps its
+    development conveniences."""
+    settings = _render_settings(APP_ENV="staging", DEV_MODE=True, DEBUG=True)
+    assert not settings.is_deployed
+    validate_startup_settings(settings)
+
+
+def test_render_hides_api_docs_unless_enabled():
+    assert _render_settings().api_docs_enabled is False
+    assert _render_settings(API_DOCS_ENABLED=True).api_docs_enabled is True
+
+
+def test_render_does_not_trigger_the_test_provider_guards(monkeypatch):
+    """The embedding/LLM guards stay on APP_ENV: a Render service still on
+    the default test providers keeps serving instead of failing requests."""
+    from app.embeddings.provider import build_embedding_provider
+    from app.llm.provider import build_llm_provider
+
+    monkeypatch.setattr("app.core.config.settings", _render_settings())
+    monkeypatch.setattr("app.embeddings.provider.settings", _render_settings())
+    monkeypatch.setattr("app.llm.provider.settings", _render_settings())
+    assert build_embedding_provider(provider="hashing") is not None
+    assert build_llm_provider(provider="fake") is not None
+
+
 def _import_app(tmp_path: Path, **env: str) -> subprocess.CompletedProcess:
     """Imports app.main in a child process run from an empty directory,
     with the backend on PYTHONPATH, so a developer's backend/.env (which
@@ -141,7 +196,16 @@ def _import_app(tmp_path: Path, **env: str) -> subprocess.CompletedProcess:
         key: value
         for key, value in os.environ.items()
         if key
-        not in {"APP_ENV", "DEV_MODE", "SIE_DEV_DEMO_DATA", "DEBUG", "DATABASE_URL", "CORS_ALLOWED_ORIGINS", "API_DOCS_ENABLED"}
+        not in {
+            "APP_ENV",
+            "RENDER",
+            "DEV_MODE",
+            "SIE_DEV_DEMO_DATA",
+            "DEBUG",
+            "DATABASE_URL",
+            "CORS_ALLOWED_ORIGINS",
+            "API_DOCS_ENABLED",
+        }
     }
     code = "import app.main as m; print('docs', m.app.docs_url, m.app.openapi_url)"
     pythonpath = os.pathsep.join(filter(None, [str(BACKEND_DIR), clean.get("PYTHONPATH")]))
@@ -164,5 +228,17 @@ def test_a_misconfigured_production_process_exits_instead_of_serving(tmp_path):
 
 def test_a_production_process_starts_without_api_docs(tmp_path):
     result = _import_app(tmp_path, APP_ENV="production", DATABASE_URL=_PROD_DB, EMBEDDING_PROVIDER="hashing")
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip().endswith("docs None None")
+
+
+def test_a_render_process_without_app_env_refuses_dev_mode(tmp_path):
+    result = _import_app(tmp_path, RENDER="true", DATABASE_URL=_PROD_DB, DEV_MODE="true")
+    assert result.returncode != 0
+    assert "DEV_MODE is true" in result.stderr
+
+
+def test_a_render_process_without_app_env_starts_without_api_docs(tmp_path):
+    result = _import_app(tmp_path, RENDER="true", DATABASE_URL=_PROD_DB)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip().endswith("docs None None")

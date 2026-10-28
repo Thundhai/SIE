@@ -107,10 +107,15 @@ class Settings(BaseSettings):
     # entirely (fail closed, the same posture DEV_MODE already takes).
     CORS_ALLOWED_ORIGINS: str = "http://localhost:3000"
 
-    # FastAPI's /docs, /redoc and /openapi.json. Unset means on, except in
-    # production (APP_ENV in PRODUCTION_APP_ENVS), where the API surface
-    # is not published to anonymous callers unless this is set to true.
+    # FastAPI's /docs, /redoc and /openapi.json. Unset means on, except on
+    # a real deployment (see `is_deployed`), where the API surface is not
+    # published to anonymous callers unless this is set to true.
     API_DOCS_ENABLED: bool | None = None
+
+    # Set to "true" by Render itself on every service it runs; never set
+    # by hand. Lets the startup safety checks protect a Render deployment
+    # whose APP_ENV was never configured (see `is_deployed`).
+    RENDER: bool = False
 
     # Ingestion (see app/ingestion/storage.py, app/ingestion/pipeline.py)
     #
@@ -624,10 +629,26 @@ class Settings(BaseSettings):
         return self.APP_ENV.strip().lower() in PRODUCTION_APP_ENVS
 
     @property
+    def is_deployed(self) -> bool:
+        """A real deployment, for the startup safety checks and API docs:
+        APP_ENV says production, or the process runs on Render and APP_ENV
+        was never set (an unconfigured APP_ENV defaults to "development",
+        which must not exempt a hosted service). An explicitly set
+        non-production APP_ENV (e.g. a staging service) still opts out.
+
+        Deliberately not used by the embedding/LLM provider guards, which
+        stay on `is_production`: those refuse the test providers, and a
+        Render service still on them must keep serving until real ones are
+        configured."""
+        if self.is_production:
+            return True
+        return self.RENDER and "APP_ENV" not in self.model_fields_set
+
+    @property
     def api_docs_enabled(self) -> bool:
         if self.API_DOCS_ENABLED is not None:
             return self.API_DOCS_ENABLED
-        return not self.is_production
+        return not self.is_deployed
 
 
 class UnsafeConfigurationError(RuntimeError):
@@ -660,7 +681,8 @@ def validate_startup_settings(settings: "Settings") -> None:
     already promised exact origins only; with `allow_credentials=True` a
     wildcard would let any site make credentialed requests).
 
-    In production only: DEV_MODE, SIE_DEV_DEMO_DATA and DEBUG must be off
+    On a real deployment only (`Settings.is_deployed`: APP_ENV production,
+    or Render with APP_ENV unset): DEV_MODE, SIE_DEV_DEMO_DATA and DEBUG must be off
     (the first trusts an unauthenticated user-id header, the last returns
     tracebacks), and the database must not be reached with the built-in
     development password, whether assembled or inside DATABASE_URL.
@@ -671,7 +693,7 @@ def validate_startup_settings(settings: "Settings") -> None:
     problems: list[str] = []
     if "*" in settings.cors_allowed_origins_list:
         problems.append("CORS_ALLOWED_ORIGINS contains '*'; list exact origins instead.")
-    if settings.is_production:
+    if settings.is_deployed:
         if settings.DEV_MODE:
             problems.append("DEV_MODE is true, which trusts an unauthenticated user-id header.")
         if settings.SIE_DEV_DEMO_DATA:
@@ -684,7 +706,7 @@ def validate_startup_settings(settings: "Settings") -> None:
             problems.append("DATABASE_URL uses the development default password.")
     if problems:
         raise UnsafeConfigurationError(
-            f"Refusing to start with APP_ENV={settings.APP_ENV!r}: " + " ".join(problems)
+            f"Refusing to start (APP_ENV={settings.APP_ENV!r}, RENDER={settings.RENDER}): " + " ".join(problems)
         )
 
 
