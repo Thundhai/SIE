@@ -20,6 +20,27 @@ from app.core.config import Settings, UnsafeConfigurationError, validate_startup
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 _PROD_DB = "postgresql+psycopg://app:not-the-default@db.internal:5432/sie"
 
+#: Settings these tests control. Cleared from the environment for every
+#: test (and for the subprocess), so a developer's exported values -- an
+#: `APP_ENV=development`, say -- cannot turn an "unset" case into a set one.
+_CONTROLLED_ENV = (
+    "APP_ENV",
+    "RENDER",
+    "DEV_MODE",
+    "SIE_DEV_DEMO_DATA",
+    "DEBUG",
+    "DATABASE_URL",
+    "POSTGRES_PASSWORD",
+    "CORS_ALLOWED_ORIGINS",
+    "API_DOCS_ENABLED",
+)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_environment(monkeypatch):
+    for key in _CONTROLLED_ENV:
+        monkeypatch.delenv(key, raising=False)
+
 
 def _settings(**overrides) -> Settings:
     values = {"APP_ENV": "production", "DATABASE_URL": _PROD_DB, "CORS_ALLOWED_ORIGINS": "https://app.example.com"}
@@ -192,21 +213,7 @@ def _import_app(tmp_path: Path, **env: str) -> subprocess.CompletedProcess:
     """Imports app.main in a child process run from an empty directory,
     with the backend on PYTHONPATH, so a developer's backend/.env (which
     Settings reads from the working directory) cannot change the result."""
-    clean = {
-        key: value
-        for key, value in os.environ.items()
-        if key
-        not in {
-            "APP_ENV",
-            "RENDER",
-            "DEV_MODE",
-            "SIE_DEV_DEMO_DATA",
-            "DEBUG",
-            "DATABASE_URL",
-            "CORS_ALLOWED_ORIGINS",
-            "API_DOCS_ENABLED",
-        }
-    }
+    clean = {key: value for key, value in os.environ.items() if key not in _CONTROLLED_ENV}
     code = "import app.main as m; print('docs', m.app.docs_url, m.app.openapi_url)"
     pythonpath = os.pathsep.join(filter(None, [str(BACKEND_DIR), clean.get("PYTHONPATH")]))
     return subprocess.run(
