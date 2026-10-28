@@ -67,6 +67,21 @@ from sie_contract.outcomes import (
 from sie_contract.rag import CitationReferenceDTO, RAGAnswerDTO, RAGOutcome
 from sie_contract.status import IntelligenceOverallStatus, IntelligenceStatusDTO
 from sie_contract.tenancy import ActorType, ServiceIdentity, TenantContext
+from sie_contract.tenant_assertion import (
+    CLOCK_SKEW_SECONDS,
+    MAX_HEADER_BYTES,
+    MAX_LIFETIME_SECONDS,
+    PERMISSION_CAPABILITIES,
+    TENANT_ASSERTION_ALG,
+    TENANT_ASSERTION_AUDIENCE,
+    TENANT_ASSERTION_HEADER,
+    TENANT_ASSERTION_SCHEMA_VERSION,
+    TENANT_ASSERTION_TYP,
+    WRITE_CAPABILITIES,
+    TenantAssertionClaims,
+    TenantAssertionHeader,
+    TenantCapability,
+)
 from sie_contract.version import __version__
 
 __all__ = [
@@ -75,6 +90,20 @@ __all__ = [
     "ActorType",
     "ServiceIdentity",
     "TenantContext",
+    # tenant assertion
+    "CLOCK_SKEW_SECONDS",
+    "MAX_HEADER_BYTES",
+    "MAX_LIFETIME_SECONDS",
+    "PERMISSION_CAPABILITIES",
+    "TENANT_ASSERTION_ALG",
+    "TENANT_ASSERTION_AUDIENCE",
+    "TENANT_ASSERTION_HEADER",
+    "TENANT_ASSERTION_SCHEMA_VERSION",
+    "TENANT_ASSERTION_TYP",
+    "WRITE_CAPABILITIES",
+    "TenantAssertionClaims",
+    "TenantAssertionHeader",
+    "TenantCapability",
     # errors
     "ErrorResponse",
     "KnownErrorCode",
