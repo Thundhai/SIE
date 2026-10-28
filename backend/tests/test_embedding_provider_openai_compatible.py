@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import math
-import types
 
 import httpx
 import pytest
@@ -169,23 +168,104 @@ def test_a_network_failure_is_an_unavailable_error():
         provider.embed_text("alpha")
 
 
+class _Clock:
+    """A stand-in for the provider module's `time`, advanced by the fake API."""
+
+    def __init__(self, now: float = 100.0):
+        self.now = now
+
+    def monotonic(self) -> float:
+        return self.now
+
+
+def _timed_provider(monkeypatch, *, seconds_per_request: float, timeouts: list, body_chunks=None, **kwargs):
+    clock = _Clock()
+    monkeypatch.setattr("app.embeddings.provider.time", clock)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        timeouts.append(request.extensions["timeout"]["read"])
+        clock.now += seconds_per_request
+        texts = json.loads(request.content)["input"]
+        raw = json.dumps({"data": [{"index": i, "embedding": _vector(i)} for i in range(len(texts))]}).encode()
+        if body_chunks is None:
+            return httpx.Response(200, content=raw)
+
+        def drip():
+            for part in range(body_chunks):
+                clock.now += 5
+                yield raw[part * len(raw) // body_chunks : (part + 1) * len(raw) // body_chunks]
+
+        return httpx.Response(200, content=drip())
+
+    return _provider([], client=httpx.Client(transport=httpx.MockTransport(handler)), timeout_seconds=10, **kwargs)
+
+
 def test_the_timeout_bounds_the_whole_call(monkeypatch):
-    requests: list[dict] = []
-    timeouts: list[float] = []
-    clock = iter([100.0, 100.0, 107.0, 111.0])
-    # A stand-in for the module's `time`, so httpx keeps the real clock.
-    monkeypatch.setattr("app.embeddings.provider.time", types.SimpleNamespace(monotonic=lambda: next(clock)))
-    provider = _provider(requests, batch_size=1, timeout_seconds=10)
-    real_post = provider._client.post
-
-    def post(*args, timeout, **kwargs):
-        timeouts.append(timeout)
-        return real_post(*args, timeout=timeout, **kwargs)
-
-    provider._client.post = post
+    timeouts: list = []
+    provider = _timed_provider(monkeypatch, seconds_per_request=4, timeouts=timeouts, batch_size=1)
     with pytest.raises(EmbeddingProviderUnavailableError, match="10s budget"):
-        provider.embed_texts(["a", "b", "c"])
-    assert timeouts == [10.0, 3.0] and len(requests) == 2
+        provider.embed_texts(["a", "b", "c", "d"])
+    # Each request may wait only for what is left; the third finishes late
+    # (t=112 against a deadline of 110) and is refused, not returned.
+    assert timeouts == [10.0, 6.0, 2.0]
+
+
+def test_a_late_final_response_is_refused(monkeypatch):
+    provider = _timed_provider(monkeypatch, seconds_per_request=11, timeouts=[])
+    with pytest.raises(EmbeddingProviderUnavailableError, match="budget"):
+        provider.embed_text("alpha")
+
+
+def test_a_response_that_keeps_dripping_past_the_deadline_is_cut_off(monkeypatch):
+    # Every chunk arrives within its read timeout, but the third crosses
+    # the deadline: the body is abandoned there.
+    provider = _timed_provider(monkeypatch, seconds_per_request=0, timeouts=[], body_chunks=4)
+    with pytest.raises(EmbeddingProviderUnavailableError, match="budget"):
+        provider.embed_text("alpha")
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        [{"index": 0, "embedding": "1234"}],
+        [{"index": 0, "embedding": [True, False, True, True]}],
+        [{"index": 0, "embedding": ["1", "2", "3", "4"]}],
+        [{"index": True, "embedding": _vector(1)}],
+        [{"index": 0.0, "embedding": _vector(1)}],
+        [{"index": "0", "embedding": _vector(1)}],
+        [["not", "an", "object"]],
+        {"index": 0, "embedding": _vector(1)},
+    ],
+)
+def test_malformed_types_are_rejected(data):
+    with pytest.raises(EmbeddingOutputValidationError, match="malformed"):
+        _provider([], body={"data": data}).embed_text("alpha")
+
+
+def test_no_traceback_carries_the_key(monkeypatch):
+    """An httpx protocol error can quote the Authorization header. The
+    provider's error must not chain it, so even a formatted traceback,
+    which includes every cause and context, never contains the key."""
+    import traceback
+
+    secret = "sk-test-not-a-real-key"
+
+    def leaky(request):
+        raise httpx.LocalProtocolError(f"Illegal header value b'{request.headers['authorization']}'")
+
+    provider = _provider([], api_key=secret + "\n", client=httpx.Client(transport=httpx.MockTransport(leaky)))
+    with pytest.raises(EmbeddingProviderUnavailableError, match="LocalProtocolError") as raised:
+        provider.embed_text("alpha")
+    assert raised.value.__cause__ is None and raised.value.__context__ is None
+    assert secret not in "".join(traceback.format_exception(raised.value))
+
+
+def test_the_key_is_stripped_of_surrounding_whitespace():
+    requests: list[dict] = []
+    _provider(requests, api_key=f"  {KEY}\n").embed_text("alpha")
+    assert requests[0]["auth"] == f"Bearer {KEY}"
+    with pytest.raises(EmbeddingModelLoadError, match="EMBEDDING_API_KEY"):
+        _provider([], api_key=" \n")
 
 
 def test_empty_text_is_rejected_before_any_request():

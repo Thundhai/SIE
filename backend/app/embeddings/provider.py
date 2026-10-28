@@ -69,6 +69,7 @@ semantically-meaningless vectors. Development, test, and CI environments
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import re
 import time
@@ -456,7 +457,7 @@ class OpenAICompatibleEmbeddingProvider:
         allow_external: bool = False,
         client: httpx.Client | None = None,
     ) -> None:
-        if not api_key:
+        if not api_key or not api_key.strip():
             raise EmbeddingModelLoadError(
                 "EMBEDDING_PROVIDER=openai_compatible requires EMBEDDING_API_KEY to be "
                 "set (an environment variable, never committed to the repository)."
@@ -493,7 +494,10 @@ class OpenAICompatibleEmbeddingProvider:
         self.dimensions = int(dimensions)
         self.is_external = is_external
         self._url = f"{base_url}/embeddings"
-        self._api_key = api_key  # never logged, never re-exposed
+        # Never logged, never re-exposed. Stripped: surrounding whitespace (a
+        # pasted trailing newline) is never part of a key and is an illegal
+        # header value.
+        self._api_key = api_key.strip()
         self._send_dimensions = send_dimensions
         self._batch_size = batch_size
         self._timeout_seconds = float(timeout_seconds)
@@ -512,7 +516,11 @@ class OpenAICompatibleEmbeddingProvider:
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
         """One request per `batch_size` texts, results in input order.
         `EMBEDDING_INFERENCE_TIMEOUT_SECONDS` bounds the whole call, not
-        each request."""
+        each request: the deadline is checked before each request, while
+        a response streams in, and once it has arrived, so a late result
+        is refused rather than returned. A call ends within its budget
+        plus at most one network wait, which httpx caps at the time that
+        was left when the request started."""
         if not texts:
             return []
         for index, text in enumerate(texts):
@@ -525,50 +533,81 @@ class OpenAICompatibleEmbeddingProvider:
         deadline = time.monotonic() + self._timeout_seconds
         result: list[list[float]] = []
         for start in range(0, len(texts), self._batch_size):
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise EmbeddingProviderUnavailableError(
-                    f"Embedding call for {len(texts)} text(s) under model {self.model_name!r} exceeded "
-                    f"its {self._timeout_seconds:g}s budget."
-                )
-            result.extend(self._embed_batch(texts[start : start + self._batch_size], offset=start, timeout=remaining))
+            result.extend(self._embed_batch(texts[start : start + self._batch_size], offset=start, deadline=deadline))
         return result
 
-    def _embed_batch(self, batch: list[str], *, offset: int, timeout: float) -> list[list[float]]:
+    def _over_budget(self, count: int) -> EmbeddingProviderUnavailableError:
+        return EmbeddingProviderUnavailableError(
+            f"Embedding call for {count} text(s) under model {self.model_name!r} exceeded "
+            f"its {self._timeout_seconds:g}s budget."
+        )
+
+    def _embed_batch(self, batch: list[str], *, offset: int, deadline: float) -> list[list[float]]:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise self._over_budget(len(batch))
         payload: dict = {"model": self.model_name, "input": batch}
         if self._send_dimensions:
             payload["dimensions"] = self.dimensions
+
+        # Every error below is raised after its `try`, never inside the
+        # handler or `from exc`: an httpx error can quote the request's
+        # Authorization header (a key with a stray newline is an "Illegal
+        # header value"), and a chained exception would carry it into any
+        # formatted traceback or error tracker.
+        failure: EmbeddingProviderError | None = None
+        status_code: int | None = None
+        body = bytearray()
         try:
-            response = self._client.post(
-                self._url, json=payload, headers={"Authorization": f"Bearer {self._api_key}"}, timeout=timeout
-            )
+            with self._client.stream(
+                "POST",
+                self._url,
+                json=payload,
+                headers={"Authorization": f"Bearer {self._api_key}"},
+                timeout=remaining,
+            ) as response:
+                status_code = response.status_code
+                if status_code == 200:
+                    for chunk in response.iter_bytes():
+                        body.extend(chunk)
+                        if time.monotonic() > deadline:
+                            failure = self._over_budget(len(batch))
+                            break
         except Exception as exc:  # noqa: BLE001 - network failures, reported as typed inference failures
-            # httpx exceptions carry no request headers, so the key cannot leak here.
-            raise EmbeddingProviderUnavailableError(
+            failure = EmbeddingProviderUnavailableError(
                 f"Embedding request for {len(batch)} text(s) under model {self.model_name!r} "
                 f"failed: {type(exc).__name__}"
-            ) from exc
-        if response.status_code != 200:
-            request_wide = response.status_code in self._REQUEST_WIDE_STATUSES or response.status_code >= 500
+            )
+        if failure is None and time.monotonic() > deadline:
+            failure = self._over_budget(len(batch))
+        if failure is not None:
+            raise failure
+        if status_code != 200:
+            request_wide = status_code in self._REQUEST_WIDE_STATUSES or status_code >= 500
             raise (EmbeddingProviderUnavailableError if request_wide else EmbeddingInferenceError)(
-                f"Embedding API answered HTTP {response.status_code} for {len(batch)} text(s) "
+                f"Embedding API answered HTTP {status_code} for {len(batch)} text(s) "
                 f"under model {self.model_name!r}."
             )
+
+        rows: list[tuple[int, list[float]]] | None = None
         try:
-            data = response.json()["data"]
-            rows = sorted(data, key=lambda item: item["index"])
-            vectors = [[float(value) for value in row["embedding"]] for row in rows]
-        except Exception as exc:  # noqa: BLE001 - any malformed body is one typed failure
+            data = json.loads(bytes(body))["data"]
+            if isinstance(data, list):
+                rows = [_embedding_row(item) for item in data]
+        except Exception:  # noqa: BLE001 - any malformed body is one typed failure
+            rows = None
+        if rows is None or any(row is None for row in rows):
             raise EmbeddingOutputValidationError(
                 f"Embedding API returned a malformed body for model {self.model_name!r}."
-            ) from exc
-        if len(vectors) != len(batch) or [row["index"] for row in rows] != list(range(len(batch))):
+            )
+        rows.sort(key=lambda row: row[0])
+        if len(rows) != len(batch) or [index for index, _ in rows] != list(range(len(batch))):
             raise EmbeddingOutputValidationError(
-                f"Model {self.model_name!r} returned {len(vectors)} vector(s) for "
+                f"Model {self.model_name!r} returned {len(rows)} vector(s) for "
                 f"{len(batch)} input text(s) -- a batch-ordering/count mismatch."
             )
         normalized: list[list[float]] = []
-        for index, vector in enumerate(vectors):
+        for index, (_, vector) in enumerate(rows):
             if len(vector) != self.dimensions:
                 raise EmbeddingOutputValidationError(
                     f"Model {self.model_name!r} returned a {len(vector)}-dimensional vector at "
@@ -586,6 +625,20 @@ class OpenAICompatibleEmbeddingProvider:
             normalized.append([value / norm for value in vector])
         return normalized
 
+
+def _embedding_row(item: object) -> tuple[int, list[float]] | None:
+    """One `data[]` entry as (index, vector), or None unless the index is
+    a JSON integer and the embedding a list of JSON numbers. `bool` is
+    excluded explicitly: Python counts it as an int, and `float()` would
+    accept it (or each character of a digit string) as a value."""
+    if not isinstance(item, dict):
+        return None
+    index, embedding = item.get("index"), item.get("embedding")
+    if type(index) is not int or not isinstance(embedding, list):
+        return None
+    if not all(type(value) in (int, float) for value in embedding):
+        return None
+    return index, [float(value) for value in embedding]
 
 def build_embedding_provider(
     *,
