@@ -61,6 +61,26 @@ def test_the_development_password_inside_database_url_is_refused_in_production()
     validate_startup_settings(_settings(DATABASE_URL="postgresql+psycopg://app@db.internal:5432/sie"))
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "postgresql+psycopg://app@db.internal:5432/sie?password=sie",
+        "postgresql+psycopg://app:a-real-password@db.internal:5432/sie?password=sie",
+    ],
+)
+def test_a_query_string_password_override_is_checked(url):
+    """The psycopg dialect lets `?password=` override the authority's
+    password, so the guard must check the password actually used."""
+    with pytest.raises(UnsafeConfigurationError, match="DATABASE_URL uses the development default password"):
+        validate_startup_settings(_settings(DATABASE_URL=url))
+
+
+def test_a_real_query_string_password_overrides_a_default_authority_password():
+    validate_startup_settings(
+        _settings(DATABASE_URL="postgresql+psycopg://app:sie@db.internal:5432/sie?password=a-real-password")
+    )
+
+
 def test_app_env_means_the_same_to_every_production_guard(monkeypatch):
     """The startup checks and the embedding/LLM provider guards share
     `settings.is_production`, so a padded or capitalised APP_ENV cannot
@@ -113,7 +133,10 @@ def test_api_docs_are_off_in_production_unless_enabled(app_env, flag, expected):
     assert _settings(APP_ENV=app_env, API_DOCS_ENABLED=flag).api_docs_enabled is expected
 
 
-def _import_app(**env: str) -> subprocess.CompletedProcess:
+def _import_app(tmp_path: Path, **env: str) -> subprocess.CompletedProcess:
+    """Imports app.main in a child process run from an empty directory,
+    with the backend on PYTHONPATH, so a developer's backend/.env (which
+    Settings reads from the working directory) cannot change the result."""
     clean = {
         key: value
         for key, value in os.environ.items()
@@ -121,24 +144,25 @@ def _import_app(**env: str) -> subprocess.CompletedProcess:
         not in {"APP_ENV", "DEV_MODE", "SIE_DEV_DEMO_DATA", "DEBUG", "DATABASE_URL", "CORS_ALLOWED_ORIGINS", "API_DOCS_ENABLED"}
     }
     code = "import app.main as m; print('docs', m.app.docs_url, m.app.openapi_url)"
+    pythonpath = os.pathsep.join(filter(None, [str(BACKEND_DIR), clean.get("PYTHONPATH")]))
     return subprocess.run(
         [sys.executable, "-c", code],
-        cwd=BACKEND_DIR,
-        env={**clean, **env},
+        cwd=tmp_path,
+        env={**clean, **env, "PYTHONPATH": pythonpath},
         capture_output=True,
         text=True,
         timeout=120,
     )
 
 
-def test_a_misconfigured_production_process_exits_instead_of_serving():
-    result = _import_app(APP_ENV="production", DATABASE_URL=_PROD_DB, DEV_MODE="true")
+def test_a_misconfigured_production_process_exits_instead_of_serving(tmp_path):
+    result = _import_app(tmp_path, APP_ENV="production", DATABASE_URL=_PROD_DB, DEV_MODE="true")
     assert result.returncode != 0
     assert "UnsafeConfigurationError" in result.stderr
     assert "DEV_MODE is true" in result.stderr
 
 
-def test_a_production_process_starts_without_api_docs():
-    result = _import_app(APP_ENV="production", DATABASE_URL=_PROD_DB, EMBEDDING_PROVIDER="hashing")
+def test_a_production_process_starts_without_api_docs(tmp_path):
+    result = _import_app(tmp_path, APP_ENV="production", DATABASE_URL=_PROD_DB, EMBEDDING_PROVIDER="hashing")
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip().endswith("docs None None")
