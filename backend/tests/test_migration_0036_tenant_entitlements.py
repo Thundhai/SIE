@@ -149,18 +149,30 @@ def test_every_known_capability_is_accepted_and_one_row_per_organization(migrate
 
 
 @requires_postgres
-def test_an_organization_with_a_grant_or_audit_row_cannot_be_deleted(migrated):
+@pytest.mark.parametrize(
+    "row_sql,constraint",
+    [
+        (
+            "INSERT INTO commercial_core.tenant_entitlements (id, organization_id, reason) VALUES (:id, :org, 'r')",
+            "fk_tenant_entitlements_organization_id",
+        ),
+        (
+            "INSERT INTO commercial_core.tenant_entitlement_events (id, organization_id, action, actor, reason) "
+            "VALUES (:id, :org, 'grant', 'owner', 'r')",
+            "fk_tenant_entitlement_events_organization_id",
+        ),
+    ],
+    ids=["entitlement_row", "audit_row"],
+)
+def test_an_organization_with_a_grant_or_audit_row_cannot_be_deleted(migrated, row_sql, constraint):
+    """Each table's RESTRICT is checked on its own: the organization has
+    only the one row, so the other table's foreign key cannot be what
+    blocks the delete."""
     engine, _ = migrated
     with engine.begin() as conn:
         org_id = _org(conn)
-        conn.execute(
-            text(
-                "INSERT INTO commercial_core.tenant_entitlement_events (id, organization_id, action, actor, reason) "
-                "VALUES (:id, :org, 'grant', 'owner', 'r')"
-            ),
-            {"id": uuid.uuid4(), "org": org_id},
-        )
-    with pytest.raises(IntegrityError, match="fk_tenant_entitlement_events_organization_id"):
+        conn.execute(text(row_sql), {"id": uuid.uuid4(), "org": org_id})
+    with pytest.raises(IntegrityError, match=constraint):
         with engine.begin() as conn:
             conn.execute(text("DELETE FROM organizations WHERE id = :org"), {"org": org_id})
 
