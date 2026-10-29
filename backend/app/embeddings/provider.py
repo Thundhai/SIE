@@ -516,11 +516,14 @@ class OpenAICompatibleEmbeddingProvider:
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
         """One request per `batch_size` texts, results in input order.
         `EMBEDDING_INFERENCE_TIMEOUT_SECONDS` bounds the whole call, not
-        each request: the deadline is checked before each request, while
-        a response streams in, and once it has arrived, so a late result
-        is refused rather than returned. A call ends within its budget
-        plus at most one network wait, which httpx caps at the time that
-        was left when the request started."""
+        each request: the deadline is checked before each request, as each
+        body chunk arrives, and once the body is complete, so a late result
+        is refused rather than returned. It is not a hard cutoff: while
+        httpx is waiting (connecting, sending, reading headers or a chunk)
+        no check runs, and each such wait is capped only by the time that
+        was left when the request started. A server that keeps dripping
+        header bytes can therefore hold a call past its budget. The body is
+        requested uncompressed, so every raw read reaches the check."""
         if not texts:
             return []
         for index, text in enumerate(texts):
@@ -563,7 +566,9 @@ class OpenAICompatibleEmbeddingProvider:
                 "POST",
                 self._url,
                 json=payload,
-                headers={"Authorization": f"Bearer {self._api_key}"},
+                # identity: a compressed body can be read without yielding
+                # any decoded bytes, which would starve the deadline check.
+                headers={"Authorization": f"Bearer {self._api_key}", "Accept-Encoding": "identity"},
                 timeout=remaining,
             ) as response:
                 status_code = response.status_code

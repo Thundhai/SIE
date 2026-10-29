@@ -210,6 +210,20 @@ def test_the_timeout_bounds_the_whole_call(monkeypatch):
     assert timeouts == [10.0, 6.0, 2.0]
 
 
+def test_the_body_is_requested_uncompressed():
+    """A gzip body can be consumed without yielding decoded bytes, which
+    would starve the per-chunk deadline check, so the provider asks for
+    identity encoding."""
+    seen: list = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers.get("accept-encoding"))
+        return httpx.Response(200, json={"data": [{"index": 0, "embedding": _vector(0)}]})
+
+    _provider([], client=httpx.Client(transport=httpx.MockTransport(handler))).embed_text("alpha")
+    assert seen == ["identity"]
+
+
 def test_a_late_final_response_is_refused(monkeypatch):
     provider = _timed_provider(monkeypatch, seconds_per_request=11, timeouts=[])
     with pytest.raises(EmbeddingProviderUnavailableError, match="budget"):
