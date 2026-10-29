@@ -195,10 +195,12 @@ def test_the_client_gets_the_authorized_organization_and_only_query_and_top_k(cl
     response = client.post(_URL, json=_body(org.id, top_k=7), headers=dev_auth_headers(user.id))
     assert response.status_code == 200
     call = fake.calls[0]
-    assert set(call) == {"organization_id", "query", "top_k", "request_id"}
+    assert set(call) == {"organization_id", "query", "top_k", "request_id", "tenant_actor"}
     assert call["organization_id"] == org.id
     assert call["query"] == _QUERY
     assert call["top_k"] == 7
+    # SIE-2: who the signed tenant assertion names, if this deployment signs one.
+    assert (call["tenant_actor"].actor_id, call["tenant_actor"].permission) == (user.id, Permission.KNOWLEDGE_READ)
 
 
 # --- Request checks the boundary cannot honour yet ----------------------------------------------

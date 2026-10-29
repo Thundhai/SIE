@@ -86,11 +86,14 @@ from app.core.request_id import get_request_id
 from app.integrations.commercial_core import (
     CommercialCoreIntegrationError,
     CommercialCoreNotFoundError,
+    CommercialCoreTenantNotEntitledError,
     CommercialCoreUnavailable,
     CommercialCoreValidationError,
     commercial_core_client,
     get_commercial_core_client,
+    tenant_not_entitled_error,
 )
+from app.integrations.tenant_assertion import tenant_actor_from_context
 from app.intelligence.adapters import GenericJSONAdapter
 from app.intelligence.ingestion_service import safety_event_ingestion_service
 from app.intelligence.schemas import RawSafetyEventPayload
@@ -155,7 +158,13 @@ def _map_commercial_core_attention_error(
     `str(exc)` is always one of `app/integrations/commercial_core.py`'s
     own fixed, safe messages, or (for a 404) Commercial Core's own
     generic not-found message -- never a Commercial Core stack trace,
-    credential, or URL, for any branch."""
+    credential, or URL, for any branch.
+
+    The one exception is `CommercialCoreTenantNotEntitledError`: Commercial
+    Core is not enabled for this organization (SIE-2), a 403 with
+    `details.reason` `TENANT_NOT_ENTITLED`, since waiting will not fix it."""
+    if isinstance(exc, CommercialCoreTenantNotEntitledError):
+        return tenant_not_entitled_error()
     if site_scoped and isinstance(exc, CommercialCoreNotFoundError):
         return ApiError(
             status_code=404,
@@ -432,6 +441,7 @@ def analytics_summary(
             as_of=None,
             window_days=window_days,
             request_id=request_id,
+            tenant_actor=tenant_actor_from_context(context, Permission.INTELLIGENCE_READ),
         )
     except CommercialCoreUnavailable:
         raise
@@ -460,6 +470,7 @@ def analytics_trends(
             as_of=None,
             window_days=window_days,
             request_id=request_id,
+            tenant_actor=tenant_actor_from_context(context, Permission.INTELLIGENCE_READ),
         )
     except CommercialCoreUnavailable:
         raise
@@ -486,6 +497,7 @@ def analytics_signals(
             as_of=None,
             window_days=window_days,
             request_id=request_id,
+            tenant_actor=tenant_actor_from_context(context, Permission.INTELLIGENCE_READ),
         )
     except CommercialCoreUnavailable:
         raise
@@ -529,6 +541,7 @@ def enterprise_intelligence(
             as_of=None,
             window_days=window_days,
             request_id=request_id,
+            tenant_actor=tenant_actor_from_context(context, Permission.INTELLIGENCE_READ),
         )
     except CommercialCoreUnavailable:
         raise
@@ -610,6 +623,7 @@ def organization_attention(
             as_of=as_of,
             window_days=window_days,
             request_id=request_id,
+            tenant_actor=tenant_actor_from_context(context, Permission.INTELLIGENCE_READ),
         )
     except CommercialCoreUnavailable:
         raise
@@ -641,6 +655,7 @@ def site_attention(
             as_of=as_of,
             window_days=window_days,
             request_id=request_id,
+            tenant_actor=tenant_actor_from_context(context, Permission.INTELLIGENCE_READ),
         )
     except CommercialCoreUnavailable:
         raise
