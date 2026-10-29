@@ -230,6 +230,33 @@ class Settings(BaseSettings):
     # process-level cancellation.
     EMBEDDING_INFERENCE_TIMEOUT_SECONDS: float = 60.0
 
+    # EMBEDDING_PROVIDER="openai_compatible"
+    # (app/embeddings/provider.py::OpenAICompatibleEmbeddingProvider): an
+    # HTTP `/embeddings` API in the OpenAI request/response shape, so a
+    # deployment needs no local model or extra memory. EMBEDDING_MODEL_NAME
+    # is the API's model id, EMBEDDING_BATCH_SIZE caps texts per request,
+    # and EMBEDDING_INFERENCE_TIMEOUT_SECONDS is enforced here, as one
+    # deadline across all of a call's requests (unlike local inference).
+    # An external API must be https://. The key is an environment
+    # variable only, never committed and never logged.
+    EMBEDDING_API_BASE_URL: str | None = None
+    EMBEDDING_API_KEY: str | None = None
+    # Ask the API for EMBEDDING_DIMENSIONS-wide vectors (the `dimensions`
+    # request field). Only models that support it accept it (OpenAI's
+    # text-embedding-3 family does); leave false for any other API, whose
+    # native width must then equal EMBEDDING_DIMENSIONS. Every response is
+    # checked against EMBEDDING_DIMENSIONS either way, and the vector
+    # column's width is fixed by the migrations, so changing it needs one.
+    EMBEDDING_API_SEND_DIMENSIONS: bool = False
+    # Document and query text leaves the deployment when the API is run
+    # by a third party. Same posture as ALLOW_EXTERNAL_LLM_FOR_PRIVATE_DATA
+    # below: an external provider is refused at construction unless the
+    # owner has explicitly allowed it. Set EMBEDDING_PROVIDER_IS_EXTERNAL
+    # to false only for a self-hosted API inside the deployment boundary;
+    # EMBEDDING_API_BASE_URL is then required.
+    EMBEDDING_PROVIDER_IS_EXTERNAL: bool = True
+    ALLOW_EXTERNAL_EMBEDDINGS_FOR_PRIVATE_DATA: bool = False
+
     # Retrieval (see app/retrieval/retrieval_service.py). Documented
     # *initial* defaults calibrated against the deterministic hashing
     # provider above, the same "not scientifically validated optimal
@@ -593,6 +620,18 @@ class Settings(BaseSettings):
     # or a slow but valid answer surfaces here as a 503 while it is still
     # being generated. Every other capability keeps the 5s budget above.
     COMMERCIAL_CORE_RAG_TIMEOUT_SECONDS: float = 50.0
+    # SIE-2: the signed tenant assertion sent with every Commercial Core
+    # call (app/integrations/tenant_assertion.py). Off while all three are
+    # unset; partially set fails at first use. SIGNING_KEY is an Ed25519
+    # private JWK, secret, never committed or logged. Commercial Core's
+    # verifiers list its public half under KEY_ID and must be configured
+    # with the same ISSUER (CC_SERVICE_TENANT_ASSERTION_* and
+    # DOMAIN_SERVICE_TENANT_ASSERTION_*). LIFETIME_SECONDS is at most the
+    # contract's 60.
+    COMMERCIAL_CORE_TENANT_ASSERTION_SIGNING_KEY: str | None = None
+    COMMERCIAL_CORE_TENANT_ASSERTION_KEY_ID: str | None = None
+    COMMERCIAL_CORE_TENANT_ASSERTION_ISSUER: str | None = None
+    COMMERCIAL_CORE_TENANT_ASSERTION_LIFETIME_SECONDS: int = 60
 
     @property
     def sqlalchemy_database_uri(self) -> str:

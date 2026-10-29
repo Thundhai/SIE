@@ -51,7 +51,7 @@ FORBIDDEN_PREFIXES = (
 )
 
 # The exact public API sie-contract/src/sie_contract/__init__.py's own
-# __all__ declares as of contract version 0.8.0 (see PROVENANCE.json).
+# __all__ declares as of contract version 0.9.0 (see PROVENANCE.json).
 EXPECTED_EXPORTS = {
     "__version__",
     "ActorType",
@@ -116,6 +116,20 @@ EXPECTED_EXPORTS = {
     "OutcomeVerificationStatus",
     "IntelligenceOverallStatus",
     "IntelligenceStatusDTO",
+    # 0.9.0: tenant assertions (sie_contract/tenant_assertion.py).
+    "CLOCK_SKEW_SECONDS",
+    "MAX_HEADER_BYTES",
+    "MAX_LIFETIME_SECONDS",
+    "PERMISSION_CAPABILITIES",
+    "TENANT_ASSERTION_ALG",
+    "TENANT_ASSERTION_AUDIENCE",
+    "TENANT_ASSERTION_HEADER",
+    "TENANT_ASSERTION_SCHEMA_VERSION",
+    "TENANT_ASSERTION_TYP",
+    "TenantAssertionClaims",
+    "TenantAssertionHeader",
+    "TenantCapability",
+    "WRITE_CAPABILITIES",
 }
 
 
@@ -148,7 +162,7 @@ def test_sie_contract_imports_successfully():
 def test_sie_contract_version_matches_expected_contract_version():
     import sie_contract
 
-    assert sie_contract.__version__ == "0.8.0"
+    assert sie_contract.__version__ == "0.9.0"
 
 
 def test_sie_contract_exposes_the_expected_public_api():
@@ -190,14 +204,19 @@ def test_sie_contract_source_never_imports_commercial_core_internals():
 
 
 def test_importing_sie_contract_does_not_pull_in_any_app_module():
-    for mod_name in list(sys.modules):
-        if mod_name == "app" or mod_name.startswith("app."):
-            del sys.modules[mod_name]  # pragma: no cover -- defensive, should never fire
+    # Set app.* aside for the check and put the same module objects back
+    # afterwards: later tests monkeypatch them by import path and must
+    # reach the modules the running app actually uses.
+    saved = {name: module for name, module in sys.modules.items() if name == "app" or name.startswith("app.")}
+    for name in saved:
+        del sys.modules[name]
+    try:
+        import sie_contract  # noqa: F401
 
-    import sie_contract  # noqa: F401
-
-    app_modules_present = [name for name in sys.modules if name == "app" or name.startswith("app.")]
-    assert app_modules_present == [], f"importing sie_contract pulled in app.* modules: {app_modules_present}"
+        app_modules_present = [name for name in sys.modules if name == "app" or name.startswith("app.")]
+        assert app_modules_present == [], f"importing sie_contract pulled in app.* modules: {app_modules_present}"
+    finally:
+        sys.modules.update(saved)
 
 
 # --- Group 2: the vendored copy matches its declared provenance -----------------------------------

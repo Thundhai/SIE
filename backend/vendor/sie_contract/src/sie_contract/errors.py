@@ -63,3 +63,10 @@ class KnownErrorCode:
     CANDIDATE_MISMATCH = "CANDIDATE_MISMATCH"
     DEPENDENCY_UNAVAILABLE = "DEPENDENCY_UNAVAILABLE"
     UNSUPPORTED_CONTRACT_VERSION = "UNSUPPORTED_CONTRACT_VERSION"
+    # Since 0.9.0 (`tenant_assertion.py`). TENANT_ASSERTION_INVALID is a 401
+    # for a missing, malformed, unverifiable, stale or replayed assertion; its
+    # message never says which. TENANT_NOT_ENTITLED is a 403 for an
+    # organization Commercial Core is not enabled for, or a capability it was
+    # not granted.
+    TENANT_ASSERTION_INVALID = "TENANT_ASSERTION_INVALID"
+    TENANT_NOT_ENTITLED = "TENANT_NOT_ENTITLED"

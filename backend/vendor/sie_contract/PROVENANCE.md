@@ -17,9 +17,9 @@ See `PROVENANCE.json` for the machine-readable record
 
 - **Source repository:** `Thundhai/SIE-Commercial-Core`
 - **Source path:** `sie-contract/` (that repository's own contract package)
-- **Source commit:** `96223a772eeb8b289454adb26258f051ea5adeb7` (`main`). `sie-contract/` there is identical to `8d8074f`, the merge of Commercial Core PR #19 that introduced 0.8.0 (RAG outcomes); the only later commit is a Dependabot `requirements.txt` bump outside `sie-contract/`. Also carries 0.6.0's Outcome/Verification DTOs (`outcomes.py`, PR #17) and 0.7.0's human-only actors (PR #18).
-- **Source contract version:** `0.8.0`
-- **Vendored:** 2026-10-22
+- **Source commit:** `9befa225db52006b282b33b9eea0f84b469acdb9` (`main`, the merge of Commercial Core PR #28). Adds 0.9.0's tenant assertions (`tenant_assertion.py`, two new `KnownErrorCode` values, and the golden vectors `test_vectors/tenant_assertion_v1.json`, which hold public test keys only). Also carries 0.8.0's RAG outcomes, 0.6.0's Outcome/Verification DTOs and 0.7.0's human-only actors.
+- **Source contract version:** `0.9.0`
+- **Vendored:** 2026-10-28
 
 ## Why this exists, and why it is not a decision to redesign anything
 
