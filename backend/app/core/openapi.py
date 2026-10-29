@@ -154,7 +154,9 @@ OPENAPI_TAGS = [
             "of whether that recorded outcome is trustworthy, gated by a deterministic evidence-validity "
             "check. Both layers are append-only: no update endpoint, a correction is a new row. A "
             "ground-truth capture and verification layer, not the SIE learning engine "
-            "(`intelligence:decision_write` to create, `intelligence:read` to read)."
+            "(`intelligence:decision_write` to create, `intelligence:read` to read). Creating an outcome "
+            "or a verification also requires a **human user**: API-client (machine) callers are refused "
+            "with 403 even when they hold `intelligence:decision_write`."
         ),
     },
     {
