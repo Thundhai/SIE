@@ -16,7 +16,7 @@
 |---|---|---|---|---|
 | Phase 0 — Stop the Bleeding | 3 | 3 | 100% | 2026-10-15 |
 | Phase 1 — Close the Decision Loop | 5 | 3 | 60% | 2026-10-15 |
-| Phase 2 — Finish the Intelligence Loop | 4 | 0 | 0% | 2026-10-19 |
+| Phase 2 — Finish the Intelligence Loop | 4 | 0 | 0% | 2026-10-15 |
 | Phase 3 — Enterprise Readiness | 5 | 0 | 0% | 2026-10-15 |
 | Phase 4 — Strategic Decisions + Expansion | 5 | 0 | 0% | 2026-10-15 |
 | Phase 5 — Hygiene & Long-Term | 7 | 0 | 0% | 2026-10-15 |
@@ -46,7 +46,7 @@ Decisions is fully built on both ends (contract DTO `DecisionReferenceDTO` + bac
 
 ## Phase 2 — Finish the Rest of the Intelligence Loop
 
-- [~] **(P1)** Design contract DTOs for Outcomes/Verification (currently `REVIEW_REQUIRED` — the backend service already exists). Specification/audit draft prepared in [`docs/PHASE2_OUTCOMES_VERIFICATION_CONTRACT_SPEC.md`](PHASE2_OUTCOMES_VERIFICATION_CONTRACT_SPEC.md); handoff: [`docs/handoffs/2026-10-19-phase2-outcomes-verification-contract-design.md`](handoffs/2026-10-19-phase2-outcomes-verification-contract-design.md). **Awaiting explicit boundary/field-set approval; no contract implementation is authorized yet.**
+- [ ] **(P1)** Design contract DTOs for Outcomes/Verification (currently `REVIEW_REQUIRED` — the backend service already exists, this is a design task).
 - [ ] **(P1)** Wire Outcomes/Verification end-to-end once the contract lands.
 - [ ] **(P1/P2)** Design contract + wire Organizational Memory / Learning Candidates (fully-built governed pipeline, currently unused).
 - [ ] **(P1)** Wire RAG (contract DTO `RAGAnswerDTO`/`CitationReferenceDTO` already exists, zero wiring) — high market differentiation, a working citation-grounded Q&A feature sitting idle.
