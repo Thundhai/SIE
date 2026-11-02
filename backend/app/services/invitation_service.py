@@ -56,7 +56,7 @@ from app.models.organization_membership import OrganizationMembership
 from app.models.user import User
 from app.services.audit_service import AuditAction, audit_service
 from app.services.identity_link_service import CreatedGrant, _is_expired, _new_code, hash_code
-from app.services.identity_service import ExternalIdentityClaims, subject_fingerprint
+from app.services.identity_service import ExternalIdentityClaims, bounded_display_name, subject_fingerprint
 from app.services.permissions import ROLE_PERMISSIONS, OrganizationRole, Permission
 from app.services.verified_email import (
     SOURCE_USERINFO_INSECURE,
@@ -544,7 +544,7 @@ class InvitationService:
             subject=claims.subject,
             issuer=claims.issuer,
             email=verified.email,
-            display_name=claims.display_name[:255] if claims.display_name else None,
+            display_name=bounded_display_name(claims.display_name),
             provider=claims.provider,
             last_authenticated_at=utcnow(),
         )

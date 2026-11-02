@@ -106,6 +106,11 @@ export function InvitationsSection({ organizationId }: { organizationId: string 
 
   if (!permitted) return null;
 
+  // One link-issuing action at a time: a create and a resend finishing
+  // together would each replace the one link on screen, losing one before
+  // it could be copied.
+  const anyBusy = submitting || rowBusy !== null;
+
   function showIssued(result: IssuedInvitation) {
     setIssued(result);
     setCopied(false);
@@ -168,7 +173,7 @@ export function InvitationsSection({ organizationId }: { organizationId: string 
           options={INVITABLE_ROLES.map((r) => ({ value: r, label: roleLabel(r) }))}
         />
         <Select label="Expires in" value={expiry} onChange={(e) => setExpiry(e.target.value)} options={EXPIRY_OPTIONS} />
-        <Button type="submit" variant="primary" disabled={submitting || !email.trim()}>
+        <Button type="submit" variant="primary" disabled={anyBusy || !email.trim()}>
           {submitting ? 'Inviting…' : 'Invite'}
         </Button>
       </form>
@@ -239,7 +244,7 @@ export function InvitationsSection({ organizationId }: { organizationId: string 
                                 type="button"
                                 size="sm"
                                 variant="secondary"
-                                disabled={rowBusy !== null}
+                                disabled={anyBusy}
                                 onClick={() => onRowAction(inv, 'resend')}
                                 aria-label={`Resend invitation to ${inv.email}`}
                               >
@@ -249,7 +254,7 @@ export function InvitationsSection({ organizationId }: { organizationId: string 
                                 type="button"
                                 size="sm"
                                 variant="danger"
-                                disabled={rowBusy !== null}
+                                disabled={anyBusy}
                                 onClick={() => onRowAction(inv, 'revoke')}
                                 aria-label={`Revoke invitation to ${inv.email}`}
                               >

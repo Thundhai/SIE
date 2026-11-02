@@ -175,6 +175,35 @@ describe('InvitationsSection', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Resend invitation to other@example.com' })).toBeEnabled());
   });
 
+  it('creating and resending never overlap, so no one-time link is lost', async () => {
+    vi.mocked(listInvitations).mockResolvedValue([invitation()]);
+    let finishCreate: (value: unknown) => void = () => undefined;
+    vi.mocked(createInvitation).mockReturnValue(new Promise((resolve) => (finishCreate = resolve)) as never);
+
+    renderSection();
+    await userEvent.type(await screen.findByLabelText('Email'), 'new@example.com');
+    await userEvent.click(screen.getByRole('button', { name: 'Invite' }));
+
+    expect(screen.getByRole('button', { name: 'Resend invitation to pending@example.com' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Revoke invitation to pending@example.com' })).toBeDisabled();
+    finishCreate({ invitation: invitation({ id: 'inv-9', email: 'new@example.com' }), code: 'sie_link_NEW' });
+    expect((await screen.findByTestId('invitation-link')).textContent).toContain('sie_link_NEW');
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Resend invitation to pending@example.com' })).toBeEnabled(),
+    );
+  });
+
+  it('while a row action is pending, a new invitation cannot be created', async () => {
+    vi.mocked(listInvitations).mockResolvedValue([invitation()]);
+    vi.mocked(resendInvitation).mockReturnValue(new Promise(() => undefined) as never);
+
+    renderSection();
+    await userEvent.type(await screen.findByLabelText('Email'), 'new@example.com');
+    await userEvent.click(screen.getByRole('button', { name: 'Resend invitation to pending@example.com' }));
+
+    expect(screen.getByRole('button', { name: 'Invite' })).toBeDisabled();
+  });
+
   it('does not revoke when the confirmation is declined', async () => {
     vi.mocked(listInvitations).mockResolvedValue([invitation()]);
     vi.spyOn(window, 'confirm').mockReturnValue(false);

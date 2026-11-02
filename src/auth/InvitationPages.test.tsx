@@ -388,6 +388,23 @@ describe('InvitationCompletePage', () => {
     expect(await screen.findByText("You're in")).toBeInTheDocument();
   });
 
+  it('an over-long provider name is cut to the 255 characters the API accepts', async () => {
+    session({ user: { profile: { name: 'N'.repeat(400) } } });
+    storePendingInvitation(TOKEN);
+    vi.mocked(inspectInvitation).mockResolvedValue(INVITATION);
+    vi.mocked(acceptInvitation).mockResolvedValue({
+      organization_id: 'org-1',
+      user_id: 'u',
+      role: 'HSE_ANALYST',
+      outcome: 'account_created',
+    });
+
+    renderAt('/invite/complete');
+    await userEvent.click(await screen.findByRole('button', { name: 'Join Acme Safety' }));
+
+    expect(acceptInvitation).toHaveBeenCalledWith(TOKEN, 'access-token', 'N'.repeat(255));
+  });
+
   it('an invitation revoked meanwhile shows the closed screen and forgets the code', async () => {
     session();
     storePendingInvitation(TOKEN);

@@ -328,3 +328,43 @@ def test_a_maximum_length_email_and_long_name_claim_are_accepted(pg_session, tru
     assert len(accepted.user.name) == 255
     identity = pg_session.query(Identity).filter(Identity.subject == "long-name-sub").one()
     assert len(identity.display_name) == 255
+
+
+@requires_postgres
+def test_an_over_long_name_claim_never_breaks_later_sign_ins_or_account_links(pg_session, trusted_issuer):
+    """Every write of a token's profile claims fits the real columns: the
+    next sign-in's profile sync and an account-link redemption included,
+    not just acceptance."""
+    from app.services.identity_service import identity_resolver_service
+
+    org = make_org(pg_session, "Sync Org")
+    admin = make_org_member(pg_session, org.id, role=OrganizationRole.ORG_ADMIN)
+    code = _invite(pg_session, org, admin, "long.name@example.com")
+    long_claims = ExternalIdentityClaims(
+        subject="sync-sub", issuer=ISSUER, email="x" * 400, display_name="N" * 400, provider="test"
+    )
+    accepted = invitation_service.accept(
+        pg_session, claims=long_claims, verified=_verified("long.name@example.com"), code=code
+    )
+
+    # The next authenticated request syncs the profile from the same claims.
+    user = identity_resolver_service.resolve_user(pg_session, claims=long_claims)
+
+    assert user.id == accepted.user.id
+    identity = pg_session.query(Identity).filter(Identity.subject == "sync-sub").one()
+    pg_session.refresh(identity)
+    assert len(identity.display_name) == 255
+    assert identity.email is None  # longer than any valid address: dropped, not cut
+
+    # An account-link redemption writes the same fields.
+    target = make_org_member(pg_session, org.id)
+    link = identity_link_service.create_account_link(
+        pg_session, target_user_id=target.id, actor_user_id=admin.id, allow_platform_admin=False
+    )
+    link_claims = ExternalIdentityClaims(
+        subject="link-sub", issuer=ISSUER, email=None, display_name="L" * 400, provider="test"
+    )
+    linked_user, _ = identity_link_service.redeem(pg_session, claims=link_claims, code=link.code)
+    assert linked_user.id == target.id
+    linked = pg_session.query(Identity).filter(Identity.subject == "link-sub").one()
+    assert len(linked.display_name) == 255

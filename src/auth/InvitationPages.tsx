@@ -322,7 +322,9 @@ export function InvitationCompletePage() {
       return;
     }
     const profileName = oidc.user?.profile?.name;
-    if (typeof profileName === 'string') setFullName(profileName);
+    // The API (and the input) take at most 255 characters; a longer provider
+    // name must not turn into a 422 the invitee can't see the cause of.
+    if (typeof profileName === 'string') setFullName(profileName.slice(0, 255));
     inspectInvitation(token)
       .then((invitation) => {
         if (acceptStarted.current) return;

@@ -45,6 +45,8 @@ from app.models.user import User
 from app.services.audit_service import AuditAction, audit_service
 from app.services.identity_service import (
     ExternalIdentityClaims,
+    bounded_display_name,
+    bounded_email,
     log_link_rejection,
     subject_fingerprint,
     user_has_identity_for_issuer,
@@ -207,8 +209,8 @@ class IdentityLinkService:
                     user_id=user.id,
                     subject=claims.subject,
                     issuer=claims.issuer,
-                    email=claims.email,
-                    display_name=claims.display_name,
+                    email=bounded_email(claims.email),
+                    display_name=bounded_display_name(claims.display_name),
                     provider=claims.provider,
                 )
             else:
