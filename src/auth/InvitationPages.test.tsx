@@ -212,6 +212,32 @@ describe('InvitationLandingPage', () => {
     expect(window.location.hash).toBe('');
   });
 
+  it('an action still pending when another link opens never redirects with the old invitation', async () => {
+    const oidc = session({ status: 'unauthenticated', user: null });
+    const second = 'sie_link_secondtoken0987654321';
+    vi.mocked(inspectInvitation).mockImplementation(async (token) =>
+      token === TOKEN ? INVITATION : { ...INVITATION, organization_name: 'Second Org', invited_email: 'second@example.com' },
+    );
+    let finishStart: (value: PublicInvitation) => void = () => undefined;
+    vi.mocked(startInvitation).mockReturnValue(new Promise((resolve) => (finishStart = resolve)));
+    window.history.replaceState(null, '', `/invite#token=${TOKEN}`);
+
+    renderAt('/invite');
+    await userEvent.click(await screen.findByRole('button', { name: 'Create an account with email and password' }));
+    window.history.replaceState(null, '', `/invite#token=${second}`);
+    act(() => {
+      window.dispatchEvent(new HashChangeEvent('hashchange'));
+    });
+    expect(await screen.findByText('Second Org')).toBeInTheDocument();
+
+    await act(async () => {
+      finishStart({ ...INVITATION, status: 'REGISTRATION_STARTED' });
+    });
+
+    expect(oidc.signIn).not.toHaveBeenCalled();
+    expect(screen.getByText('Second Org')).toBeInTheDocument();
+  });
+
   it('explains that invitations need production sign-in in dev mode', () => {
     vi.stubEnv('MODE', 'test');
     session({ status: 'unauthenticated', user: null });

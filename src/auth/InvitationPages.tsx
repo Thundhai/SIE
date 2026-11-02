@@ -145,6 +145,10 @@ export function InvitationLandingPage() {
   // invitation link opened in the same tab), so the new link is validated
   // the same way and the previous inspection is abandoned.
   const [linkVersion, setLinkVersion] = useState(0);
+  // The link an in-flight action belongs to: an action started for one link
+  // must never redirect or update the page once another link has opened.
+  const currentLink = useRef(0);
+  currentLink.current = linkVersion;
 
   useEffect(() => {
     const onHashChange = () => setLinkVersion((v) => v + 1);
@@ -223,6 +227,8 @@ export function InvitationLandingPage() {
   const { token, invitation } = state;
 
   async function begin(method: InvitationMethod | 'existing') {
+    const link = currentLink.current;
+    const stale = () => currentLink.current !== link;
     setBusy(true);
     setActionError(null);
     try {
@@ -230,12 +236,14 @@ export function InvitationLandingPage() {
         // The invitation may have expired, been revoked or been used since
         // this page loaded: don't send the person to register for nothing.
         const current = await startInvitation(token, method);
+        if (stale()) return;
         if (!isOpen(current.status)) {
           setBusy(false);
           setState({ phase: 'closed', reason: current.status });
           return;
         }
       }
+      if (stale()) return;
       const promptCreate = method === 'password' && import.meta.env.VITE_OIDC_SIGNUP_PROMPT_CREATE === 'true';
       await oidc.signIn({
         login_hint: invitation.invited_email,
@@ -243,6 +251,7 @@ export function InvitationLandingPage() {
         ...(promptCreate ? { prompt: 'create' } : {}),
       });
     } catch (error) {
+      if (stale()) return;
       setBusy(false);
       setActionError(errorMessage(error));
     }
