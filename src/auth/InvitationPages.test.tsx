@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -185,6 +185,33 @@ describe('InvitationLandingPage', () => {
     expect(oidc.signIn).not.toHaveBeenCalled();
   });
 
+  it('a new invitation link opened while the page is mounted is validated, not ignored', async () => {
+    session({ status: 'unauthenticated', user: null });
+    vi.mocked(inspectInvitation).mockImplementation(async (token) =>
+      token === TOKEN ? INVITATION : { ...INVITATION, organization_name: 'Second Org' },
+    );
+    window.history.replaceState(null, '', `/invite#token=${TOKEN}`);
+    renderAt('/invite');
+    expect(await screen.findByText('Acme Safety')).toBeInTheDocument();
+
+    const second = 'sie_link_secondtoken0987654321';
+    window.history.replaceState(null, '', `/invite#token=${second}`);
+    act(() => {
+      window.dispatchEvent(new HashChangeEvent('hashchange'));
+    });
+    expect(await screen.findByText('Second Org')).toBeInTheDocument();
+    expect(readPendingInvitation()).toBe(second);
+    expect(window.location.hash).toBe('');
+
+    window.history.replaceState(null, '', '/invite#token=bad');
+    act(() => {
+      window.dispatchEvent(new HashChangeEvent('hashchange'));
+    });
+    expect(await screen.findByText('This invitation link is not valid')).toBeInTheDocument();
+    expect(readPendingInvitation()).toBeNull();
+    expect(window.location.hash).toBe('');
+  });
+
   it('explains that invitations need production sign-in in dev mode', () => {
     vi.stubEnv('MODE', 'test');
     session({ status: 'unauthenticated', user: null });
@@ -289,6 +316,50 @@ describe('InvitationCompletePage', () => {
     await waitFor(() => expect(oidc.signOutLocally).toHaveBeenCalledTimes(1));
     expect(readPendingInvitation()).toBe(TOKEN);
     expect(screen.queryByText('Something went wrong')).not.toBeInTheDocument();
+  });
+
+  it('a silent token renewal after acceptance keeps the success screen and does not re-inspect', async () => {
+    session();
+    storePendingInvitation(TOKEN);
+    vi.mocked(inspectInvitation).mockResolvedValue(INVITATION);
+    vi.mocked(acceptInvitation).mockResolvedValue({
+      organization_id: 'org-1',
+      user_id: 'u',
+      role: 'HSE_ANALYST',
+      outcome: 'account_created',
+    });
+
+    const view = renderAt('/invite/complete');
+    await userEvent.click(await screen.findByRole('button', { name: 'Join Acme Safety' }));
+    expect(await screen.findByText("You're in")).toBeInTheDocument();
+
+    session({ user: { profile: { name: 'New Hire' }, access_token: 'renewed' } }); // a new user object
+    view.rerender(
+      <MemoryRouter initialEntries={['/invite/complete']}>
+        <Routes>
+          <Route path="/invite/complete" element={<InvitationCompletePage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText("You're in")).toBeInTheDocument();
+    expect(screen.queryByText('This invitation link is not valid')).not.toBeInTheDocument();
+    expect(inspectInvitation).toHaveBeenCalledTimes(1);
+  });
+
+  it('an inspection still pending when acceptance starts cannot overwrite the result', async () => {
+    const oidc = session();
+    storePendingInvitation(TOKEN);
+    vi.mocked(inspectInvitation).mockResolvedValueOnce(INVITATION);
+    let resolveAccept: (value: unknown) => void = () => undefined;
+    vi.mocked(acceptInvitation).mockReturnValue(new Promise((resolve) => (resolveAccept = resolve)) as never);
+
+    renderAt('/invite/complete');
+    await userEvent.click(await screen.findByRole('button', { name: 'Join Acme Safety' }));
+    expect(oidc.signIn).not.toHaveBeenCalled();
+    resolveAccept({ organization_id: 'org-1', user_id: 'u', role: 'HSE_ANALYST', outcome: 'account_created' });
+
+    expect(await screen.findByText("You're in")).toBeInTheDocument();
   });
 
   it('an invitation revoked meanwhile shows the closed screen and forgets the code', async () => {

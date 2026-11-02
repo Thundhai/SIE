@@ -227,3 +227,46 @@ def test_eviction_at_capacity_is_batched(monkeypatch):
 
     assert limiter.tracked_keys() <= 100
     assert scans["n"] <= 1000 // 10 + 1  # ~one scan per 10 new keys, not 1000
+
+
+def test_access_log_never_contains_a_bearer_jwt(client, monkeypatch):
+    """A person's OIDC access token is a credential: the access log may
+    record that one was sent, never its content. A machine credential
+    (`<client_id>:<secret>`) logs only the public client id.
+
+    The logger's calls are captured directly: Alembic's fileConfig (run by
+    the migration tests) disables existing loggers, so caplog can't be
+    relied on in a full run."""
+    from app.core import observability
+
+    lines: list[str] = []
+    monkeypatch.setattr(observability.access_logger, "info", lambda message, *a, **k: lines.append(message))
+    jwt_like = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.c2lnbmF0dXJl"
+
+    client.post(
+        "/api/v1/auth/invitations/accept", json={"token": "x" * 20}, headers={"Authorization": f"Bearer {jwt_like}"}
+    )
+    client.get("/api/v1/organizations", headers={"Authorization": "Bearer client-123:super-secret-value"})
+
+    logged = "\n".join(lines)
+    assert '"client": "user_token"' in logged
+    assert '"client": "api_client:client-123"' in logged
+    for fragment in ("eyJhbGci", "c2lnbmF0dXJl", "super-secret-value"):
+        assert fragment not in logged
+
+
+def test_caller_identity_labels_without_secrets():
+    from starlette.requests import Request
+
+    from app.core.observability import _caller_identity
+
+    def req(authorization: str | None) -> Request:
+        headers = [] if authorization is None else [(b"authorization", authorization.encode())]
+        return Request({"type": "http", "headers": headers})
+
+    assert _caller_identity(req("Bearer eyJ.abc.def")) == "user_token"
+    assert _caller_identity(req("Bearer cid:secret")) == "api_client:cid"
+    assert _caller_identity(req("Bearer :secret")) == "user_token"
+    assert _caller_identity(req("Bearer ")) is None
+    assert _caller_identity(req("Basic abc")) is None
+    assert _caller_identity(req(None)) is None

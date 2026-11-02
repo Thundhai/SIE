@@ -81,6 +81,8 @@ export function InvitationsSection({ organizationId }: { organizationId: string 
   const [formError, setFormError] = useState<string | null>(null);
   const [issued, setIssued] = useState<IssuedInvitation | null>(null);
   const [copied, setCopied] = useState(false);
+  // One row action at a time: overlapping resends could finish out of order
+  // and leave an already-replaced link on screen.
   const [rowBusy, setRowBusy] = useState<string | null>(null);
 
   const reload = useCallback(
@@ -130,7 +132,11 @@ export function InvitationsSection({ organizationId }: { organizationId: string 
     setFormError(null);
     try {
       if (action === 'resend') showIssued(await resendInvitation(organizationId, invitation.id));
-      else await revokeInvitation(organizationId, invitation.id);
+      else {
+        await revokeInvitation(organizationId, invitation.id);
+        // A revoked invitation's link must not stay on screen to be copied.
+        setIssued((current) => (current?.invitation.id === invitation.id ? null : current));
+      }
       await reload();
     } catch (error) {
       setFormError(errorText(error, `Could not ${action} the invitation.`));
@@ -233,7 +239,7 @@ export function InvitationsSection({ organizationId }: { organizationId: string 
                                 type="button"
                                 size="sm"
                                 variant="secondary"
-                                disabled={rowBusy === inv.id}
+                                disabled={rowBusy !== null}
                                 onClick={() => onRowAction(inv, 'resend')}
                                 aria-label={`Resend invitation to ${inv.email}`}
                               >
@@ -243,7 +249,7 @@ export function InvitationsSection({ organizationId }: { organizationId: string 
                                 type="button"
                                 size="sm"
                                 variant="danger"
-                                disabled={rowBusy === inv.id}
+                                disabled={rowBusy !== null}
                                 onClick={() => onRowAction(inv, 'revoke')}
                                 aria-label={`Revoke invitation to ${inv.email}`}
                               >

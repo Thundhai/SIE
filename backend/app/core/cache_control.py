@@ -15,26 +15,33 @@ import re
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-# /api/v1/invitations/...                      public inspect / start
-# /api/v1/auth/invitations/...                 acceptance
-# /api/v1/organizations/{id}/invitations...    administration
-# /api/v1/identity-links, /auth/identity-links  account-link grants
-_NO_STORE_PATH = re.compile(
-    r"^/api/v1/(?:auth/)?(?:invitations|identity-links)(?:/|$)"
-    r"|^/api/v1/organizations/[^/]+/invitations(?:/|$)"
-)
+from app.core.config import settings
+
+# <prefix>/invitations/...                      public inspect / start
+# <prefix>/auth/invitations/...                 acceptance
+# <prefix>/organizations/{id}/invitations...    administration
+# <prefix>/identity-links, /auth/identity-links  account-link grants
+# <prefix> is the configured API_V1_PREFIX the router is mounted at.
 
 
-def is_no_store_path(path: str) -> bool:
-    return _NO_STORE_PATH.match(path) is not None
+def _matcher(prefix: str) -> re.Pattern[str]:
+    p = re.escape(prefix.rstrip("/"))
+    return re.compile(
+        rf"^{p}/(?:auth/)?(?:invitations|identity-links)(?:/|$)" rf"|^{p}/organizations/[^/]+/invitations(?:/|$)"
+    )
+
+
+def is_no_store_path(path: str, prefix: str | None = None) -> bool:
+    return _matcher(settings.API_V1_PREFIX if prefix is None else prefix).match(path) is not None
 
 
 class NoStoreMiddleware:
-    def __init__(self, app: ASGIApp) -> None:
+    def __init__(self, app: ASGIApp, prefix: str | None = None) -> None:
         self.app = app
+        self._pattern = _matcher(settings.API_V1_PREFIX if prefix is None else prefix)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or not is_no_store_path(scope.get("path", "")):
+        if scope["type"] != "http" or not self._pattern.match(scope.get("path", "")):
             await self.app(scope, receive, send)
             return
 

@@ -307,6 +307,7 @@ def test_refusal_side_effects_never_overwrite_a_concurrent_change(pg_session, tr
         assert grant.status == "ACCEPTED"
 
 
+@requires_postgres
 def test_a_maximum_length_email_and_long_name_claim_are_accepted(pg_session, trusted_issuer):
     """Real column limits: a 320-character invited email (User.name falls
     back to it, 255 max) and a 400-character `name` claim (Identity.

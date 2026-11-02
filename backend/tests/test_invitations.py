@@ -1051,3 +1051,52 @@ def _expire(db_session, invitation_id: str) -> None:
     grant = db_session.get(IdentityLinkGrant, uuid.UUID(invitation_id))
     grant.expires_at = utcnow() - timedelta(minutes=1)
     db_session.commit()
+
+
+def test_no_store_follows_the_configured_api_prefix():
+    from starlette.applications import Starlette
+    from starlette.responses import PlainTextResponse
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    from app.core.cache_control import NoStoreMiddleware, is_no_store_path
+
+    assert is_no_store_path("/custom/v9/invitations/inspect", prefix="/custom/v9")
+    assert is_no_store_path("/custom/v9/organizations/o/invitations", prefix="/custom/v9/")
+    assert not is_no_store_path("/api/v1/invitations/inspect", prefix="/custom/v9")
+
+    def ok(request):
+        return PlainTextResponse("ok", headers={"Cache-Control": "max-age=600"})
+
+    app = Starlette(routes=[Route("/custom/v9/invitations/inspect", ok), Route("/custom/v9/other", ok)])
+    app.add_middleware(NoStoreMiddleware, prefix="/custom/v9")
+    with TestClient(app) as tc:
+        assert tc.get("/custom/v9/invitations/inspect").headers["cache-control"] == "no-store"
+        assert tc.get("/custom/v9/other").headers["cache-control"] == "max-age=600"
+
+
+# --- Administrator refusals are audited ---------------------------------------------------------
+
+
+def test_administrator_refusals_are_audited_without_the_email(client, db_session, production_auth):
+    org, admin = _org_with_admin(db_session)
+    created = _invite(client, org, email="dup.person@example.com")
+    invitation_id = created["invitation"]["id"]
+
+    duplicate = client.post(
+        _invitations(org.id), json={"email": "dup.person@example.com", "role": "VIEWER"}, headers=_as("admin-sub")
+    )
+    assert duplicate.status_code == 409
+    assert client.post(f"{_invitations(org.id)}/{invitation_id}/revoke", headers=_as("admin-sub")).status_code == 200
+    resend_revoked = client.post(f"{_invitations(org.id)}/{invitation_id}/resend", headers=_as("admin-sub"))
+    assert resend_revoked.status_code == 409
+
+    rows = _audit(db_session, AuditAction.INVITATION_REJECTED)
+    by_operation = {row.event_metadata["operation"]: row for row in rows}
+    assert by_operation["create"].event_metadata["reason"] == "open_invitation_exists"
+    assert by_operation["resend"].event_metadata["reason"] == "invitation_revoked"
+    assert str(by_operation["resend"].resource_id) == invitation_id
+    for row in rows:
+        assert row.organization_id == org.id
+        assert row.user_id == admin.id
+        assert "dup.person" not in str(row.event_metadata)

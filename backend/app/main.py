@@ -41,7 +41,7 @@ app.openapi = lambda: custom_openapi(app)
 # its final status code. See each middleware's own module docstring.
 # Innermost: invitation and identity-link responses, errors included,
 # are never cached (app/core/cache_control.py).
-app.add_middleware(NoStoreMiddleware)
+app.add_middleware(NoStoreMiddleware, prefix=settings.API_V1_PREFIX)
 app.add_middleware(AccessLogMiddleware)
 app.add_middleware(RequestSizeLimitMiddleware)
 app.add_middleware(RequestIdMiddleware)

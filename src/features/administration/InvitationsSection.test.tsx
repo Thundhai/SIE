@@ -138,6 +138,43 @@ describe('InvitationsSection', () => {
     await waitFor(() => expect(revokeInvitation).toHaveBeenCalledWith('org-1', 'inv-1'));
   });
 
+  it('revoking the invitation whose link is on screen removes that link', async () => {
+    vi.mocked(listInvitations).mockResolvedValue([invitation()]);
+    vi.mocked(resendInvitation).mockResolvedValue({ invitation: invitation({ issue_count: 2 }), code: 'sie_link_SECOND' });
+    vi.mocked(revokeInvitation).mockResolvedValue(invitation({ status: 'REVOKED' }));
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    renderSection();
+    await userEvent.click(await screen.findByRole('button', { name: 'Resend invitation to pending@example.com' }));
+    expect(await screen.findByTestId('invitation-link')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Revoke invitation to pending@example.com' }));
+
+    await waitFor(() => expect(screen.queryByTestId('invitation-link')).not.toBeInTheDocument());
+  });
+
+  it('while one row action is pending, every row action is disabled', async () => {
+    vi.mocked(listInvitations).mockResolvedValue([
+      invitation(),
+      invitation({ id: 'inv-2', email: 'other@example.com' }),
+    ]);
+    let finish: (value: unknown) => void = () => undefined;
+    vi.mocked(resendInvitation).mockReturnValue(new Promise((resolve) => (finish = resolve)) as never);
+
+    renderSection();
+    await userEvent.click(await screen.findByRole('button', { name: 'Resend invitation to pending@example.com' }));
+
+    for (const name of [
+      'Resend invitation to pending@example.com',
+      'Revoke invitation to pending@example.com',
+      'Resend invitation to other@example.com',
+      'Revoke invitation to other@example.com',
+    ]) {
+      expect(screen.getByRole('button', { name })).toBeDisabled();
+    }
+    finish({ invitation: invitation({ issue_count: 2 }), code: 'sie_link_X' });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Resend invitation to other@example.com' })).toBeEnabled());
+  });
+
   it('does not revoke when the confirmation is declined', async () => {
     vi.mocked(listInvitations).mockResolvedValue([invitation()]);
     vi.spyOn(window, 'confirm').mockReturnValue(false);

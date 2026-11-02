@@ -89,7 +89,8 @@ The organization and role always come from the invitation, never the request. Th
 - Only a membership is added. No identity moves, other memberships are untouched, and if a membership in this organization already exists (any status) the invitation is refused (`membership_exists`), so roles are never overwritten.
 
 **Refusals.**
-- Every refusal is an `INVITATION_REJECTED` error with `details.reason`, and every refusal is audited.
+- Every refusal is an `INVITATION_REJECTED` error with `details.reason`, and every refusal is audited, including an administrator's refused create, resend or revoke (organization, actor, `operation`, reason; never the invited email).
+- Access logs never contain a person's bearer token: they record `user_token` for an OIDC access token and only the public client id for a machine credential (`app/core/observability.py`).
 - An email mismatch increments `failed_attempts`. At `INVITATION_MAX_FAILED_ATTEMPTS` (default 5) the invitation is revoked.
 - If the UserInfo endpoint can't be reached (network error, timeout, non-200), nothing is verified and acceptance fails closed, but as a **retryable** 503 (`email_verification_unavailable`, `details.retryable: true`, `Retry-After`) that counts no failed attempt.
 - Every invitation and identity-link response, errors included, carries `Cache-Control: no-store` (`app/core/cache_control.py`).

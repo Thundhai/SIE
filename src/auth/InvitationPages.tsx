@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useState } from 'react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
@@ -141,8 +141,23 @@ export function InvitationLandingPage() {
   const [state, setState] = useState<LandingState>({ phase: 'loading' });
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  // Bumped when the fragment changes while this page stays mounted (a new
+  // invitation link opened in the same tab), so the new link is validated
+  // the same way and the previous inspection is abandoned.
+  const [linkVersion, setLinkVersion] = useState(0);
 
   useEffect(() => {
+    const onHashChange = () => setLinkVersion((v) => v + 1);
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
+
+  useEffect(() => {
+    if (linkVersion > 0) {
+      setState({ phase: 'loading' });
+      setActionError(null);
+      setBusy(false);
+    }
     const hash = window.location.hash;
     const fromHash = readTokenFromHash(hash);
     if (hashHasToken(hash)) {
@@ -180,7 +195,7 @@ export function InvitationLandingPage() {
         }
       });
     return () => controller.abort();
-  }, []);
+  }, [linkVersion]);
 
   if (getAuthMode() === 'dev') {
     return (
@@ -277,9 +292,21 @@ export function InvitationCompletePage() {
   const navigate = useNavigate();
   const [state, setState] = useState<CompleteState>({ phase: 'loading' });
   const [fullName, setFullName] = useState('');
+  // Inspect once per signed-in session: a silent token renewal changes
+  // `oidc.user` but must not restart the flow (after acceptance the code is
+  // gone, so a re-inspection would replace the success screen).
+  const inspected = useRef(false);
+  // Once acceptance starts, a still-pending inspection must not overwrite it.
+  const acceptStarted = useRef(false);
 
   useEffect(() => {
-    if (oidc.status !== 'authenticated') return;
+    if (oidc.status !== 'authenticated') {
+      inspected.current = false;
+      acceptStarted.current = false;
+      return;
+    }
+    if (inspected.current) return;
+    inspected.current = true;
     const token = readPendingInvitation();
     if (!token) {
       setState({ phase: 'closed', reason: 'invitation_not_found' });
@@ -288,10 +315,12 @@ export function InvitationCompletePage() {
     const profileName = oidc.user?.profile?.name;
     if (typeof profileName === 'string') setFullName(profileName);
     inspectInvitation(token)
-      .then((invitation) =>
-        setState(isOpen(invitation.status) ? { phase: 'confirm', token, invitation } : { phase: 'closed', reason: invitation.status }),
-      )
+      .then((invitation) => {
+        if (acceptStarted.current) return;
+        setState(isOpen(invitation.status) ? { phase: 'confirm', token, invitation } : { phase: 'closed', reason: invitation.status });
+      })
       .catch((error: unknown) => {
+        if (acceptStarted.current) return;
         const reason = invitationErrorReason(error);
         setState(reason ? { phase: 'closed', reason } : { phase: 'error', message: errorMessage(error) });
       });
@@ -334,6 +363,7 @@ export function InvitationCompletePage() {
       await signInAgain(invitation, false);
       return;
     }
+    acceptStarted.current = true;
     setState({ phase: 'accepting' });
     try {
       const result = await acceptInvitation(token, accessToken, fullName.trim() || undefined);

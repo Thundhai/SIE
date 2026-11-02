@@ -41,6 +41,7 @@ from app.schemas.invitation import (
     InvitationStart,
     InvitationToken,
 )
+from app.services.audit_service import AuditAction, audit_service
 from app.services.identity_link_service import CreatedGrant
 from app.services.invitation_service import (
     METHODS,
@@ -66,6 +67,32 @@ def _error(exc: InvitationError) -> ApiError:
     if exc.status_code == 503:
         error.headers = {"Retry-After": "5"}
     return error
+
+
+def _admin_refused(
+    db: Session,
+    exc: InvitationError,
+    *,
+    operation: str,
+    organization_id: uuid.UUID,
+    actor_user_id: uuid.UUID | None,
+    invitation_id: uuid.UUID | None = None,
+) -> ApiError:
+    """An administrator's create/resend/revoke was refused: audited like an
+    invitee refusal (organization, actor, operation, reason code; never the
+    invited email), then returned as the standard error."""
+    db.rollback()
+    audit_service.log(
+        db,
+        action=AuditAction.INVITATION_REJECTED,
+        resource_type="IdentityLinkGrant",
+        resource_id=invitation_id,
+        # Never reference an organization that doesn't exist.
+        organization_id=None if exc.reason == "organization_not_found" else organization_id,
+        user_id=actor_user_id,
+        metadata={"reason": exc.reason, "operation": operation},
+    )
+    return _error(exc)
 
 
 def _read(grant: IdentityLinkGrant) -> InvitationRead:
@@ -131,7 +158,9 @@ def create_invitation(
             expires_in_hours=payload.expires_in_hours,
         )
     except InvitationError as exc:
-        raise _error(exc) from exc
+        raise _admin_refused(
+            db, exc, operation="create", organization_id=organization_id, actor_user_id=context.user_id
+        ) from exc
     return _issued(response, created)
 
 
@@ -180,7 +209,14 @@ def resend_invitation(
             expires_in_hours=payload.expires_in_hours if payload else None,
         )
     except InvitationError as exc:
-        raise _error(exc) from exc
+        raise _admin_refused(
+            db,
+            exc,
+            operation="resend",
+            organization_id=organization_id,
+            actor_user_id=context.user_id,
+            invitation_id=invitation_id,
+        ) from exc
     return _issued(response, created)
 
 
@@ -200,7 +236,14 @@ def revoke_invitation(
             db, organization_id=organization_id, invitation_id=invitation_id, actor_user_id=context.user_id
         )
     except InvitationError as exc:
-        raise _error(exc) from exc
+        raise _admin_refused(
+            db,
+            exc,
+            operation="revoke",
+            organization_id=organization_id,
+            actor_user_id=context.user_id,
+            invitation_id=invitation_id,
+        ) from exc
     return _read(grant)
 
 
