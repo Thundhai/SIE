@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_db
 from app.api.deps_auth import get_verified_identity_claims_and_token, require_permission
 from app.api.deps_public_rate_limit import require_invitation_rate_limit
+from app.api.deps_rate_limit import RateLimitClass, require_rate_limit
 from app.core.errors import ApiError, ErrorCode
 from app.models.identity_link_grant import ALL_STATUSES, IdentityLinkGrant
 from app.schemas.invitation import (
@@ -56,12 +57,15 @@ router = APIRouter(tags=["invitations"])
 
 
 def _error(exc: InvitationError) -> ApiError:
-    return ApiError(
+    error = ApiError(
         status_code=exc.status_code,
         code=ErrorCode.INVITATION_REJECTED,
         message=exc.message,
-        details={"reason": exc.reason},
+        details={"reason": exc.reason, "retryable": exc.status_code == 503},
     )
+    if exc.status_code == 503:
+        error.headers = {"Retry-After": "5"}
+    return error
 
 
 def _read(grant: IdentityLinkGrant) -> InvitationRead:
@@ -107,6 +111,7 @@ def _public(view: InvitationView) -> InvitationPublicRead:
     "/organizations/{organization_id}/invitations",
     response_model=InvitationIssuedRead,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_rate_limit(RateLimitClass.WRITE))],
 )
 def create_invitation(
     organization_id: uuid.UUID,
@@ -156,6 +161,7 @@ def get_invitation(
 @router.post(
     "/organizations/{organization_id}/invitations/{invitation_id}/resend",
     response_model=InvitationIssuedRead,
+    dependencies=[Depends(require_rate_limit(RateLimitClass.WRITE))],
 )
 def resend_invitation(
     organization_id: uuid.UUID,
@@ -178,7 +184,11 @@ def resend_invitation(
     return _issued(response, created)
 
 
-@router.post("/organizations/{organization_id}/invitations/{invitation_id}/revoke", response_model=InvitationRead)
+@router.post(
+    "/organizations/{organization_id}/invitations/{invitation_id}/revoke",
+    response_model=InvitationRead,
+    dependencies=[Depends(require_rate_limit(RateLimitClass.WRITE))],
+)
 def revoke_invitation(
     organization_id: uuid.UUID,
     invitation_id: uuid.UUID,

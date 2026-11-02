@@ -33,6 +33,7 @@ never needs to know about organizations, scopes, or HTTP at all.
 
 from __future__ import annotations
 
+import heapq
 import threading
 import time
 from dataclasses import dataclass
@@ -62,11 +63,17 @@ class LocalRateLimiter:
 
     #: Expired windows are swept every this many checks, so keys from
     #: one-off callers (e.g. distinct client IPs on a public endpoint)
-    #: don't accumulate forever.
+    #: don't accumulate forever. The sweep only ever drops expired windows.
     PRUNE_EVERY = 1024
-    #: Hard bound on tracked keys. Past it, the oldest windows are dropped
-    #: first; a dropped key simply starts a fresh window.
+    #: Hard bound on tracked keys. Only admitting a NEW key at the cap makes
+    #: room: expired windows go first, then the oldest live windows, in one
+    #: batch. A key being checked is therefore never evicted to make room
+    #: for itself, so a client that is being refused cannot reset its own
+    #: counter by calling again.
     MAX_KEYS = 50_000
+    #: How many live windows one eviction drops (5% of the cap), so a flood
+    #: of new keys pays for one scan per batch, not one per request.
+    EVICT_BATCH = 2_500
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -78,10 +85,14 @@ class LocalRateLimiter:
         now = time.monotonic()
         with self._lock:
             self._checks += 1
-            if self._checks % self.PRUNE_EVERY == 0 or len(self._windows) >= self.MAX_KEYS:
-                self._prune(now)
+            if self._checks % self.PRUNE_EVERY == 0:
+                self._drop_expired(now)
 
-            window_start, count, _ = self._windows.get(key, (now, 0, window_seconds))
+            entry = self._windows.get(key)
+            if entry is None and len(self._windows) >= self.MAX_KEYS:
+                self._make_room(now)
+
+            window_start, count, _ = entry if entry is not None else (now, 0, window_seconds)
             if now - window_start >= window_seconds:
                 window_start, count = now, 0
 
@@ -93,12 +104,16 @@ class LocalRateLimiter:
             reset_seconds = max(0.0, window_seconds - (now - window_start))
             return RateLimitResult(allowed=allowed, limit=limit, remaining=remaining, reset_seconds=reset_seconds)
 
-    def _prune(self, now: float) -> None:
-        """Drop expired windows; if still at the cap, drop the oldest."""
+    def _drop_expired(self, now: float) -> None:
         self._windows = {k: v for k, v in self._windows.items() if now - v[0] < v[2]}
-        overflow = len(self._windows) - (self.MAX_KEYS - 1)
+
+    def _make_room(self, now: float) -> None:
+        """Called only before admitting a key that is not tracked."""
+        self._drop_expired(now)
+        overflow = len(self._windows) - self.MAX_KEYS + 1
         if overflow > 0:
-            for k, _ in sorted(self._windows.items(), key=lambda item: item[1][0])[:overflow]:
+            count = max(overflow, min(self.EVICT_BATCH, len(self._windows)))
+            for k, _ in heapq.nsmallest(count, self._windows.items(), key=lambda item: item[1][0]):
                 del self._windows[k]
 
     def tracked_keys(self) -> int:

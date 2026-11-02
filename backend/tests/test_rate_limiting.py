@@ -166,6 +166,7 @@ def test_local_limiter_is_bounded(monkeypatch):
     monkeypatch.setattr(rate_limit.time, "monotonic", lambda: clock["t"])
     limiter = rate_limit.LocalRateLimiter()
     monkeypatch.setattr(limiter, "MAX_KEYS", 100)
+    monkeypatch.setattr(limiter, "EVICT_BATCH", 10)
 
     for i in range(1000):
         clock["t"] += 0.001  # all still inside their window
@@ -174,3 +175,55 @@ def test_local_limiter_is_bounded(monkeypatch):
     assert limiter.tracked_keys() <= 100
     # The newest key is still counted.
     assert limiter.check("ip-999", limit=1, window_seconds=60.0).allowed is False
+
+
+def test_a_refused_key_checked_at_capacity_stays_refused(monkeypatch):
+    """At the cap, checking a key that is already tracked must never evict
+    that key's live counter: otherwise a refused client is let through
+    again just by calling once more."""
+    from app.core import rate_limit
+
+    clock = {"t": 0.0}
+    monkeypatch.setattr(rate_limit.time, "monotonic", lambda: clock["t"])
+    limiter = rate_limit.LocalRateLimiter()
+    monkeypatch.setattr(limiter, "MAX_KEYS", 50)
+    monkeypatch.setattr(limiter, "EVICT_BATCH", 5)
+
+    clock["t"] += 0.001
+    assert limiter.check("attacker", limit=1, window_seconds=60.0).allowed is True
+    assert limiter.check("attacker", limit=1, window_seconds=60.0).allowed is False
+    for i in range(49):  # fill to the cap; "attacker" is now the oldest window
+        clock["t"] += 0.001
+        limiter.check(f"ip-{i}", limit=5, window_seconds=60.0)
+    assert limiter.tracked_keys() == 50
+
+    for _ in range(20):
+        assert limiter.check("attacker", limit=1, window_seconds=60.0).allowed is False
+    assert limiter.tracked_keys() == 50
+
+
+def test_eviction_at_capacity_is_batched(monkeypatch):
+    """A flood of new keys at the cap pays for one scan per batch, not one
+    full scan per request."""
+    from app.core import rate_limit
+
+    clock = {"t": 0.0}
+    monkeypatch.setattr(rate_limit.time, "monotonic", lambda: clock["t"])
+    scans = {"n": 0}
+    real_nsmallest = rate_limit.heapq.nsmallest
+
+    def counting_nsmallest(*args, **kwargs):
+        scans["n"] += 1
+        return real_nsmallest(*args, **kwargs)
+
+    monkeypatch.setattr(rate_limit.heapq, "nsmallest", counting_nsmallest)
+    limiter = rate_limit.LocalRateLimiter()
+    monkeypatch.setattr(limiter, "MAX_KEYS", 100)
+    monkeypatch.setattr(limiter, "EVICT_BATCH", 10)
+
+    for i in range(1100):
+        clock["t"] += 0.001
+        limiter.check(f"ip-{i}", limit=5, window_seconds=60.0)
+
+    assert limiter.tracked_keys() <= 100
+    assert scans["n"] <= 1000 // 10 + 1  # ~one scan per 10 new keys, not 1000

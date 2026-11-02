@@ -33,6 +33,7 @@ _CONTROLLED_ENV = (
     "POSTGRES_PASSWORD",
     "CORS_ALLOWED_ORIGINS",
     "API_DOCS_ENABLED",
+    "OIDC_USERINFO_URL",
 )
 
 
@@ -249,3 +250,18 @@ def test_a_render_process_without_app_env_starts_without_api_docs(tmp_path):
     result = _import_app(tmp_path, RENDER="true", DATABASE_URL=_PROD_DB)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip().endswith("docs None None")
+
+
+@pytest.mark.parametrize("url", ["http://idp.example.com/userinfo", "HTTP://idp.example.com/userinfo", "idp/userinfo"])
+def test_a_non_https_userinfo_url_is_refused_in_production(url):
+    """Invitation acceptance sends the caller's bearer token to this URL."""
+    with pytest.raises(UnsafeConfigurationError, match="OIDC_USERINFO_URL must use https"):
+        validate_startup_settings(_settings(OIDC_USERINFO_URL=url))
+
+
+def test_an_https_userinfo_url_starts_in_production():
+    validate_startup_settings(_settings(OIDC_USERINFO_URL="https://idp.example.com/userinfo"))
+
+
+def test_a_plain_http_userinfo_url_is_allowed_off_a_deployment():
+    validate_startup_settings(_settings(APP_ENV="development", OIDC_USERINFO_URL="http://localhost:8080/userinfo"))

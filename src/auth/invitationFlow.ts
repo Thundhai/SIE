@@ -20,6 +20,13 @@ export function readTokenFromHash(hash: string): string | null {
   return token && token.length >= 10 && token.length <= 200 ? token : null;
 }
 
+/** True when the fragment names a `token` at all, valid or not. A link that
+ * carries a malformed code is an invalid link: it must never fall back to a
+ * different invitation remembered from earlier in this tab. */
+export function hashHasToken(hash: string): boolean {
+  return new URLSearchParams(hash.startsWith('#') ? hash.slice(1) : hash).has('token');
+}
+
 export function storePendingInvitation(token: string): void {
   try {
     window.sessionStorage.setItem(PENDING_KEY, token);

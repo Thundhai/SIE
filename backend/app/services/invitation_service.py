@@ -58,7 +58,12 @@ from app.services.audit_service import AuditAction, audit_service
 from app.services.identity_link_service import CreatedGrant, _is_expired, _new_code, hash_code
 from app.services.identity_service import ExternalIdentityClaims, subject_fingerprint
 from app.services.permissions import ROLE_PERMISSIONS, OrganizationRole, Permission
-from app.services.verified_email import VerifiedEmail
+from app.services.verified_email import (
+    SOURCE_USERINFO_INSECURE,
+    SOURCE_USERINFO_SUBJECT_MISMATCH,
+    SOURCE_USERINFO_UNAVAILABLE,
+    VerifiedEmail,
+)
 
 METHODS = ("password", "sso")
 
@@ -208,6 +213,11 @@ class InvitationService:
         state = effective_status(grant)
         if state in (STATUS_ACCEPTED, STATUS_REVOKED):
             raise InvitationError(f"invitation_{state.lower()}", 409, f"This invitation is {state.lower()}.")
+        # A newer invitation for this email that has itself expired must not
+        # keep the open slot and block reopening this one.
+        self._expire_stale(
+            db, organization_id=grant.organization_id, email=grant.invited_email, exclude_id=grant.id
+        )
         code = _new_code()
         grant.token_sha256 = hash_code(code)
         grant.expires_at = utcnow() + _ttl(expires_in_hours)
@@ -302,7 +312,7 @@ class InvitationService:
 
         try:
             if identity is not None and identity.user_id is not None:
-                user = self._existing_account(db, claims, grant, identity)
+                user = self._existing_account(db, claims, verified, grant, identity)
                 outcome = "existing_account"
             elif identity is not None:
                 self._refuse(
@@ -398,7 +408,12 @@ class InvitationService:
         return AcceptedInvitation(user=user, organization_id=org_id, role=grant.role, outcome=outcome)
 
     def _existing_account(
-        self, db: Session, claims: ExternalIdentityClaims, grant: IdentityLinkGrant, identity: Identity
+        self,
+        db: Session,
+        claims: ExternalIdentityClaims,
+        verified: VerifiedEmail,
+        grant: IdentityLinkGrant,
+        identity: Identity,
     ) -> User:
         user = db.execute(
             select(User).where(User.id == identity.user_id).with_for_update().execution_options(populate_existing=True)
@@ -416,16 +431,22 @@ class InvitationService:
             )
         if user.email.strip().lower() != grant.invited_email:
             self._refuse_mismatch(db, claims, grant, user_id=user.id)
+        self._require_verified_invited_email(db, claims, verified, grant, user_id=user.id)
         return user
 
-    def _new_account(
+    def _require_verified_invited_email(
         self,
         db: Session,
         claims: ExternalIdentityClaims,
         verified: VerifiedEmail,
         grant: IdentityLinkGrant,
-        full_name: str | None,
-    ) -> tuple[User, Identity]:
+        *,
+        user_id: uuid.UUID | None = None,
+    ) -> None:
+        """This sign-in must itself prove the invited email: a trusted
+        issuer, `email_verified` true, and that exact address. Required on
+        both paths, because an existing account's own email may have come
+        from an unverified claim (accounts provisioned before #69)."""
         grant_id, org_id = grant.id, grant.organization_id
         mark_started = self._mark_started
         if claims.issuer not in settings.oidc_email_linking_trusted_issuers:
@@ -436,9 +457,34 @@ class InvitationService:
                 org_id,
                 "issuer_not_trusted_for_email",
                 403,
-                "This sign-in provider is not trusted to verify email for registration.",
+                "This sign-in provider is not trusted to verify email for invitations.",
+                user_id=user_id,
                 after=mark_started,
                 expected_hash=grant.token_sha256,
+            )
+        if verified.source == SOURCE_USERINFO_UNAVAILABLE:
+            # The provider could not be asked. Nothing is verified (fail
+            # closed), but this is retryable: no attempt is counted.
+            self._refuse(
+                db,
+                claims,
+                grant_id,
+                org_id,
+                "email_verification_unavailable",
+                503,
+                "Your email could not be verified with your sign-in provider right now. Try again shortly.",
+                user_id=user_id,
+            )
+        if verified.source in (SOURCE_USERINFO_SUBJECT_MISMATCH, SOURCE_USERINFO_INSECURE):
+            self._refuse(
+                db,
+                claims,
+                grant_id,
+                org_id,
+                "email_verification_failed",
+                403,
+                "Your email could not be verified with your sign-in provider.",
+                user_id=user_id,
             )
         if not verified.email:
             self._refuse(
@@ -449,6 +495,7 @@ class InvitationService:
                 "email_claim_missing",
                 403,
                 "Your sign-in did not provide an email address.",
+                user_id=user_id,
                 after=mark_started,
                 expected_hash=grant.token_sha256,
             )
@@ -461,11 +508,23 @@ class InvitationService:
                 "email_not_verified",
                 403,
                 "Verify your email address with your sign-in provider, then sign in again.",
+                user_id=user_id,
                 after=mark_started,
                 expected_hash=grant.token_sha256,
             )
         if verified.email.strip().lower() != grant.invited_email:
-            self._refuse_mismatch(db, claims, grant)
+            self._refuse_mismatch(db, claims, grant, user_id=user_id)
+
+    def _new_account(
+        self,
+        db: Session,
+        claims: ExternalIdentityClaims,
+        verified: VerifiedEmail,
+        grant: IdentityLinkGrant,
+        full_name: str | None,
+    ) -> tuple[User, Identity]:
+        grant_id, org_id = grant.id, grant.organization_id
+        self._require_verified_invited_email(db, claims, verified, grant)
         if _email_taken(db, grant.invited_email):
             self._refuse(
                 db,
@@ -485,7 +544,7 @@ class InvitationService:
             subject=claims.subject,
             issuer=claims.issuer,
             email=verified.email,
-            display_name=claims.display_name,
+            display_name=claims.display_name[:255] if claims.display_name else None,
             provider=claims.provider,
             last_authenticated_at=utcnow(),
         )
@@ -609,16 +668,24 @@ class InvitationService:
             raise InvitationError("invitation_not_found", 404, "Invitation not found.")
         return grant
 
-    def _expire_stale(self, db: Session, *, organization_id: uuid.UUID, email: str) -> None:
+    def _expire_stale(
+        self, db: Session, *, organization_id: uuid.UUID, email: str, exclude_id: uuid.UUID | None = None
+    ) -> None:
+        """Mark this organization's past-expiry, still-open invitations for
+        `email` EXPIRED, so they no longer hold the one-open-invitation
+        slot. `exclude_id` is the invitation being reopened, if any."""
+        conditions = [
+            IdentityLinkGrant.kind == GRANT_KIND_INVITATION,
+            IdentityLinkGrant.organization_id == organization_id,
+            IdentityLinkGrant.invited_email == email,
+            IdentityLinkGrant.status.in_(OPEN_STATUSES),
+            IdentityLinkGrant.expires_at <= utcnow(),
+        ]
+        if exclude_id is not None:
+            conditions.append(IdentityLinkGrant.id != exclude_id)
         db.execute(
             update(IdentityLinkGrant)
-            .where(
-                IdentityLinkGrant.kind == GRANT_KIND_INVITATION,
-                IdentityLinkGrant.organization_id == organization_id,
-                IdentityLinkGrant.invited_email == email,
-                IdentityLinkGrant.status.in_(OPEN_STATUSES),
-                IdentityLinkGrant.expires_at <= utcnow(),
-            )
+            .where(*conditions)
             .values(status=STATUS_EXPIRED)
             .execution_options(synchronize_session=False)
         )

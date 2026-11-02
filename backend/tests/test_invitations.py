@@ -456,15 +456,18 @@ def test_platform_admin_email_cannot_be_claimed_by_a_new_identity(client, db_ses
 # --- Accept: existing user ---------------------------------------------------------------
 
 
-def test_existing_user_signs_in_and_accepts_keeping_other_memberships(client, db_session, production_auth):
+def test_existing_user_signs_in_and_accepts_keeping_other_memberships(
+    client, db_session, production_auth, trusted_issuer
+):
     org, _ = _org_with_admin(db_session)
     home = make_org(db_session, "Home Org")
     existing = make_org_member(db_session, home.id, role=OrganizationRole.HSE_MANAGER)
     _bind(db_session, existing, "existing-sub")
     created = _invite(client, org, email=existing.email.upper(), role="VIEWER")
 
-    # No trusted issuer needed: the identity is already linked.
-    response = client.post(_ACCEPT, json={"token": created["code"]}, headers=_as("existing-sub"))
+    response = client.post(
+        _ACCEPT, json={"token": created["code"]}, headers=_as("existing-sub", email=existing.email, verified=True)
+    )
 
     assert response.status_code == 200, response.text
     assert response.json()["outcome"] == "existing_account"
@@ -472,6 +475,44 @@ def test_existing_user_signs_in_and_accepts_keeping_other_memberships(client, db
     roles = {m.organization_id: m.role for m in db_session.query(OrganizationMembership).filter_by(user_id=existing.id)}
     assert roles == {home.id: "HSE_MANAGER", org.id: "VIEWER"}
     assert db_session.query(Identity).filter(Identity.user_id == existing.id).count() == 1
+
+
+def test_legacy_account_with_an_unverified_email_cannot_accept_by_its_stored_email(
+    client, db_session, production_auth, trusted_issuer
+):
+    """Before #69, accounts were provisioned from the token's email with no
+    email_verified check, so a matching User.email proves nothing. The
+    sign-in must itself verify the invited address."""
+    org, _ = _org_with_admin(db_session)
+    home = make_org(db_session, "Home")
+    squatter = make_org_member(db_session, home.id)  # User.email == the address about to be invited
+    _bind(db_session, squatter, "squatter-sub")
+    code = _invite(client, org, email=squatter.email)["code"]
+
+    for headers in (
+        _as("squatter-sub"),  # no email claims at all
+        _as("squatter-sub", email=squatter.email),  # email_verified missing
+        _as("squatter-sub", email=squatter.email, verified=False),
+    ):
+        response = client.post(_ACCEPT, json={"token": code}, headers=headers)
+        assert response.status_code == 403, response.text
+        assert _reason(response) in {"email_claim_missing", "email_not_verified"}
+
+    assert db_session.query(OrganizationMembership).filter_by(user_id=squatter.id, organization_id=org.id).count() == 0
+
+
+def test_existing_account_needs_a_trusted_issuer_to_accept(client, db_session, production_auth):
+    org, _ = _org_with_admin(db_session)
+    home = make_org(db_session, "Home")
+    existing = make_org_member(db_session, home.id)
+    _bind(db_session, existing, "existing-sub")
+    code = _invite(client, org, email=existing.email)["code"]
+
+    response = client.post(_ACCEPT, json={"token": code}, headers=_as("existing-sub", email=existing.email, verified=True))
+
+    assert response.status_code == 403
+    assert _reason(response) == "issuer_not_trusted_for_email"
+    assert db_session.query(OrganizationMembership).filter_by(user_id=existing.id, organization_id=org.id).count() == 0
 
 
 def test_existing_user_with_a_different_email_is_refused(client, db_session, production_auth):
@@ -488,7 +529,7 @@ def test_existing_user_with_a_different_email_is_refused(client, db_session, pro
     assert db_session.query(OrganizationMembership).filter_by(user_id=someone.id, organization_id=org.id).count() == 0
 
 
-def test_existing_membership_is_never_overwritten(client, db_session, production_auth):
+def test_existing_membership_is_never_overwritten(client, db_session, production_auth, trusted_issuer):
     org, _ = _org_with_admin(db_session)
     member = make_org_member(db_session, org.id, role=OrganizationRole.VIEWER)
     _bind(db_session, member, "member-sub")
@@ -507,7 +548,7 @@ def test_existing_membership_is_never_overwritten(client, db_session, production
     grant.invited_email = member.email.lower()
     db_session.commit()
 
-    response = client.post(_ACCEPT, json={"token": code}, headers=_as("member-sub"))
+    response = client.post(_ACCEPT, json={"token": code}, headers=_as("member-sub", email=member.email, verified=True))
 
     assert response.status_code == 409
     assert _reason(response) == "membership_exists"
@@ -731,7 +772,76 @@ def test_userinfo_for_a_different_subject_is_ignored(client, db_session, product
     response = client.post(_ACCEPT, json={"token": code}, headers=_as("invitee-sub"))
 
     assert response.status_code == 403
-    assert _reason(response) == "email_claim_missing"
+    assert _reason(response) == "email_verification_failed"
+
+
+def test_userinfo_outage_is_a_retryable_refusal_that_counts_no_attempt(
+    client, db_session, production_auth, trusted_issuer, monkeypatch
+):
+    """A provider outage is not "your sign-in has no email": nothing is
+    verified (fail closed), but the invitee is told to retry and the
+    invitation is not charged a failed attempt."""
+    monkeypatch.setattr(settings, "OIDC_USERINFO_URL", "https://test-issuer.example.com/userinfo")
+
+    def unavailable(url, token):
+        raise verified_email_module._Unavailable
+
+    monkeypatch.setattr(verified_email_module, "_fetch_userinfo", unavailable)
+    org, _ = _org_with_admin(db_session)
+    code = _invite(client, org)["code"]
+
+    response = client.post(_ACCEPT, json={"token": code}, headers=_as("invitee-sub"))
+
+    assert response.status_code == 503
+    assert _reason(response) == "email_verification_unavailable"
+    assert response.json()["error"]["details"]["retryable"] is True
+    assert response.headers["retry-after"] == "5"
+    grant = db_session.query(IdentityLinkGrant).filter(IdentityLinkGrant.token_sha256 == hash_code(code)).one()
+    db_session.refresh(grant)
+    assert grant.failed_attempts == 0
+    assert grant.status in ("PENDING", "REGISTRATION_STARTED")
+    assert db_session.query(User).filter(User.email == "new.hire@example.com").count() == 0
+
+
+@pytest.mark.parametrize(
+    "status_code, exc",
+    [(500, None), (404, None), (None, "timeout")],
+)
+def test_userinfo_transport_failures_are_unavailable(monkeypatch, status_code, exc):
+    import httpx
+
+    from app.services.identity_service import ExternalIdentityClaims
+
+    monkeypatch.setattr(settings, "OIDC_USERINFO_URL", "https://idp.example.com/userinfo")
+
+    def fake_get(url, **kwargs):
+        if exc:
+            raise httpx.ConnectTimeout("timed out")
+        return httpx.Response(status_code, json={"error": "x"})
+
+    monkeypatch.setattr(verified_email_module.httpx, "get", fake_get)
+    claims = ExternalIdentityClaims(subject="s", issuer=TEST_ISSUER, email=None, display_name=None, provider="t")
+
+    result = verified_email_module.resolve_verified_email(claims, "token")
+
+    assert (result.email, result.email_verified, result.source) == (None, None, "userinfo_unavailable")
+
+
+def test_a_plaintext_userinfo_url_never_receives_the_token_on_a_deployment(
+    client, db_session, production_auth, trusted_issuer, monkeypatch
+):
+    monkeypatch.setattr(settings, "OIDC_USERINFO_URL", "http://test-issuer.example.com/userinfo")
+    monkeypatch.setattr(settings, "APP_ENV", "production")
+    calls = []
+    monkeypatch.setattr(verified_email_module.httpx, "get", lambda *a, **k: calls.append(a))
+    org, _ = _org_with_admin(db_session)
+    code = _invite(client, org)["code"]
+
+    response = client.post(_ACCEPT, json={"token": code}, headers=_as("invitee-sub"))
+
+    assert calls == []
+    assert response.status_code == 403
+    assert _reason(response) == "email_verification_failed"
 
 
 # --- Audit -----------------------------------------------------------------------------------
@@ -820,3 +930,124 @@ def test_a_failure_during_acceptance_leaves_nothing_behind(
         headers=_as("invitee-sub", email="new.hire@example.com", verified=True),
     )
     assert retry.status_code == 200
+
+
+# --- Write rate limits on administration ---------------------------------------------------
+
+
+def test_invitation_writes_share_the_write_rate_limit(client, db_session, production_auth, monkeypatch):
+    """Create, resend and revoke are write requests: with RATE_LIMIT_ENABLED
+    they are limited like every other write (#69's create route was)."""
+    from app.api import deps_rate_limit
+
+    limiter = LocalRateLimiter()
+    monkeypatch.setattr(deps_rate_limit, "get_rate_limiter", lambda: limiter)
+    monkeypatch.setattr(settings, "RATE_LIMIT_ENABLED", True)
+    monkeypatch.setattr(settings, "RATE_LIMIT_WRITE_REQUESTS_PER_MINUTE", 3)
+    org, _ = _org_with_admin(db_session)
+
+    created = _invite(client, org)  # write 1
+    invitation_id = created["invitation"]["id"]
+    assert client.post(f"{_invitations(org.id)}/{invitation_id}/resend", headers=_as("admin-sub")).status_code == 200
+    assert client.post(f"{_invitations(org.id)}/{invitation_id}/revoke", headers=_as("admin-sub")).status_code == 200
+
+    for path, body in (
+        (_invitations(org.id), {"email": "another@example.com", "role": "VIEWER"}),
+        (f"{_invitations(org.id)}/{invitation_id}/resend", None),
+        (f"{_invitations(org.id)}/{invitation_id}/revoke", None),
+    ):
+        response = client.post(path, json=body, headers=_as("admin-sub"))
+        assert response.status_code == 429, path
+    # Reads are not charged to the write budget.
+    assert client.get(_invitations(org.id), headers=_as("admin-sub")).status_code == 200
+
+
+# --- Cache-Control -----------------------------------------------------------------------------
+
+
+def test_every_invitation_response_is_no_store_including_errors(client, db_session, production_auth, trusted_issuer):
+    org, _ = _org_with_admin(db_session)
+    created = _invite(client, org)
+    invitation_id = created["invitation"]["id"]
+    responses = {
+        "list": client.get(_invitations(org.id), headers=_as("admin-sub")),
+        "get": client.get(f"{_invitations(org.id)}/{invitation_id}", headers=_as("admin-sub")),
+        "get 404": client.get(f"{_invitations(org.id)}/{uuid.uuid4()}", headers=_as("admin-sub")),
+        "list 401": client.get(_invitations(org.id)),
+        "create 422": client.post(_invitations(org.id), json={"email": "x"}, headers=_as("admin-sub")),
+        "inspect 404": client.post(_INSPECT, json={"token": "sie_link_" + "x" * 40}),
+        "accept 200": client.post(
+            _ACCEPT,
+            json={"token": created["code"]},
+            headers=_as("invitee-sub", email="new.hire@example.com", verified=True),
+        ),
+        "accept 410": client.post(
+            _ACCEPT,
+            json={"token": created["code"]},
+            headers=_as("invitee-sub", email="new.hire@example.com", verified=True),
+        ),
+        "redeem 401": client.post("/api/v1/auth/identity-links/redeem", json={"code": "sie_link_" + "y" * 40}),
+    }
+    expected = {
+        "list": 200, "get": 200, "get 404": 404, "list 401": 401, "create 422": 422,
+        "inspect 404": 404, "accept 200": 200, "accept 410": 410, "redeem 401": 401,
+    }
+    for name, response in responses.items():
+        assert response.status_code == expected[name], (name, response.text)
+        assert response.headers.get("cache-control") == "no-store", name
+
+
+def test_no_store_is_scoped_to_invitation_and_identity_link_paths():
+    from app.core.cache_control import is_no_store_path
+
+    for path in (
+        "/api/v1/invitations/inspect",
+        "/api/v1/auth/invitations/accept",
+        "/api/v1/organizations/abc/invitations",
+        "/api/v1/organizations/abc/invitations/def/resend",
+        "/api/v1/identity-links",
+        "/api/v1/auth/identity-links/redeem",
+    ):
+        assert is_no_store_path(path), path
+    for path in ("/health", "/api/v1/organizations/abc", "/api/v1/organizations/abc/members", "/api/v1/invitationsx"):
+        assert not is_no_store_path(path), path
+
+
+# --- Resend after expiry -----------------------------------------------------------------------
+
+
+def test_resending_an_expired_invitation_is_not_blocked_by_a_newer_expired_one(
+    client, db_session, production_auth
+):
+    """A expires; creating B marks A expired; B expires too but is still
+    stored as open. Resending A must succeed: nothing live holds the slot."""
+    org, _ = _org_with_admin(db_session)
+    first = _invite(client, org)["invitation"]["id"]
+    _expire(db_session, first)
+    second = _invite(client, org)["invitation"]["id"]  # marks the first EXPIRED
+    _expire(db_session, second)  # past expiry, status still PENDING
+
+    response = client.post(f"{_invitations(org.id)}/{first}/resend", headers=_as("admin-sub"))
+
+    assert response.status_code == 200, response.text
+    rows = {str(g.id): g.status for g in db_session.query(IdentityLinkGrant).populate_existing()}
+    assert rows[first] == "PENDING"
+    assert rows[second] == "EXPIRED"
+
+
+def test_resend_still_refuses_while_another_invitation_is_live(client, db_session, production_auth):
+    org, _ = _org_with_admin(db_session)
+    first = _invite(client, org)["invitation"]["id"]
+    _expire(db_session, first)
+    _invite(client, org)  # live
+
+    response = client.post(f"{_invitations(org.id)}/{first}/resend", headers=_as("admin-sub"))
+
+    assert response.status_code == 409
+    assert _reason(response) == "open_invitation_exists"
+
+
+def _expire(db_session, invitation_id: str) -> None:
+    grant = db_session.get(IdentityLinkGrant, uuid.UUID(invitation_id))
+    grant.expires_at = utcnow() - timedelta(minutes=1)
+    db_session.commit()

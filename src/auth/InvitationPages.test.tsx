@@ -156,6 +156,35 @@ describe('InvitationLandingPage', () => {
     expect(inspectInvitation).not.toHaveBeenCalled();
   });
 
+  it('a malformed code in the link is an invalid link, never a fallback to a remembered invitation', async () => {
+    session({ status: 'unauthenticated', user: null });
+    storePendingInvitation(TOKEN); // an earlier invitation in this tab
+    window.history.replaceState(null, '', '/invite#token=short');
+
+    renderAt('/invite');
+
+    expect(await screen.findByText('This invitation link is not valid')).toBeInTheDocument();
+    expect(inspectInvitation).not.toHaveBeenCalled();
+    expect(readPendingInvitation()).toBeNull();
+    expect(window.location.hash).toBe('');
+  });
+
+  it.each([
+    ['EXPIRED', 'This invitation has expired'],
+    ['REVOKED', 'This invitation is no longer valid'],
+  ])('when start reports %s, shows the closed screen instead of sending the person to register', async (status, title) => {
+    const oidc = session({ status: 'unauthenticated', user: null });
+    vi.mocked(inspectInvitation).mockResolvedValue(INVITATION);
+    vi.mocked(startInvitation).mockResolvedValue({ ...INVITATION, status: status as PublicInvitation['status'] });
+    storePendingInvitation(TOKEN);
+
+    renderAt('/invite');
+    await userEvent.click(await screen.findByRole('button', { name: 'Create an account with email and password' }));
+
+    expect(await screen.findByText(title)).toBeInTheDocument();
+    expect(oidc.signIn).not.toHaveBeenCalled();
+  });
+
   it('explains that invitations need production sign-in in dev mode', () => {
     vi.stubEnv('MODE', 'test');
     session({ status: 'unauthenticated', user: null });
@@ -217,6 +246,7 @@ describe('InvitationCompletePage', () => {
     ['orphaned_identity_requires_account_link', 'Your sign-in needs to be relinked'],
     ['concurrent_conflict', 'Please try again'],
     ['issuer_not_trusted_for_email', "Registration isn't available for this sign-in"],
+    ['email_verification_failed', "Registration isn't available for this sign-in"],
   ])('a %s refusal shows its own guidance', async (reason, title) => {
     session();
     storePendingInvitation(TOKEN);
@@ -227,6 +257,38 @@ describe('InvitationCompletePage', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Join Acme Safety' }));
 
     expect(await screen.findByText(title)).toBeInTheDocument();
+  });
+
+  it('a provider outage offers a retry, which accepts again', async () => {
+    session();
+    storePendingInvitation(TOKEN);
+    vi.mocked(inspectInvitation).mockResolvedValue(INVITATION);
+    vi.mocked(acceptInvitation)
+      .mockRejectedValueOnce(rejected('email_verification_unavailable', 503))
+      .mockResolvedValueOnce({ organization_id: 'org-1', user_id: 'u', role: 'HSE_ANALYST', outcome: 'account_created' });
+
+    renderAt('/invite/complete');
+    await userEvent.click(await screen.findByRole('button', { name: 'Join Acme Safety' }));
+    expect(await screen.findByText("We couldn't reach your sign-in provider")).toBeInTheDocument();
+    expect(screen.queryByText(/finish setting up sign-in/)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+    expect(await screen.findByText("You're in")).toBeInTheDocument();
+    expect(acceptInvitation).toHaveBeenCalledTimes(2);
+  });
+
+  it('a 401 from accept clears the local session but keeps the invitation, so sign-in is offered', async () => {
+    const oidc = session();
+    storePendingInvitation(TOKEN);
+    vi.mocked(inspectInvitation).mockResolvedValue(INVITATION);
+    vi.mocked(acceptInvitation).mockRejectedValue(new ApiError('expired', { status: 401 }));
+
+    renderAt('/invite/complete');
+    await userEvent.click(await screen.findByRole('button', { name: 'Join Acme Safety' }));
+
+    await waitFor(() => expect(oidc.signOutLocally).toHaveBeenCalledTimes(1));
+    expect(readPendingInvitation()).toBe(TOKEN);
+    expect(screen.queryByText('Something went wrong')).not.toBeInTheDocument();
   });
 
   it('an invitation revoked meanwhile shows the closed screen and forgets the code', async () => {

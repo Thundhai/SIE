@@ -305,3 +305,25 @@ def test_refusal_side_effects_never_overwrite_a_concurrent_change(pg_session, tr
         assert (grant.status, grant.failed_attempts, grant.issue_count) == ("PENDING", 0, 2)
     else:
         assert grant.status == "ACCEPTED"
+
+
+def test_a_maximum_length_email_and_long_name_claim_are_accepted(pg_session, trusted_issuer):
+    """Real column limits: a 320-character invited email (User.name falls
+    back to it, 255 max) and a 400-character `name` claim (Identity.
+    display_name, 255 max) must not overflow into a database error."""
+    org = make_org(pg_session, "Long Names Org")
+    admin = make_org_member(pg_session, org.id, role=OrganizationRole.ORG_ADMIN)
+    email = ("a" * 64) + "@" + ("b" * 251) + ".com"
+    assert len(email) == 320
+    code = _invite(pg_session, org, admin, email)
+    claims = ExternalIdentityClaims(
+        subject="long-name-sub", issuer=ISSUER, email=None, display_name="N" * 400, provider="test"
+    )
+
+    accepted = invitation_service.accept(pg_session, claims=claims, verified=_verified(email), code=code)
+
+    pg_session.refresh(accepted.user)
+    assert accepted.user.email == email
+    assert len(accepted.user.name) == 255
+    identity = pg_session.query(Identity).filter(Identity.subject == "long-name-sub").one()
+    assert len(identity.display_name) == 255

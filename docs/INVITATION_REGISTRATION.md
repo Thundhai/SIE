@@ -85,11 +85,14 @@ The organization and role always come from the invitation, never the request. Th
 
 **Existing account.** The caller's identity is already linked to an active user.
 - That user's email must equal the invited email.
+- **And this sign-in must itself prove the invited address**, exactly as for a new account: the issuer is in `OIDC_EMAIL_LINKING_TRUSTED_ISSUERS`, `email_verified` is `true`, and the verified email equals the invited one. A stored `User.email` alone proves nothing, because accounts provisioned before PR #69 took their email from unverified token claims.
 - Only a membership is added. No identity moves, other memberships are untouched, and if a membership in this organization already exists (any status) the invitation is refused (`membership_exists`), so roles are never overwritten.
 
 **Refusals.**
 - Every refusal is an `INVITATION_REJECTED` error with `details.reason`, and every refusal is audited.
 - An email mismatch increments `failed_attempts`. At `INVITATION_MAX_FAILED_ATTEMPTS` (default 5) the invitation is revoked.
+- If the UserInfo endpoint can't be reached (network error, timeout, non-200), nothing is verified and acceptance fails closed, but as a **retryable** 503 (`email_verification_unavailable`, `details.retryable: true`, `Retry-After`) that counts no failed attempt.
+- Every invitation and identity-link response, errors included, carries `Cache-Control: no-store` (`app/core/cache_control.py`).
 
 **Concurrency.**
 - Acceptance locks the invitation row (`SELECT … FOR UPDATE`), the identity row and the existing user row.
@@ -102,11 +105,11 @@ All routes are under `/api/v1`. Errors use the standard envelope. Invitation ref
 
 | Method and path | Who | Body | Returns |
 |---|---|---|---|
-| `POST /organizations/{org}/invitations` | `users:manage` in `org`; role permissions ⊆ the inviter's | `{email, role, expires_in_hours?}` (1–720) | 201 `{invitation, code}`, `Cache-Control: no-store` |
+| `POST /organizations/{org}/invitations` | `users:manage` in `org`; role permissions ⊆ the inviter's; write rate limit | `{email, role, expires_in_hours?}` (1–720) | 201 `{invitation, code}`, `Cache-Control: no-store` |
 | `GET /organizations/{org}/invitations[?status=]` | `users:manage` in `org` | — | `[Invitation]` (no code, no hash) |
 | `GET /organizations/{org}/invitations/{id}` | `users:manage` in `org` | — | `Invitation` (status, email, role, creator, created, expiry; no code) |
-| `POST /organizations/{org}/invitations/{id}/resend` | `users:manage` in `org` | `{expires_in_hours?}` | `{invitation, code}`. The old code stops working; `issue_count`+1 |
-| `POST /organizations/{org}/invitations/{id}/revoke` | `users:manage` in `org` | — | `Invitation` |
+| `POST /organizations/{org}/invitations/{id}/resend` | `users:manage` in `org`; write rate limit | `{expires_in_hours?}` | `{invitation, code}`. The old code stops working; `issue_count`+1 |
+| `POST /organizations/{org}/invitations/{id}/revoke` | `users:manage` in `org`; write rate limit | — | `Invitation` |
 | `POST /invitations/inspect` | anyone with the code; IP rate-limited | `{token}` | `{status, organization_id, organization_name, role, invited_email, expires_at, methods}` |
 | `POST /invitations/start` | anyone with the code; IP rate-limited | `{token, method: "password"\|"sso"}` | same as inspect |
 | `POST /auth/invitations/accept` | Bearer access token; IP rate-limited | `{token, full_name?}` | `{organization_id, user_id, role, outcome: "account_created"\|"existing_account"}` |
@@ -115,7 +118,7 @@ All routes are under `/api/v1`. Errors use the standard envelope. Invitation ref
 
 **Reason codes:**
 - **Lookup:** `invitation_not_found`, `invitation_expired`, `invitation_revoked`, `invitation_already_used`
-- **Email checks:** `issuer_not_trusted_for_email`, `email_claim_missing`, `email_not_verified`, `email_mismatch`
+- **Email checks:** `issuer_not_trusted_for_email`, `email_claim_missing`, `email_not_verified`, `email_mismatch`, `email_verification_failed` (UserInfo answered for another subject, or its URL isn't https on a deployment), `email_verification_unavailable` (503, retryable)
 - **Existing accounts:** `existing_account_sign_in_required`, `account_inactive`, `membership_exists`, `orphaned_identity_requires_account_link`
 - **Concurrency:** `concurrent_conflict`
 - **Creation:** `role_exceeds_authority`, `already_member`, `open_invitation_exists`
@@ -144,8 +147,8 @@ Upgrade and rollback:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `OIDC_EMAIL_LINKING_TRUSTED_ISSUERS` | empty | Issuers whose `email_verified` SIE believes. **Required for new-user invitations.** Set it to the exact `OIDC_ISSUER` only after confirming the provider verifies email before setting `email_verified=true`. |
-| `OIDC_USERINFO_URL` | unset | Read email from UserInfo instead of the access token (for providers that keep it out of access tokens). |
+| `OIDC_EMAIL_LINKING_TRUSTED_ISSUERS` | empty | Issuers whose `email_verified` SIE believes. **Required for every invitation acceptance**, new and existing accounts alike. Set it to the exact `OIDC_ISSUER` only after confirming the provider verifies email before setting `email_verified=true`. |
+| `OIDC_USERINFO_URL` | unset | Read email from UserInfo instead of the access token (for providers that keep it out of access tokens). **Must be `https://`**: a deployment refuses to start otherwise, and the caller's bearer token is never sent over plain HTTP. |
 | `IDENTITY_LINK_GRANT_TTL_HOURS` | 72 | Default invitation lifetime. |
 | `INVITATION_MAX_FAILED_ATTEMPTS` | 5 | Email mismatches before auto-revoke. |
 | `INVITATION_RATE_LIMIT_PER_MINUTE` | 20 | Per client IP, on inspect, start and accept. Always on. |
@@ -163,7 +166,7 @@ Upgrade and rollback:
 | Threat | Control |
 |---|---|
 | Account takeover via an unverified or edited email | Email counts only with `email_verified=true` from an explicitly trusted issuer, **plus** possession of the invitation code. A new identity never attaches to an existing account. |
-| Existing account hijack through an invitation | Existing accounts accept only through their already-linked identity, and their own email must match. |
+| Existing account hijack through an invitation | Existing accounts accept only through their already-linked identity, their own email must match, **and** the sign-in must present a verified email from a trusted issuer equal to the invited one, so a legacy account created from an unverified claim can't claim an invitation. |
 | Code theft from logs or Referer | The code travels in the URL fragment and request bodies, never a query string. `no-store` is set. Only the SHA-256 hash is stored; the code is shown once and never audited. |
 | Code guessing | 256-bit codes; per-IP limit on all invitation endpoints (with `Retry-After`); auto-revoke after repeated mismatches. |
 | Replay or reuse | Single use under a row lock. Resend replaces the hash. Expiry and revocation are checked on every use. |
@@ -194,7 +197,7 @@ Upgrade and rollback:
 | 13 | Platform administrators | A new identity can't attach to any existing account, including admins. PR #69's operator-only admin linking is unchanged. |
 | 14 | Audit integrity | The audit row is written in the same transaction as the change it records. Refusals are committed separately, so they survive the rollback. |
 | 15 | Sensitive data exposure | No code, hash, token, email or subject in audit metadata or logs. The code appears only in the one-time creation or resend response. |
-| 16 | Rate-limit bypass | The client IP is the socket peer, or the X-Forwarded-For entry `TRUSTED_PROXY_HOPS` from the right, so a client-supplied header can't change it. The limit is process-local (see limitations). |
+| 16 | Rate-limit bypass | The client IP is the socket peer, or the X-Forwarded-For entry `TRUSTED_PROXY_HOPS` from the right, so a client-supplied header can't change it. The limiter is bounded (50,000 keys) but never evicts the key being checked, so a refused client can't reset its own counter; at the cap the oldest windows are dropped in batches. Administrator writes also carry the standard write limit. The limit is process-local (see limitations). |
 | 17 | CSRF, redirects, sessions | Bearer tokens, not cookies, so no ambient credentials to forge. OIDC state and PKCE via `oidc-client-ts`. `/callback` follows only same-origin `state.returnTo` paths. The pending code is in tab-scoped `sessionStorage`. |
 | 18 | Federation and issuer misconfiguration | One issuer (`OIDC_ISSUER`) is accepted. Email trust is a separate, exact-match allow-list that is empty by default. Users can't pick a provider: the SPA only talks to the configured authority. |
 
@@ -212,5 +215,5 @@ A later phase can add per-organization trusted issuers without changing this sch
 - **Locking the email at the provider:** SIE can only prefill it there (`login_hint`); the provider decides whether it is locked. SIE enforces the match on the backend.
 - **No emails sent:** SIE sends no invitation email. The administrator copies the link, which is shown once.
 - **Rate limiter is per instance:** it is process-local, which is exact on today's single Render instance but counts per instance if the service scales out.
-- **Inactive until configured:** new-user invitations do nothing until `OIDC_EMAIL_LINKING_TRUSTED_ISSUERS` is set. Existing-account invitations work without it.
+- **Inactive until configured:** no invitation can be accepted until `OIDC_EMAIL_LINKING_TRUSTED_ISSUERS` is set, for new and existing accounts alike.
 - **Other gaps:** an org admin can't yet see the audit trail in the UI, and there is no membership revocation API (audit finding N6).

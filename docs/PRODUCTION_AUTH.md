@@ -124,7 +124,7 @@ which user a token belongs to.
 
 | Path | Who issues it | What redemption does |
 |---|---|---|
-| Invitation: `POST /api/v1/organizations/{id}/invitations` | Org admin (`users:manage` in that org) | Accepted at `POST /api/v1/auth/invitations/accept` with a verified email that matches the invitation, or by an already-linked account with that email. See [INVITATION_REGISTRATION.md](INVITATION_REGISTRATION.md). |
+| Invitation: `POST /api/v1/organizations/{id}/invitations` | Org admin (`users:manage` in that org) | Accepted at `POST /api/v1/auth/invitations/accept` only with a verified email from a trusted issuer that matches the invitation, whether the person is new or signs in with an already-linked account. See [INVITATION_REGISTRATION.md](INVITATION_REGISTRATION.md). |
 | Account link: `POST /api/v1/identity-links` | Platform admin | Binds the caller's identity to one named existing user. Refused for platform-administrator targets. |
 | Account link for a platform admin: `scripts/create_identity_link_grant.py --allow-platform-admin` | Operator (Render shell) | Same, for a platform-administrator account. The only way to link one. |
 | Redeem: `POST /api/v1/auth/identity-links/redeem` | The person, with their Bearer token | Redeems **account-link** codes. Invitation codes are refused here. |

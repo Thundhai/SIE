@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   clearPendingInvitation,
+  hashHasToken,
   readPendingInvitation,
   readTokenFromHash,
   safeReturnPath,
@@ -37,5 +38,16 @@ describe('invitationFlow', () => {
     [undefined, null],
   ])('safeReturnPath(%s) -> %s', (input, expected) => {
     expect(safeReturnPath(input)).toBe(expected);
+  });
+});
+
+
+describe('hashHasToken', () => {
+  it('is true whenever the fragment names a token, valid or not', () => {
+    expect(hashHasToken('#token=short')).toBe(true);
+    expect(hashHasToken('#token=')).toBe(true);
+    expect(hashHasToken('#token=sie_link_abcdefghijk')).toBe(true);
+    expect(hashHasToken('')).toBe(false);
+    expect(hashHasToken('#other=1')).toBe(false);
   });
 });

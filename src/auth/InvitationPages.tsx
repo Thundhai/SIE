@@ -18,6 +18,7 @@ import {
   clearPendingInvitation,
   INVITATION_COMPLETE_PATH,
   readPendingInvitation,
+  hashHasToken,
   readTokenFromHash,
   storePendingInvitation,
 } from './invitationFlow';
@@ -142,11 +143,21 @@ export function InvitationLandingPage() {
   const [actionError, setActionError] = useState<string | null>(null);
 
   useEffect(() => {
-    const fromHash = readTokenFromHash(window.location.hash);
+    const hash = window.location.hash;
+    const fromHash = readTokenFromHash(hash);
+    if (hashHasToken(hash)) {
+      // Take the code out of the address bar and history, valid or not.
+      window.history.replaceState(null, '', window.location.pathname);
+    }
     if (fromHash) {
       storePendingInvitation(fromHash);
-      // Take the code out of the address bar and history.
-      window.history.replaceState(null, '', window.location.pathname);
+    } else if (hashHasToken(hash)) {
+      // A malformed or truncated link: never fall back to an invitation
+      // remembered from earlier in this tab, which may be for another
+      // organization.
+      clearPendingInvitation();
+      setState({ phase: 'closed', reason: 'invitation_not_found' });
+      return;
     }
     const token = fromHash ?? readPendingInvitation();
     if (!token) {
@@ -200,7 +211,16 @@ export function InvitationLandingPage() {
     setBusy(true);
     setActionError(null);
     try {
-      if (method !== 'existing') await startInvitation(token, method);
+      if (method !== 'existing') {
+        // The invitation may have expired, been revoked or been used since
+        // this page loaded: don't send the person to register for nothing.
+        const current = await startInvitation(token, method);
+        if (!isOpen(current.status)) {
+          setBusy(false);
+          setState({ phase: 'closed', reason: current.status });
+          return;
+        }
+      }
       const promptCreate = method === 'password' && import.meta.env.VITE_OIDC_SIGNUP_PROMPT_CREATE === 'true';
       await oidc.signIn({
         login_hint: invitation.invited_email,
@@ -246,7 +266,7 @@ type CompleteState =
   | { phase: 'confirm'; token: string; invitation: PublicInvitation }
   | { phase: 'accepting' }
   | { phase: 'accepted'; result: AcceptedInvitation; organizationName: string }
-  | { phase: 'refused'; reason: string; invitation: PublicInvitation | null }
+  | { phase: 'refused'; reason: string; invitation: PublicInvitation | null; token?: string }
   | { phase: 'closed'; reason: string }
   | { phase: 'error'; message: string };
 
@@ -321,12 +341,19 @@ export function InvitationCompletePage() {
       persistActiveOrganizationId(result.organization_id);
       setState({ phase: 'accepted', result, organizationName: invitation.organization_name });
     } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        // The backend rejected this session's token. Drop the local session
+        // (the invitation stays pending) so the sign-in prompt appears.
+        setState({ phase: 'confirm', token, invitation });
+        await oidc.signOutLocally();
+        return;
+      }
       const reason = invitationErrorReason(error);
       if (reason && CLOSED_REASONS.has(reason)) {
         clearPendingInvitation();
         setState({ phase: 'closed', reason });
       } else if (reason) {
-        setState({ phase: 'refused', reason, invitation });
+        setState({ phase: 'refused', reason, invitation, token });
       } else {
         setState({ phase: 'error', message: errorMessage(error) });
       }
@@ -362,7 +389,13 @@ export function InvitationCompletePage() {
         </Card>
       );
     case 'refused':
-      return <RefusedInvitation reason={state.reason} onSignInAgain={(different) => signInAgain(state.invitation, different)} />;
+      return (
+        <RefusedInvitation
+          reason={state.reason}
+          onSignInAgain={(different) => signInAgain(state.invitation, different)}
+          onRetry={() => (state.token ? accept(state.token, state.invitation) : undefined)}
+        />
+      );
     case 'confirm': {
       const { token, invitation } = state;
       return (
@@ -378,8 +411,25 @@ export function InvitationCompletePage() {
   }
 }
 
-function RefusedInvitation({ reason, onSignInAgain }: { reason: string; onSignInAgain: (differentAccount: boolean) => void }) {
+function RefusedInvitation({
+  reason,
+  onSignInAgain,
+  onRetry,
+}: {
+  reason: string;
+  onSignInAgain: (differentAccount: boolean) => void;
+  onRetry: () => void;
+}) {
   switch (reason) {
+    case 'email_verification_unavailable':
+      return (
+        <Card title="We couldn't reach your sign-in provider">
+          <Notice>Your email could not be verified with your sign-in provider just now. This is usually temporary.</Notice>
+          <Button type="button" variant="primary" className="mt-6 w-full justify-center" onClick={onRetry}>
+            Try again
+          </Button>
+        </Card>
+      );
     case 'email_not_verified':
       return (
         <Card title="Verify your email address">
