@@ -6,23 +6,41 @@ logs, Uvicorn's own access and error loggers, tracebacks of unhandled
 exceptions, and any future `logger.*` call that is handed a header,
 an exception or a URL by mistake.
 
-It works at the source. `install_log_redaction()` wraps the process-wide
-`LogRecord` factory, so every record from every logger is scrubbed when
-it is created: before any handler, formatter or capture sees it, and no
-matter which handlers are attached now or later. It replaces:
+`install_log_redaction()` scrubs every record at the source, before any
+handler, formatter or capture sees it, whichever handlers exist now or
+are added later. It hooks two places:
+
+* the process-wide `LogRecord` factory, which every record goes through
+* `Logger.makeRecord`, because the fields a call passes in `extra=` are
+  attached to the record only after the factory has returned
+
+On each record it scrubs:
+
+* the message, judged as it will be rendered (template and arguments
+  together), so a credential split between them (`"Bearer %s", token`)
+  is caught too
+* each argument, keeping numbers and `None` as they are. Uvicorn's access
+  logger keeps its arguments as arguments, because its formatter unpacks
+  them and reads the status code as an int; its template is fixed
+* every `extra` field, recursively through dicts, lists and tuples
+* the traceback and every chained exception message. The scrubbed
+  traceback is stored in `exc_text`, which standard formatters print,
+  and the raw exception objects are dropped from the record, so nothing
+  can render the unscrubbed original later
+* `stack_info`
+
+What it replaces:
 
 * the value of an `Authorization` header, in any common rendering
   (`Authorization: …`, `"authorization": "…"`, `(b'authorization', b'…')`)
-* `Bearer …` and `Basic …` credentials, which covers OIDC access tokens
-  and machine credentials (`<client_id>:<secret>`)
+* `Bearer …` and `Basic …` credentials of any length, which covers OIDC
+  access tokens and machine credentials (`<client_id>:<secret>`)
 * anything JWT-shaped (`eyJ….….…`)
 * SIE one-time codes (`sie_link_…`)
 * credential-like query parameters (`?access_token=…`, `&code=…`, …)
 
-What stays: messages, logger names, levels, request IDs, methods, paths,
-status codes, latencies and other numbers. Numbers and `None` are never
-touched, so formatters that need them (Uvicorn's access formatter reads
-the status code as an int) keep working.
+Messages, logger names, levels, request IDs, methods, paths, status codes
+and other numbers are left alone.
 
 Redaction is a safety net, not a licence: code must still never log a
 credential on purpose.
@@ -43,8 +61,8 @@ _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
         re.compile(r"""(?i)(\bauthorization['"]?\s*[:=,]\s*b?['"]?)[^'"\r\n]+"""),
         rf"\1{REDACTED}",
     ),
-    # Bearer / Basic credentials anywhere else.
-    (re.compile(r"(?i)\b(bearer|basic)(\s+)[A-Za-z0-9._~+/=:-]{8,}"), rf"\1\2{REDACTED}"),
+    # Bearer / Basic credentials anywhere else, whatever their length.
+    (re.compile(r"(?i)\b(bearer|basic)(\s+)[A-Za-z0-9._~+/=:-]+"), rf"\1\2{REDACTED}"),
     # JWT-shaped values (JWS and JWE both start with a base64url '{"').
     (re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]*)*"), REDACTED),
     # SIE one-time codes (account links and invitations).
@@ -61,6 +79,13 @@ _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
 
 _EXCEPTION_FORMATTER = logging.Formatter()
 _MARKER = "_sie_log_redaction"
+_MAX_DEPTH = 6
+# Attributes every LogRecord has; anything else on a record came from `extra`.
+_STANDARD_ATTRIBUTES = frozenset(logging.LogRecord("", 0, "", 0, "", None, None).__dict__) | {"message", "asctime"}
+# Loggers whose formatter unpacks the arguments and whose template is fixed
+# (no credential can sit in it): their arguments are scrubbed one by one
+# and always kept. Collapsing them into text would break the formatter.
+_TYPED_ARGUMENT_LOGGERS = ("uvicorn.access",)
 
 
 def redact(text: str) -> str:
@@ -70,6 +95,9 @@ def redact(text: str) -> str:
 
 
 def _redact_value(value: Any) -> Any:
+    """A scalar: strings are scrubbed, numbers and None kept as they are,
+    anything else replaced by its scrubbed text only if that text held a
+    credential."""
     if value is None or isinstance(value, (bool, int, float)):
         return value
     if isinstance(value, str):
@@ -82,29 +110,83 @@ def _redact_value(value: Any) -> Any:
     return value if scrubbed == rendered else scrubbed
 
 
-def redact_record(record: logging.LogRecord) -> logging.LogRecord:
-    record.msg = _redact_value(record.msg)
+def _redact_structure(value: Any, depth: int = 0) -> Any:
+    """Like `_redact_value`, but keeps the shape of dicts, lists and tuples
+    (structured `extra` fields) and scrubs inside them."""
+    if depth < _MAX_DEPTH:
+        if isinstance(value, Mapping):
+            return {key: _redact_structure(item, depth + 1) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            items = [_redact_structure(item, depth + 1) for item in value]
+            return items if isinstance(value, list) else tuple(items)
+    return _redact_value(value)
+
+
+def _redact_message(record: logging.LogRecord) -> None:
     if isinstance(record.args, Mapping):
         record.args = {key: _redact_value(value) for key, value in record.args.items()}
     elif isinstance(record.args, tuple):
         record.args = tuple(_redact_value(arg) for arg in record.args)
+
+    if any(record.name == name or record.name.startswith(f"{name}.") for name in _TYPED_ARGUMENT_LOGGERS):
+        record.msg = _redact_value(record.msg)
+        return
+    try:
+        rendered = record.getMessage()
+    except Exception:  # noqa: BLE001 - a broken format; logging reports it, with the scrubbed args
+        record.msg = _redact_value(record.msg)
+        return
+    scrubbed = redact(rendered)
+    if scrubbed != rendered:
+        # The credential is in the template, or spans template and an
+        # argument: keep only the scrubbed text.
+        record.msg = scrubbed
+        record.args = None
+
+
+def _redact_exception(record: logging.LogRecord) -> None:
     if record.exc_info and record.exc_info[0] is not None:
-        # Formatters reuse `exc_text` when it is set, so the traceback (and
-        # every chained exception's message) is only ever rendered scrubbed.
+        # Formatters print `exc_text` whenever it is set, so the traceback
+        # (and every chained exception's message) is only ever rendered
+        # scrubbed. The raw exception objects still hold the unscrubbed
+        # messages, so they don't stay on the record.
         record.exc_text = redact(_EXCEPTION_FORMATTER.formatException(record.exc_info))
+        record.exc_info = None
+    elif isinstance(record.exc_text, str):
+        record.exc_text = redact(record.exc_text)
     if record.stack_info:
         record.stack_info = redact(record.stack_info)
+
+
+def redact_record(record: logging.LogRecord) -> logging.LogRecord:
+    _redact_message(record)
+    _redact_exception(record)
+    return record
+
+
+def redact_extra(record: logging.LogRecord) -> logging.LogRecord:
+    for key in list(record.__dict__):
+        if key not in _STANDARD_ATTRIBUTES:
+            record.__dict__[key] = _redact_structure(record.__dict__[key])
     return record
 
 
 def install_log_redaction() -> None:
     """Idempotent. Call once, as early as possible, in each entrypoint."""
-    current = logging.getLogRecordFactory()
-    if getattr(current, _MARKER, False):
-        return
+    current_factory = logging.getLogRecordFactory()
+    if not getattr(current_factory, _MARKER, False):
 
-    def factory(*args: Any, **kwargs: Any) -> logging.LogRecord:
-        return redact_record(current(*args, **kwargs))
+        def factory(*args: Any, **kwargs: Any) -> logging.LogRecord:
+            return redact_record(current_factory(*args, **kwargs))
 
-    setattr(factory, _MARKER, True)
-    logging.setLogRecordFactory(factory)
+        setattr(factory, _MARKER, True)
+        logging.setLogRecordFactory(factory)
+
+    current_make_record = logging.Logger.makeRecord
+    if not getattr(current_make_record, _MARKER, False):
+
+        def make_record(self: logging.Logger, *args: Any, **kwargs: Any) -> logging.LogRecord:
+            return redact_extra(current_make_record(self, *args, **kwargs))
+
+        setattr(make_record, _MARKER, True)
+        logging.Logger.makeRecord = make_record  # type: ignore[method-assign]

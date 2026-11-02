@@ -243,6 +243,96 @@ def test_a_traceback_never_carries_a_token(captured_logger):
         assert fragment not in out
 
 
+@pytest.fixture
+def captured_records():
+    """A fresh logger whose handler keeps the records themselves, plus the
+    text an ordinary formatter (with `extra` and `exc_info` fields) makes
+    of them."""
+    install_log_redaction()
+    logger = logging.getLogger(f"sie.test.records.{uuid.uuid4().hex}")
+    logger.setLevel(logging.DEBUG)
+    logger.propagate = False
+    records: list[logging.LogRecord] = []
+
+    class _Keep(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            records.append(record)
+
+    handler = _Keep()
+    logger.addHandler(handler)
+    yield logger, records
+    logger.removeHandler(handler)
+
+
+def test_a_credential_split_between_template_and_argument_is_scrubbed(captured_records):
+    logger, records = captured_records
+    opaque = secrets.token_urlsafe(24)  # no recognisable shape on its own
+
+    logger.info("Bearer %s", opaque)
+    logger.warning("Authorization: %s", opaque)
+    logger.error("sent %s %s", "Bearer", opaque)
+
+    for record in records:
+        assert opaque not in record.getMessage()
+        assert REDACTED in record.getMessage()
+    # Rendering never fails (a broken template would make logging print the
+    # raw arguments to stderr).
+    assert [r.getMessage() for r in records] == [
+        f"Bearer {REDACTED}",
+        f"Authorization: {REDACTED}",
+        f"sent Bearer {REDACTED}",
+    ]
+
+
+def test_short_credentials_are_scrubbed_too():
+    assert redact(f"Basic {_b64(b'u:p')}") == f"Basic {REDACTED}"
+    assert redact("upstream said Bearer abc") == f"upstream said Bearer {REDACTED}"
+
+
+def test_extra_fields_are_scrubbed_and_keep_their_shape(captured_records):
+    logger, records = captured_records
+    jwt = _jwt()
+    client_id, secret = _machine_credential()
+
+    logger.error(
+        "embedding.failed",
+        extra={
+            "error": f"provider said Bearer {client_id}:{secret}",
+            "details": {"headers": {"authorization": f"Bearer {jwt}"}, "attempts": [1, f"retry with {jwt}"]},
+            "status_code": 401,
+            "latency_ms": 12.5,
+            "provider": "openai",
+        },
+    )
+
+    record = records[0]
+    assert record.error == f"provider said Bearer {REDACTED}"
+    assert record.details == {"headers": {"authorization": f"Bearer {REDACTED}"}, "attempts": [1, f"retry with {REDACTED}"]}
+    assert record.status_code == 401 and record.latency_ms == 12.5 and record.provider == "openai"
+    rendered = logging.Formatter("%(message)s %(error)s %(details)s %(status_code)d").format(record)
+    for fragment in (*_fragments(jwt), secret):
+        assert fragment not in rendered
+
+
+def test_the_raw_exception_does_not_stay_on_the_record(captured_records):
+    logger, records = captured_records
+    jwt = _jwt()
+
+    try:
+        raise RuntimeError(f"could not verify {jwt}")
+    except RuntimeError:
+        logger.exception("verification failed")
+
+    record = records[0]
+    assert record.exc_info is None
+    assert "RuntimeError: could not verify [REDACTED]" in record.exc_text
+    for fmt in ("%(message)s %(exc_info)s", "%(message)s"):
+        rendered = logging.Formatter(fmt).format(record)
+        assert "Traceback (most recent call last)" in rendered
+        for fragment in _fragments(jwt):
+            assert fragment not in rendered
+
+
 def test_uvicorn_access_lines_are_scrubbed_and_still_format():
     """Uvicorn's access formatter unpacks the record's args and needs the
     status code as an int; redaction must leave both usable."""
@@ -261,11 +351,15 @@ def test_uvicorn_access_lines_are_scrubbed_and_still_format():
         logger.info(
             '%s - "%s %s HTTP/%s" %d', "203.0.113.9:5000", "GET", f"/api/v1/me?access_token={jwt}", "1.1", 401
         )
+        # A path that only looks like a credential once joined to the rest
+        # of the line ("bearer HTTP/1.1") must not break the formatter.
+        logger.info('%s - "%s %s HTTP/%s" %d', "203.0.113.9:5000", "GET", "/files/bearer", "1.1", 200)
     finally:
         logger.removeHandler(handler)
 
     out = buffer.getvalue()
     assert f'"GET /api/v1/me?access_token={REDACTED} HTTP/1.1" 401' in out
+    assert '"GET /files/bearer HTTP/1.1" 200' in out
     for fragment in _fragments(jwt):
         assert fragment not in out
 
@@ -280,24 +374,34 @@ def test_install_is_idempotent_and_keeps_the_previous_factory(monkeypatch):
         return record
 
     monkeypatch.setattr(logging, "_logRecordFactory", previous)  # restored after the test
+    monkeypatch.setattr(logging.Logger, "makeRecord", logging.Logger.makeRecord)  # restored after the test
     install_log_redaction()
-    once = logging.getLogRecordFactory()
+    once, make_record_once = logging.getLogRecordFactory(), logging.Logger.makeRecord
     install_log_redaction()
     assert logging.getLogRecordFactory() is once
+    assert logging.Logger.makeRecord is make_record_once
 
     record = logging.getLogRecordFactory()("n", logging.INFO, __file__, 1, f"Bearer {_jwt()}", None, None)
     assert record.getMessage() == f"Bearer {REDACTED}"
     assert seen == ["n"]
 
 
-def test_the_application_installs_redaction(monkeypatch):
-    """Loading the entrypoint, starting from a plain factory (other tests in
-    this module install redaction themselves), must install it."""
-    import importlib
+def test_the_application_installs_redaction():
+    """Importing the entrypoint in a fresh interpreter installs redaction.
 
-    import app.main
+    A subprocess, because this process has long since imported `app.main`
+    (and other tests here install redaction themselves), and re-importing
+    it in place would build a second `app` that other tests then pick up."""
+    import subprocess
+    import sys
+    from pathlib import Path
 
-    monkeypatch.setattr(logging, "_logRecordFactory", logging.LogRecord)  # restored after the test
-    assert not getattr(logging.getLogRecordFactory(), log_redaction._MARKER, False)
-    importlib.reload(app.main)
-    assert getattr(logging.getLogRecordFactory(), log_redaction._MARKER, False) is True
+    probe = (
+        "import logging, sys\n"
+        f"assert not getattr(logging.getLogRecordFactory(), {log_redaction._MARKER!r}, False)\n"
+        "import app.main\n"
+        f"sys.exit(0 if getattr(logging.getLogRecordFactory(), {log_redaction._MARKER!r}, False) else 3)\n"
+    )
+    backend_dir = Path(__file__).resolve().parent.parent
+    result = subprocess.run([sys.executable, "-c", probe], check=False, cwd=backend_dir, capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, result.stderr[-2000:]
