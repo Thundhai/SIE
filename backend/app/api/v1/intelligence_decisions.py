@@ -35,11 +35,14 @@ from app.core.request_id import get_request_id
 from app.integrations.commercial_core import (
     CommercialCoreIntegrationError,
     CommercialCoreNotFoundError,
+    CommercialCoreTenantNotEntitledError,
     CommercialCoreUnavailable,
     CommercialCoreValidationError,
     commercial_core_client,
     get_commercial_core_client,
+    tenant_not_entitled_error,
 )
+from app.integrations.tenant_assertion import tenant_actor_from_context
 from app.models.intelligence_decision_enums import IntelligenceDecisionType
 from app.schemas.intelligence_decision import (
     IntelligenceDecisionCreate,
@@ -72,7 +75,10 @@ def _map_commercial_core_decision_error(exc: CommercialCoreIntegrationError) -> 
     unknown `decision_id`/`site_id`/`linked_action_id`/
     `attention_reference`, never a dependency failure, so it must not
     collapse into the generic 503 bucket every other
-    `CommercialCoreIntegrationError` subclass maps to."""
+    `CommercialCoreIntegrationError` subclass maps to. Not being entitled
+    (SIE-2) is a 403, as there."""
+    if isinstance(exc, CommercialCoreTenantNotEntitledError):
+        return tenant_not_entitled_error()
     if isinstance(exc, CommercialCoreNotFoundError):
         return ApiError(status_code=404, code=ErrorCode.RESOURCE_NOT_FOUND, message=str(exc))
     if isinstance(exc, CommercialCoreValidationError):
@@ -129,6 +135,7 @@ def create_intelligence_decision(
             actor_type=actor_type,
             actor_id=actor_id,
             request_id=request_id,
+            tenant_actor=tenant_actor_from_context(context, Permission.INTELLIGENCE_DECISION_WRITE),
         )
     except CommercialCoreUnavailable:
         raise
@@ -183,6 +190,7 @@ def list_intelligence_decisions(
             page=page,
             page_size=page_size,
             request_id=None,
+            tenant_actor=tenant_actor_from_context(context, Permission.INTELLIGENCE_READ),
         )
     except CommercialCoreUnavailable:
         raise
@@ -208,7 +216,12 @@ def get_intelligence_decision(
     org_id = resolve_authorized_organization_id(context, organization_id)
     try:
         client = get_commercial_core_client()
-        dto = client.get_decision(organization_id=org_id, decision_id=decision_id, request_id=None)
+        dto = client.get_decision(
+            organization_id=org_id,
+            decision_id=decision_id,
+            request_id=None,
+            tenant_actor=tenant_actor_from_context(context, Permission.INTELLIGENCE_READ),
+        )
     except CommercialCoreUnavailable:
         raise
     except CommercialCoreIntegrationError as exc:

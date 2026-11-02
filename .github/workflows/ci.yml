@@ -197,8 +197,9 @@ jobs:
           /tmp/gitleaks version
 
       - name: Run gitleaks (direct CLI scan -- no GitHub API calls)
-        # Uses this repository's own .gitleaks.toml if one is ever added;
-        # none exists today, so this runs with gitleaks' own default rules.
+        # Uses this repository's .gitleaks.toml: gitleaks' default rules
+        # plus five path- and value-exact false-positive allowlists. It
+        # scans the history of every branch fetched above (fetch-depth: 0).
         # Exits 1 (failing this job) iff a leak is found -- gitleaks' own
         # default exit-code behavior, not overridden here.
         run: /tmp/gitleaks detect --source . --no-banner --redact

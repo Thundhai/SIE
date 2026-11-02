@@ -50,8 +50,16 @@ _INCLUDE_SCHEMAS = True
 #: here, the same way the table itself is excluded above, keeps
 #: `alembic check` honest without ever putting an unresolvable reference
 #: into the ORM's own metadata graph.
+#: Migration `0036`'s tenant-entitlement tables follow the same rule as
+#: `recommendation_candidates`: created here on Commercial Core's behalf,
+#: never read or written by Public SIE, so they have no model here.
+_COMMERCIAL_CORE_ONLY_TABLES = frozenset(
+    {"recommendation_candidates", "tenant_entitlements", "tenant_entitlement_events", "tenant_assertion_jti"}
+)
+
+
 def include_object(object_, name, type_, reflected, compare_to):
-    if type_ == "table" and name == "recommendation_candidates":
+    if type_ == "table" and name in _COMMERCIAL_CORE_ONLY_TABLES:
         return False
     if type_ == "column" and name == "recommendation_candidate_id" and object_.table.name == "intelligence_decisions":
         return False

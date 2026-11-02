@@ -301,6 +301,25 @@ def test_enterprise_intelligence_maps_a_client_integration_error_to_503_model_no
     assert response.json()["error"]["code"] == "MODEL_NOT_AVAILABLE"
 
 
+def test_enterprise_intelligence_keeps_a_commercial_core_not_found_as_503(client, db_session, monkeypatch):
+    """Organization-wide only (no `site_id`), so a Commercial Core 404 here
+    is an integration problem, never a caller's resource miss."""
+    from app.integrations.commercial_core import CommercialCoreNotFoundError
+
+    org = create_org(client)
+    org_id = uuid.UUID(org["id"])
+    credential = _make_client_credential(db_session, org_id, scopes=[Permission.INTELLIGENCE_READ])
+    fake_client = _FakeEnterpriseIntelligenceClient(error=CommercialCoreNotFoundError("The requested resource was not found."))
+    monkeypatch.setattr("app.api.v1.intelligence.get_commercial_core_client", lambda: fake_client)
+
+    response = client.get(
+        f"/api/v1/intelligence/enterprise?organization_id={org['id']}", headers=_bearer(credential)
+    )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "MODEL_NOT_AVAILABLE"
+
+
 def test_enterprise_intelligence_response_never_exposes_a_client_secret(client, db_session, monkeypatch):
     import httpx
 

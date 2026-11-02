@@ -12,13 +12,21 @@ export class ApiError extends Error {
   readonly status: number;
   readonly code: string | null;
   readonly requestId: string | null;
+  /** The backend's optional `error.details` object, when it sent one
+   * (e.g. `{ reason: 'RAG_NOT_ENABLED' }` on a RAG 503) -- lets a caller
+   * branch on a stable machine-readable field, never on message text. */
+  readonly details: Record<string, unknown> | null;
 
-  constructor(message: string, options: { status: number; code?: string | null; requestId?: string | null }) {
+  constructor(
+    message: string,
+    options: { status: number; code?: string | null; requestId?: string | null; details?: Record<string, unknown> | null },
+  ) {
     super(message);
     this.name = 'ApiError';
     this.status = options.status;
     this.code = options.code ?? null;
     this.requestId = options.requestId ?? null;
+    this.details = options.details ?? null;
   }
 
   /** True for a connectivity failure (no response at all) rather than a
@@ -61,6 +69,7 @@ export async function apiErrorFromResponse(response: Response): Promise<ApiError
   const requestId = response.headers.get('X-Request-Id');
   let message = `Request failed with status ${response.status}`;
   let code: string | null = null;
+  let details: Record<string, unknown> | null = null;
 
   try {
     const body = await response.json();
@@ -68,6 +77,9 @@ export async function apiErrorFromResponse(response: Response): Promise<ApiError
       if (body.error && typeof body.error === 'object') {
         message = body.error.message || message;
         code = body.error.code || null;
+        if (body.error.details && typeof body.error.details === 'object' && !Array.isArray(body.error.details)) {
+          details = body.error.details as Record<string, unknown>;
+        }
       } else if (typeof body.detail === 'string') {
         message = body.detail;
       }
@@ -78,5 +90,5 @@ export async function apiErrorFromResponse(response: Response): Promise<ApiError
     // error while handling the first.
   }
 
-  return new ApiError(message, { status: response.status, code, requestId });
+  return new ApiError(message, { status: response.status, code, requestId, details });
 }

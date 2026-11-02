@@ -421,6 +421,48 @@ def test_site_attention_also_maps_a_commercial_core_validation_error_to_422(clie
     assert response.json()["error"]["code"] == "VALIDATION_ERROR"
 
 
+def test_site_attention_maps_a_commercial_core_not_found_to_404_not_503(client, db_session, monkeypatch):
+    """Commercial Core 404s a `site_id` that is not a site of the request's
+    organization -- the caller named a site that is not theirs, so it must
+    reach them as 404 RESOURCE_NOT_FOUND, not as the generic 503 that would
+    tell them to retry a request that can never succeed."""
+    from app.integrations.commercial_core import CommercialCoreNotFoundError
+
+    org = create_org(client)
+    org_id = uuid.UUID(org["id"])
+    credential = _make_client_credential(db_session, org_id, scopes=[Permission.INTELLIGENCE_READ])
+    fake_client = _FakeAttentionClient(error=CommercialCoreNotFoundError("The requested resource was not found."))
+    monkeypatch.setattr("app.api.v1.intelligence.get_commercial_core_client", lambda: fake_client)
+
+    response = client.get(
+        f"/api/v1/intelligence/sites/{uuid.uuid4()}/attention?organization_id={org['id']}",
+        headers=_bearer(credential),
+    )
+
+    assert response.status_code == 404
+    body = response.json()
+    assert body["error"]["code"] == "RESOURCE_NOT_FOUND"
+    assert body["error"]["message"] == "The requested resource was not found."
+
+
+def test_organization_attention_keeps_a_commercial_core_not_found_as_503(client, db_session, monkeypatch):
+    """No `site_id` was named, so a 404 cannot be the site-ownership check:
+    it is an integration problem (cc_service gives an unmatched route the
+    same generic 404 body), and must not read as a permanent resource miss."""
+    from app.integrations.commercial_core import CommercialCoreNotFoundError
+
+    org = create_org(client)
+    org_id = uuid.UUID(org["id"])
+    credential = _make_client_credential(db_session, org_id, scopes=[Permission.INTELLIGENCE_READ])
+    fake_client = _FakeAttentionClient(error=CommercialCoreNotFoundError("The requested resource was not found."))
+    monkeypatch.setattr("app.api.v1.intelligence.get_commercial_core_client", lambda: fake_client)
+
+    response = client.get(f"/api/v1/intelligence/attention?organization_id={org['id']}", headers=_bearer(credential))
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "MODEL_NOT_AVAILABLE"
+
+
 def test_attention_tenant_security_a_machine_credential_cannot_reach_a_different_organization(
     client, db_session, monkeypatch
 ):
@@ -805,6 +847,59 @@ def test_analytics_maps_a_commercial_core_validation_error_to_422(client, db_ses
 
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+@pytest.mark.parametrize(
+    "path,extra",
+    [
+        ("analytics/summary", ""),
+        ("analytics/trends", "&metric=incident_count"),
+        ("analytics/signals", ""),
+    ],
+)
+def test_analytics_maps_a_commercial_core_not_found_to_404(client, db_session, monkeypatch, path, extra):
+    from app.integrations.commercial_core import CommercialCoreNotFoundError
+
+    org = create_org(client)
+    org_id = uuid.UUID(org["id"])
+    credential = _make_client_credential(db_session, org_id, scopes=[Permission.INTELLIGENCE_READ])
+    fake_client = _FakeAnalyticsClient(error=CommercialCoreNotFoundError("The requested resource was not found."))
+    monkeypatch.setattr("app.api.v1.intelligence.get_commercial_core_client", lambda: fake_client)
+
+    response = client.get(
+        f"/api/v1/intelligence/{path}?organization_id={org['id']}&site_id={uuid.uuid4()}{extra}",
+        headers=_bearer(credential),
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "RESOURCE_NOT_FOUND"
+
+
+@pytest.mark.parametrize(
+    "path,extra",
+    [
+        ("analytics/summary", ""),
+        ("analytics/trends", "&metric=incident_count"),
+        ("analytics/signals", ""),
+    ],
+)
+def test_organization_wide_analytics_keeps_a_commercial_core_not_found_as_503(
+    client, db_session, monkeypatch, path, extra
+):
+    from app.integrations.commercial_core import CommercialCoreNotFoundError
+
+    org = create_org(client)
+    org_id = uuid.UUID(org["id"])
+    credential = _make_client_credential(db_session, org_id, scopes=[Permission.INTELLIGENCE_READ])
+    fake_client = _FakeAnalyticsClient(error=CommercialCoreNotFoundError("The requested resource was not found."))
+    monkeypatch.setattr("app.api.v1.intelligence.get_commercial_core_client", lambda: fake_client)
+
+    response = client.get(
+        f"/api/v1/intelligence/{path}?organization_id={org['id']}{extra}", headers=_bearer(credential)
+    )
+
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "MODEL_NOT_AVAILABLE"
 
 
 def test_analytics_summary_tenant_security_a_machine_credential_cannot_reach_a_different_organization(

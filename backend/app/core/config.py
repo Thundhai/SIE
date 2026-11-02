@@ -9,6 +9,13 @@ from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+#: APP_ENV values that mean "a real deployment" to
+#: `validate_startup_settings()` below.
+PRODUCTION_APP_ENVS = frozenset({"production", "prod"})
+
+#: The local-development fallback password (see POSTGRES_PASSWORD below).
+_DEFAULT_POSTGRES_PASSWORD = "sie"
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -99,6 +106,16 @@ class Settings(BaseSettings):
     # to its real frontend origin(s), or browser-based access is refused
     # entirely (fail closed, the same posture DEV_MODE already takes).
     CORS_ALLOWED_ORIGINS: str = "http://localhost:3000"
+
+    # FastAPI's /docs, /redoc and /openapi.json. Unset means on, except on
+    # a real deployment (see `is_deployed`), where the API surface is not
+    # published to anonymous callers unless this is set to true.
+    API_DOCS_ENABLED: bool | None = None
+
+    # Set to "true" by Render itself on every service it runs; never set
+    # by hand. Lets the startup safety checks protect a Render deployment
+    # whose APP_ENV was never configured (see `is_deployed`).
+    RENDER: bool = False
 
     # Ingestion (see app/ingestion/storage.py, app/ingestion/pipeline.py)
     #
@@ -212,6 +229,33 @@ class Settings(BaseSettings):
     # one's scope) has an obvious place to actually enforce it via
     # process-level cancellation.
     EMBEDDING_INFERENCE_TIMEOUT_SECONDS: float = 60.0
+
+    # EMBEDDING_PROVIDER="openai_compatible"
+    # (app/embeddings/provider.py::OpenAICompatibleEmbeddingProvider): an
+    # HTTP `/embeddings` API in the OpenAI request/response shape, so a
+    # deployment needs no local model or extra memory. EMBEDDING_MODEL_NAME
+    # is the API's model id, EMBEDDING_BATCH_SIZE caps texts per request,
+    # and EMBEDDING_INFERENCE_TIMEOUT_SECONDS is enforced here, as one
+    # deadline across all of a call's requests (unlike local inference).
+    # An external API must be https://. The key is an environment
+    # variable only, never committed and never logged.
+    EMBEDDING_API_BASE_URL: str | None = None
+    EMBEDDING_API_KEY: str | None = None
+    # Ask the API for EMBEDDING_DIMENSIONS-wide vectors (the `dimensions`
+    # request field). Only models that support it accept it (OpenAI's
+    # text-embedding-3 family does); leave false for any other API, whose
+    # native width must then equal EMBEDDING_DIMENSIONS. Every response is
+    # checked against EMBEDDING_DIMENSIONS either way, and the vector
+    # column's width is fixed by the migrations, so changing it needs one.
+    EMBEDDING_API_SEND_DIMENSIONS: bool = False
+    # Document and query text leaves the deployment when the API is run
+    # by a third party. Same posture as ALLOW_EXTERNAL_LLM_FOR_PRIVATE_DATA
+    # below: an external provider is refused at construction unless the
+    # owner has explicitly allowed it. Set EMBEDDING_PROVIDER_IS_EXTERNAL
+    # to false only for a self-hosted API inside the deployment boundary;
+    # EMBEDDING_API_BASE_URL is then required.
+    EMBEDDING_PROVIDER_IS_EXTERNAL: bool = True
+    ALLOW_EXTERNAL_EMBEDDINGS_FOR_PRIVATE_DATA: bool = False
 
     # Retrieval (see app/retrieval/retrieval_service.py). Documented
     # *initial* defaults calibrated against the deterministic hashing
@@ -416,7 +460,9 @@ class Settings(BaseSettings):
     DATABASE_URL: str | None = None
 
     POSTGRES_USER: str = "sie"
-    POSTGRES_PASSWORD: str = "sie"
+    # Local development only: production refuses to start on this default
+    # (see validate_startup_settings()).
+    POSTGRES_PASSWORD: str = _DEFAULT_POSTGRES_PASSWORD
     POSTGRES_DB: str = "sie"
     POSTGRES_HOST: str = "localhost"
     POSTGRES_PORT: int = 5432
@@ -568,6 +614,24 @@ class Settings(BaseSettings):
     COMMERCIAL_CORE_CLIENT_ID: str | None = None
     COMMERCIAL_CORE_CLIENT_SECRET: str | None = None
     COMMERCIAL_CORE_TIMEOUT_SECONDS: float = 5.0
+    # RAG's own budget. One RAG query runs retrieval and a model call on
+    # Commercial Core, whose relay allows it 45s
+    # (CC_SERVICE_DOMAIN_CLIENT_RAG_TIMEOUT_SECONDS). Keep this above that,
+    # or a slow but valid answer surfaces here as a 503 while it is still
+    # being generated. Every other capability keeps the 5s budget above.
+    COMMERCIAL_CORE_RAG_TIMEOUT_SECONDS: float = 50.0
+    # SIE-2: the signed tenant assertion sent with every Commercial Core
+    # call (app/integrations/tenant_assertion.py). Off while all three are
+    # unset; partially set fails at first use. SIGNING_KEY is an Ed25519
+    # private JWK, secret, never committed or logged. Commercial Core's
+    # verifiers list its public half under KEY_ID and must be configured
+    # with the same ISSUER (CC_SERVICE_TENANT_ASSERTION_* and
+    # DOMAIN_SERVICE_TENANT_ASSERTION_*). LIFETIME_SECONDS is at most the
+    # contract's 60.
+    COMMERCIAL_CORE_TENANT_ASSERTION_SIGNING_KEY: str | None = None
+    COMMERCIAL_CORE_TENANT_ASSERTION_KEY_ID: str | None = None
+    COMMERCIAL_CORE_TENANT_ASSERTION_ISSUER: str | None = None
+    COMMERCIAL_CORE_TENANT_ASSERTION_LIFETIME_SECONDS: int = 60
 
     @property
     def sqlalchemy_database_uri(self) -> str:
@@ -598,6 +662,91 @@ class Settings(BaseSettings):
         docstring. Blank entries are dropped the same way
         `cors_allowed_origins_list` drops them."""
         return [alg.strip() for alg in self.OIDC_ALGORITHMS.split(",") if alg.strip()]
+
+    @property
+    def is_production(self) -> bool:
+        return self.APP_ENV.strip().lower() in PRODUCTION_APP_ENVS
+
+    @property
+    def is_deployed(self) -> bool:
+        """A real deployment, for the startup safety checks and API docs:
+        APP_ENV says production, or the process runs on Render and APP_ENV
+        was never set (an unconfigured APP_ENV defaults to "development",
+        which must not exempt a hosted service). An explicitly set
+        non-production APP_ENV (e.g. a staging service) still opts out.
+
+        Deliberately not used by the embedding/LLM provider guards, which
+        stay on `is_production`: those refuse the test providers, and a
+        Render service still on them must keep serving until real ones are
+        configured."""
+        if self.is_production:
+            return True
+        return self.RENDER and "APP_ENV" not in self.model_fields_set
+
+    @property
+    def api_docs_enabled(self) -> bool:
+        if self.API_DOCS_ENABLED is not None:
+            return self.API_DOCS_ENABLED
+        return not self.is_deployed
+
+
+class UnsafeConfigurationError(RuntimeError):
+    """The process must not start with this configuration."""
+
+
+def _database_url_password(url: str) -> str | None:
+    """The password the connection will actually use, or None if it has
+    none or does not parse (a malformed URL fails on its own at the first
+    connection). The psycopg dialect lets a `?password=` query parameter
+    override the authority's, so that is checked first."""
+    from sqlalchemy.engine import make_url
+    from sqlalchemy.exc import ArgumentError
+
+    try:
+        parsed = make_url(url)
+    except ArgumentError:
+        return None
+    query_password = parsed.query.get("password")
+    if isinstance(query_password, tuple):
+        query_password = query_password[-1] if query_password else None
+    return query_password if query_password is not None else parsed.password
+
+
+def validate_startup_settings(settings: "Settings") -> None:
+    """Refuses to start a misconfigured deployment, the same fail-closed
+    shape DEV_MODE and the hashing embedding provider already use.
+
+    Everywhere: CORS_ALLOWED_ORIGINS may not contain `*` (its docstring
+    already promised exact origins only; with `allow_credentials=True` a
+    wildcard would let any site make credentialed requests).
+
+    On a real deployment only (`Settings.is_deployed`: APP_ENV production,
+    or Render with APP_ENV unset): DEV_MODE, SIE_DEV_DEMO_DATA and DEBUG must be off
+    (the first trusts an unauthenticated user-id header, the last returns
+    tracebacks), and the database must not be reached with the built-in
+    development password, whether assembled or inside DATABASE_URL.
+
+    Called from `app/main.py` before the app is built, so uvicorn exits
+    instead of serving; migrations and scripts that only import settings
+    are unaffected. Reports every problem at once, never a value."""
+    problems: list[str] = []
+    if "*" in settings.cors_allowed_origins_list:
+        problems.append("CORS_ALLOWED_ORIGINS contains '*'; list exact origins instead.")
+    if settings.is_deployed:
+        if settings.DEV_MODE:
+            problems.append("DEV_MODE is true, which trusts an unauthenticated user-id header.")
+        if settings.SIE_DEV_DEMO_DATA:
+            problems.append("SIE_DEV_DEMO_DATA is true.")
+        if settings.DEBUG:
+            problems.append("DEBUG is true, which returns tracebacks to callers.")
+        if not settings.DATABASE_URL and settings.POSTGRES_PASSWORD == _DEFAULT_POSTGRES_PASSWORD:
+            problems.append("DATABASE_URL is unset and POSTGRES_PASSWORD is the development default.")
+        if settings.DATABASE_URL and _database_url_password(settings.DATABASE_URL) == _DEFAULT_POSTGRES_PASSWORD:
+            problems.append("DATABASE_URL uses the development default password.")
+    if problems:
+        raise UnsafeConfigurationError(
+            f"Refusing to start (APP_ENV={settings.APP_ENV!r}, RENDER={settings.RENDER}): " + " ".join(problems)
+        )
 
 
 @lru_cache

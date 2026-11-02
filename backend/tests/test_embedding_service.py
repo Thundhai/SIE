@@ -21,7 +21,7 @@ from app.embeddings.embedding_service import (
     EmbeddingOutcomeStatus,
     embedding_service,
 )
-from app.embeddings.provider import HashingEmbeddingProvider
+from app.embeddings.provider import EmbeddingProviderUnavailableError, HashingEmbeddingProvider
 from app.models.embedding import KnowledgeChunkEmbedding
 from app.models.enums import QualityStatus, ScopeType
 from app.schemas.knowledge_chunk import KnowledgeChunkCreate
@@ -352,6 +352,65 @@ def test_batch_embedding_continues_past_a_single_chunk_failure(db_session):
     assert report.total == 3
     assert report.created == 2
     assert report.failed == 1
+
+
+class _RecordingProvider:
+    """Records each `embed_texts` call; fails as `fail` says."""
+
+    provider_name = "recording"
+    model_name = "m"
+    model_version = "v1"
+    dimensions = 256
+
+    def __init__(self, *, max_batch_size=None, fail=lambda texts: None):
+        if max_batch_size is not None:
+            self.max_batch_size = max_batch_size
+        self.calls: list[list[str]] = []
+        self._fail = fail
+
+    def embed_text(self, text):
+        return self.embed_texts([text])[0]
+
+    def embed_texts(self, texts):
+        self.calls.append(list(texts))
+        self._fail(texts)
+        return [[0.1] * 256 for _ in texts]
+
+
+def _five_chunks(db_session):
+    return make_chunks(db_session, texts_and_quality=[(f"Chunk {i}.", QualityStatus.HIGH) for i in range(5)])
+
+
+def test_a_request_wide_failure_is_not_retried_chunk_by_chunk(db_session):
+    chunks = _five_chunks(db_session)
+
+    def outage(texts):
+        raise EmbeddingProviderUnavailableError("Embedding API answered HTTP 429")
+
+    provider = _RecordingProvider(fail=outage)
+    report = embedding_service.generate_embeddings_for_version(
+        db_session, version_id=chunks[0].document_version_id, provider=provider
+    )
+
+    assert (report.total, report.failed) == (5, 5)
+    assert len(provider.calls) == 1  # no per-chunk retries multiplying the traffic
+    assert all("HTTP 429" in outcome.reason for outcome in report.outcomes)
+
+
+def test_work_is_split_by_the_providers_batch_size_so_successes_are_not_repeated(db_session):
+    chunks = _five_chunks(db_session)
+
+    def last_group_fails(texts):
+        if "Chunk 4." in texts:
+            raise EmbeddingProviderUnavailableError("timed out")
+
+    provider = _RecordingProvider(max_batch_size=2, fail=last_group_fails)
+    report = embedding_service.generate_embeddings_for_version(
+        db_session, version_id=chunks[0].document_version_id, provider=provider
+    )
+
+    assert [len(call) for call in provider.calls] == [2, 2, 1]
+    assert (report.created, report.failed) == (4, 1)
 
 
 # --- Embedding dimension design (corrective milestone item 7) ---------------

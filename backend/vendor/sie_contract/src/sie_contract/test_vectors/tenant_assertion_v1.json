@@ -1,0 +1,1084 @@
+{
+  "description": "Golden vectors for sie-contract tenant assertions, schema version 1. TEST ONLY: the keys below were generated for this file, their private halves were discarded, and they must never be configured in any deployment. Regenerate with scripts/generate_tenant_assertion_vectors.py.",
+  "schema_version": 1,
+  "now": 1800000000,
+  "issuer": "https://sie.test/tenant-assertion",
+  "keys": {
+    "test-k1": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "DA8BrZpSw9vaYC5dipDQFOfn0JM8E9PmodU6Drw8Wno"
+    },
+    "test-k2": {
+      "kty": "OKP",
+      "crv": "Ed25519",
+      "x": "BvUJ_pRHieDoGCIuk8RY5NkNNpEhi729fPij4x0m8qs"
+    }
+  },
+  "reasons": [
+    "bad_alg",
+    "bad_audience",
+    "bad_claims",
+    "bad_header",
+    "bad_issuer",
+    "bad_signature",
+    "bad_version",
+    "capability_mismatch",
+    "expired",
+    "lifetime_exceeded",
+    "malformed",
+    "not_yet_valid",
+    "oversize",
+    "tenant_mismatch",
+    "unknown_kid"
+  ],
+  "vectors": [
+    {
+      "name": "valid_human_attention_read",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "eyJhbGciOiJFZERTQSIsInR5cCI6InNpZS10ZW5hbnQrand0Iiwia2lkIjoidGVzdC1rMSJ9",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiNmYxYzJkNGUtMWEyYi00YzNkLThlOWYtMGExYjJjM2Q0ZTVmIiwic3ViIjoiM2IyYTFjMGQtOWU4Zi00ZDdjLWE2YjUtYzRkM2UyZjFhMGI5IiwiYWN0IjoiaHVtYW4iLCJwZXJtIjoiaW50ZWxsaWdlbmNlOnJlYWQiLCJjYXAiOiJjb21tZXJjaWFsX2NvcmU6YXR0ZW50aW9uX3JlYWQiLCJpYXQiOjE3OTk5OTk5OTUsImV4cCI6MTgwMDAwMDA1NSwianRpIjoiZDFlMmYzYTQtYjVjNi00ZDdlLThmOWEtMGIxYzJkM2U0ZjVhIiwicmlkIjoicmVxLTAwMDEiLCJ2ZXIiOjF9",
+          "h3pc80rRePzz2C7St1ba3S_6r0M4viYFfOiiUERDMUT5cRn5pidSy0ROu0upmRM9X1PoNu2VLlm-ARJsDRJgAA"
+        ],
+        "route_capability": "commercial_core:attention_read",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": null
+      },
+      "expect": {
+        "result": "accept"
+      }
+    },
+    {
+      "name": "valid_machine_decisions_write",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "eyJhbGciOiJFZERTQSIsInR5cCI6InNpZS10ZW5hbnQrand0Iiwia2lkIjoidGVzdC1rMSJ9",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiNmYxYzJkNGUtMWEyYi00YzNkLThlOWYtMGExYjJjM2Q0ZTVmIiwic3ViIjoiM2IyYTFjMGQtOWU4Zi00ZDdjLWE2YjUtYzRkM2UyZjFhMGI5IiwiYWN0IjoibWFjaGluZSIsInBlcm0iOiJpbnRlbGxpZ2VuY2U6ZGVjaXNpb25fd3JpdGUiLCJjYXAiOiJjb21tZXJjaWFsX2NvcmU6ZGVjaXNpb25zX3dyaXRlIiwiaWF0IjoxNzk5OTk5OTk1LCJleHAiOjE4MDAwMDAwNTUsImp0aSI6ImQxZTJmM2E0LWI1YzYtNGQ3ZS04ZjlhLTBiMWMyZDNlNGY1YSIsInJpZCI6InJlcS0wMDAxIiwidmVyIjoxfQ",
+          "l0lTVsM04SInnudMJ1bC7HV0v8qjW3EIz49ZhS_IA6qt5obcOvy6yQS-ezrlPGV3VUuh25Tkv2YIJxWbj2RyBQ"
+        ],
+        "route_capability": "commercial_core:decisions_write",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": null
+      },
+      "expect": {
+        "result": "accept"
+      }
+    },
+    {
+      "name": "valid_rag_query",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "eyJhbGciOiJFZERTQSIsInR5cCI6InNpZS10ZW5hbnQrand0Iiwia2lkIjoidGVzdC1rMSJ9",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiNmYxYzJkNGUtMWEyYi00YzNkLThlOWYtMGExYjJjM2Q0ZTVmIiwic3ViIjoiM2IyYTFjMGQtOWU4Zi00ZDdjLWE2YjUtYzRkM2UyZjFhMGI5IiwiYWN0IjoiaHVtYW4iLCJwZXJtIjoia25vd2xlZGdlOnJlYWQiLCJjYXAiOiJjb21tZXJjaWFsX2NvcmU6cmFnX3F1ZXJ5IiwiaWF0IjoxNzk5OTk5OTk1LCJleHAiOjE4MDAwMDAwNTUsImp0aSI6ImQxZTJmM2E0LWI1YzYtNGQ3ZS04ZjlhLTBiMWMyZDNlNGY1YSIsInJpZCI6InJlcS0wMDAxIiwidmVyIjoxfQ",
+          "CK9XSoy8r5p1R5pl9yuplKGcVIHxllPBQOdUI8J09euWH-3ddSzf9FkOE002arX0mutAaSmdU5fIMIP9V5uRDA"
+        ],
+        "route_capability": "commercial_core:rag_query",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": null
+      },
+      "expect": {
+        "result": "accept"
+      }
+    },
+    {
+      "name": "valid_second_published_key",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "eyJhbGciOiJFZERTQSIsInR5cCI6InNpZS10ZW5hbnQrand0Iiwia2lkIjoidGVzdC1rMiJ9",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiNmYxYzJkNGUtMWEyYi00YzNkLThlOWYtMGExYjJjM2Q0ZTVmIiwic3ViIjoiM2IyYTFjMGQtOWU4Zi00ZDdjLWE2YjUtYzRkM2UyZjFhMGI5IiwiYWN0IjoiaHVtYW4iLCJwZXJtIjoiaW50ZWxsaWdlbmNlOnJlYWQiLCJjYXAiOiJjb21tZXJjaWFsX2NvcmU6YXR0ZW50aW9uX3JlYWQiLCJpYXQiOjE3OTk5OTk5OTUsImV4cCI6MTgwMDAwMDA1NSwianRpIjoiZDFlMmYzYTQtYjVjNi00ZDdlLThmOWEtMGIxYzJkM2U0ZjVhIiwicmlkIjoicmVxLTAwMDEiLCJ2ZXIiOjF9",
+          "xLh7D_hTIVDHsBTCxTKujIR_mBTOhIfPu2ixcyIsVyQkYykyXT23CS3UxKCdM9tQ0GVeXzl4_bD8nthefE3jCQ"
+        ],
+        "route_capability": "commercial_core:attention_read",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": null
+      },
+      "expect": {
+        "result": "accept"
+      }
+    },
+    {
+      "name": "valid_without_organization_header",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "eyJhbGciOiJFZERTQSIsInR5cCI6InNpZS10ZW5hbnQrand0Iiwia2lkIjoidGVzdC1rMSJ9",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiNmYxYzJkNGUtMWEyYi00YzNkLThlOWYtMGExYjJjM2Q0ZTVmIiwic3ViIjoiM2IyYTFjMGQtOWU4Zi00ZDdjLWE2YjUtYzRkM2UyZjFhMGI5IiwiYWN0IjoiaHVtYW4iLCJwZXJtIjoiaW50ZWxsaWdlbmNlOnJlYWQiLCJjYXAiOiJjb21tZXJjaWFsX2NvcmU6YXR0ZW50aW9uX3JlYWQiLCJpYXQiOjE3OTk5OTk5OTUsImV4cCI6MTgwMDAwMDA1NSwianRpIjoiZDFlMmYzYTQtYjVjNi00ZDdlLThmOWEtMGIxYzJkM2U0ZjVhIiwicmlkIjoicmVxLTAwMDEiLCJ2ZXIiOjF9",
+          "h3pc80rRePzz2C7St1ba3S_6r0M4viYFfOiiUERDMUT5cRn5pidSy0ROu0upmRM9X1PoNu2VLlm-ARJsDRJgAA"
+        ],
+        "route_capability": "commercial_core:attention_read",
+        "header_org": null,
+        "body_org": null
+      },
+      "expect": {
+        "result": "accept"
+      }
+    },
+    {
+      "name": "valid_without_rid",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "eyJhbGciOiJFZERTQSIsInR5cCI6InNpZS10ZW5hbnQrand0Iiwia2lkIjoidGVzdC1rMSJ9",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiNmYxYzJkNGUtMWEyYi00YzNkLThlOWYtMGExYjJjM2Q0ZTVmIiwic3ViIjoiM2IyYTFjMGQtOWU4Zi00ZDdjLWE2YjUtYzRkM2UyZjFhMGI5IiwiYWN0IjoiaHVtYW4iLCJwZXJtIjoiaW50ZWxsaWdlbmNlOnJlYWQiLCJjYXAiOiJjb21tZXJjaWFsX2NvcmU6YXR0ZW50aW9uX3JlYWQiLCJpYXQiOjE3OTk5OTk5OTUsImV4cCI6MTgwMDAwMDA1NSwianRpIjoiZDFlMmYzYTQtYjVjNi00ZDdlLThmOWEtMGIxYzJkM2U0ZjVhIiwidmVyIjoxfQ",
+          "l0lmwXzQVmDp0P0oa-IGIinYxIgmL4iOlQZAsHKKf5r96UV80IwPxHXxTi67LLEw4BAcO_PNjbk_pOitXMUODA"
+        ],
+        "route_capability": "commercial_core:attention_read",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": null
+      },
+      "expect": {
+        "result": "accept"
+      }
+    },
+    {
+      "name": "valid_lifetime_exactly_max",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "eyJhbGciOiJFZERTQSIsInR5cCI6InNpZS10ZW5hbnQrand0Iiwia2lkIjoidGVzdC1rMSJ9",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiNmYxYzJkNGUtMWEyYi00YzNkLThlOWYtMGExYjJjM2Q0ZTVmIiwic3ViIjoiM2IyYTFjMGQtOWU4Zi00ZDdjLWE2YjUtYzRkM2UyZjFhMGI5IiwiYWN0IjoiaHVtYW4iLCJwZXJtIjoiaW50ZWxsaWdlbmNlOnJlYWQiLCJjYXAiOiJjb21tZXJjaWFsX2NvcmU6YXR0ZW50aW9uX3JlYWQiLCJpYXQiOjE3OTk5OTk5NzAsImV4cCI6MTgwMDAwMDAzMCwianRpIjoiZDFlMmYzYTQtYjVjNi00ZDdlLThmOWEtMGIxYzJkM2U0ZjVhIiwicmlkIjoicmVxLTAwMDEiLCJ2ZXIiOjF9",
+          "tk1RqGf9rZmrwrm6daDgK8zUMOLfyaAK19f3qsjKzUx2oEqsAkwmJZaMmSeaLyFXycU-N1PC-blSxqc7tGHLCQ"
+        ],
+        "route_capability": "commercial_core:attention_read",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": null
+      },
+      "expect": {
+        "result": "accept"
+      }
+    },
+    {
+      "name": "valid_iat_at_skew_limit",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "eyJhbGciOiJFZERTQSIsInR5cCI6InNpZS10ZW5hbnQrand0Iiwia2lkIjoidGVzdC1rMSJ9",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiNmYxYzJkNGUtMWEyYi00YzNkLThlOWYtMGExYjJjM2Q0ZTVmIiwic3ViIjoiM2IyYTFjMGQtOWU4Zi00ZDdjLWE2YjUtYzRkM2UyZjFhMGI5IiwiYWN0IjoiaHVtYW4iLCJwZXJtIjoiaW50ZWxsaWdlbmNlOnJlYWQiLCJjYXAiOiJjb21tZXJjaWFsX2NvcmU6YXR0ZW50aW9uX3JlYWQiLCJpYXQiOjE4MDAwMDAwMTUsImV4cCI6MTgwMDAwMDA3NSwianRpIjoiZDFlMmYzYTQtYjVjNi00ZDdlLThmOWEtMGIxYzJkM2U0ZjVhIiwicmlkIjoicmVxLTAwMDEiLCJ2ZXIiOjF9",
+          "2JQEfkFwNbcVOQFzw5ag4jKdSBKs4UjcJt96APYbwDMfay_Ydmzpo2O-42rf9tGzUnKpPWErRKZMOxSo9c9dDQ"
+        ],
+        "route_capability": "commercial_core:attention_read",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": null
+      },
+      "expect": {
+        "result": "accept"
+      }
+    },
+    {
+      "name": "valid_exp_just_inside_skew",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "eyJhbGciOiJFZERTQSIsInR5cCI6InNpZS10ZW5hbnQrand0Iiwia2lkIjoidGVzdC1rMSJ9",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiNmYxYzJkNGUtMWEyYi00YzNkLThlOWYtMGExYjJjM2Q0ZTVmIiwic3ViIjoiM2IyYTFjMGQtOWU4Zi00ZDdjLWE2YjUtYzRkM2UyZjFhMGI5IiwiYWN0IjoiaHVtYW4iLCJwZXJtIjoiaW50ZWxsaWdlbmNlOnJlYWQiLCJjYXAiOiJjb21tZXJjaWFsX2NvcmU6YXR0ZW50aW9uX3JlYWQiLCJpYXQiOjE3OTk5OTk5MjYsImV4cCI6MTc5OTk5OTk4NiwianRpIjoiZDFlMmYzYTQtYjVjNi00ZDdlLThmOWEtMGIxYzJkM2U0ZjVhIiwicmlkIjoicmVxLTAwMDEiLCJ2ZXIiOjF9",
+          "OHcJN2g2hR0EAHNf1z7PnoFqdCHwKjZ8_P-g7XqFkvvyNDe0wyqV_LjdLJqOtPFy_9qsjU5xDuu659vP87xXBw"
+        ],
+        "route_capability": "commercial_core:attention_read",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": null
+      },
+      "expect": {
+        "result": "accept"
+      }
+    },
+    {
+      "name": "valid_body_organization_matches",
+      "services": [
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "eyJhbGciOiJFZERTQSIsInR5cCI6InNpZS10ZW5hbnQrand0Iiwia2lkIjoidGVzdC1rMSJ9",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiNmYxYzJkNGUtMWEyYi00YzNkLThlOWYtMGExYjJjM2Q0ZTVmIiwic3ViIjoiM2IyYTFjMGQtOWU4Zi00ZDdjLWE2YjUtYzRkM2UyZjFhMGI5IiwiYWN0IjoiaHVtYW4iLCJwZXJtIjoiaW50ZWxsaWdlbmNlOnJlYWQiLCJjYXAiOiJjb21tZXJjaWFsX2NvcmU6YXR0ZW50aW9uX3JlYWQiLCJpYXQiOjE3OTk5OTk5OTUsImV4cCI6MTgwMDAwMDA1NSwianRpIjoiZDFlMmYzYTQtYjVjNi00ZDdlLThmOWEtMGIxYzJkM2U0ZjVhIiwicmlkIjoicmVxLTAwMDEiLCJ2ZXIiOjF9",
+          "h3pc80rRePzz2C7St1ba3S_6r0M4viYFfOiiUERDMUT5cRn5pidSy0ROu0upmRM9X1PoNu2VLlm-ARJsDRJgAA"
+        ],
+        "route_capability": "commercial_core:attention_read",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f"
+      },
+      "expect": {
+        "result": "accept"
+      }
+    },
+    {
+      "name": "malformed_two_segments",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "eyJhbGciOiJFZERTQSIsInR5cCI6InNpZS10ZW5hbnQrand0Iiwia2lkIjoidGVzdC1rMSJ9",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiNmYxYzJkNGUtMWEyYi00YzNkLThlOWYtMGExYjJjM2Q0ZTVmIiwic3ViIjoiM2IyYTFjMGQtOWU4Zi00ZDdjLWE2YjUtYzRkM2UyZjFhMGI5IiwiYWN0IjoiaHVtYW4iLCJwZXJtIjoiaW50ZWxsaWdlbmNlOnJlYWQiLCJjYXAiOiJjb21tZXJjaWFsX2NvcmU6YXR0ZW50aW9uX3JlYWQiLCJpYXQiOjE3OTk5OTk5OTUsImV4cCI6MTgwMDAwMDA1NSwianRpIjoiZDFlMmYzYTQtYjVjNi00ZDdlLThmOWEtMGIxYzJkM2U0ZjVhIiwicmlkIjoicmVxLTAwMDEiLCJ2ZXIiOjF9"
+        ],
+        "route_capability": "commercial_core:attention_read",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": null
+      },
+      "expect": {
+        "result": "reject",
+        "status": 401,
+        "error_code": "TENANT_ASSERTION_INVALID",
+        "reason": "malformed"
+      }
+    },
+    {
+      "name": "malformed_four_segments",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "eyJhbGciOiJFZERTQSIsInR5cCI6InNpZS10ZW5hbnQrand0Iiwia2lkIjoidGVzdC1rMSJ9",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiNmYxYzJkNGUtMWEyYi00YzNkLThlOWYtMGExYjJjM2Q0ZTVmIiwic3ViIjoiM2IyYTFjMGQtOWU4Zi00ZDdjLWE2YjUtYzRkM2UyZjFhMGI5IiwiYWN0IjoiaHVtYW4iLCJwZXJtIjoiaW50ZWxsaWdlbmNlOnJlYWQiLCJjYXAiOiJjb21tZXJjaWFsX2NvcmU6YXR0ZW50aW9uX3JlYWQiLCJpYXQiOjE3OTk5OTk5OTUsImV4cCI6MTgwMDAwMDA1NSwianRpIjoiZDFlMmYzYTQtYjVjNi00ZDdlLThmOWEtMGIxYzJkM2U0ZjVhIiwicmlkIjoicmVxLTAwMDEiLCJ2ZXIiOjF9",
+          "h3pc80rRePzz2C7St1ba3S_6r0M4viYFfOiiUERDMUT5cRn5pidSy0ROu0upmRM9X1PoNu2VLlm-ARJsDRJgAA",
+          "AAAA"
+        ],
+        "route_capability": "commercial_core:attention_read",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": null
+      },
+      "expect": {
+        "result": "reject",
+        "status": 401,
+        "error_code": "TENANT_ASSERTION_INVALID",
+        "reason": "malformed"
+      }
+    },
+    {
+      "name": "malformed_header_not_base64url",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "!!!",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiNmYxYzJkNGUtMWEyYi00YzNkLThlOWYtMGExYjJjM2Q0ZTVmIiwic3ViIjoiM2IyYTFjMGQtOWU4Zi00ZDdjLWE2YjUtYzRkM2UyZjFhMGI5IiwiYWN0IjoiaHVtYW4iLCJwZXJtIjoiaW50ZWxsaWdlbmNlOnJlYWQiLCJjYXAiOiJjb21tZXJjaWFsX2NvcmU6YXR0ZW50aW9uX3JlYWQiLCJpYXQiOjE3OTk5OTk5OTUsImV4cCI6MTgwMDAwMDA1NSwianRpIjoiZDFlMmYzYTQtYjVjNi00ZDdlLThmOWEtMGIxYzJkM2U0ZjVhIiwicmlkIjoicmVxLTAwMDEiLCJ2ZXIiOjF9",
+          "h3pc80rRePzz2C7St1ba3S_6r0M4viYFfOiiUERDMUT5cRn5pidSy0ROu0upmRM9X1PoNu2VLlm-ARJsDRJgAA"
+        ],
+        "route_capability": "commercial_core:attention_read",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": null
+      },
+      "expect": {
+        "result": "reject",
+        "status": 401,
+        "error_code": "TENANT_ASSERTION_INVALID",
+        "reason": "malformed"
+      }
+    },
+    {
+      "name": "malformed_header_not_json",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "bm90IGpzb24",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiNmYxYzJkNGUtMWEyYi00YzNkLThlOWYtMGExYjJjM2Q0ZTVmIiwic3ViIjoiM2IyYTFjMGQtOWU4Zi00ZDdjLWE2YjUtYzRkM2UyZjFhMGI5IiwiYWN0IjoiaHVtYW4iLCJwZXJtIjoiaW50ZWxsaWdlbmNlOnJlYWQiLCJjYXAiOiJjb21tZXJjaWFsX2NvcmU6YXR0ZW50aW9uX3JlYWQiLCJpYXQiOjE3OTk5OTk5OTUsImV4cCI6MTgwMDAwMDA1NSwianRpIjoiZDFlMmYzYTQtYjVjNi00ZDdlLThmOWEtMGIxYzJkM2U0ZjVhIiwicmlkIjoicmVxLTAwMDEiLCJ2ZXIiOjF9",
+          "h3pc80rRePzz2C7St1ba3S_6r0M4viYFfOiiUERDMUT5cRn5pidSy0ROu0upmRM9X1PoNu2VLlm-ARJsDRJgAA"
+        ],
+        "route_capability": "commercial_core:attention_read",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": null
+      },
+      "expect": {
+        "result": "reject",
+        "status": 401,
+        "error_code": "TENANT_ASSERTION_INVALID",
+        "reason": "malformed"
+      }
+    },
+    {
+      "name": "oversize_token",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "eyJhbGciOiJFZERTQSIsInR5cCI6InNpZS10ZW5hbnQrand0Iiwia2lkIjoidGVzdC1rMSJ9",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiNmYxYzJkNGUtMWEyYi00YzNkLThlOWYtMGExYjJjM2Q0ZTVmIiwic3ViIjoiM2IyYTFjMGQtOWU4Zi00ZDdjLWE2YjUtYzRkM2UyZjFhMGI5IiwiYWN0IjoiaHVtYW4iLCJwZXJtIjoiaW50ZWxsaWdlbmNlOnJlYWQiLCJjYXAiOiJjb21tZXJjaWFsX2NvcmU6YXR0ZW50aW9uX3JlYWQiLCJpYXQiOjE3OTk5OTk5OTUsImV4cCI6MTgwMDAwMDA1NSwianRpIjoiZDFlMmYzYTQtYjVjNi00ZDdlLThmOWEtMGIxYzJkM2U0ZjVhIiwicmlkIjoicmVxLTAwMDEiLCJ2ZXIiOjF9",
+          "h3pc80rRePzz2C7St1ba3S_6r0M4viYFfOiiUERDMUT5cRn5pidSy0ROu0upmRM9X1PoNu2VLlm-ARJsDRJgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        ],
+        "route_capability": "commercial_core:attention_read",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": null
+      },
+      "expect": {
+        "result": "reject",
+        "status": 401,
+        "error_code": "TENANT_ASSERTION_INVALID",
+        "reason": "oversize"
+      }
+    },
+    {
+      "name": "empty_token",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          ""
+        ],
+        "route_capability": "commercial_core:attention_read",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": null
+      },
+      "expect": {
+        "result": "reject",
+        "status": 401,
+        "error_code": "TENANT_ASSERTION_INVALID",
+        "reason": "malformed"
+      }
+    },
+    {
+      "name": "typ_is_plain_jwt",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6InRlc3QtazEifQ",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiNmYxYzJkNGUtMWEyYi00YzNkLThlOWYtMGExYjJjM2Q0ZTVmIiwic3ViIjoiM2IyYTFjMGQtOWU4Zi00ZDdjLWE2YjUtYzRkM2UyZjFhMGI5IiwiYWN0IjoiaHVtYW4iLCJwZXJtIjoiaW50ZWxsaWdlbmNlOnJlYWQiLCJjYXAiOiJjb21tZXJjaWFsX2NvcmU6YXR0ZW50aW9uX3JlYWQiLCJpYXQiOjE3OTk5OTk5OTUsImV4cCI6MTgwMDAwMDA1NSwianRpIjoiZDFlMmYzYTQtYjVjNi00ZDdlLThmOWEtMGIxYzJkM2U0ZjVhIiwicmlkIjoicmVxLTAwMDEiLCJ2ZXIiOjF9",
+          "TEG3zjdNRbOHFymOLxt9VGNSZnEkaKkq3MGEk0z06jUziW6D7dMFiaNof9CnbxX5cF1VOLM8ev5Cb8L8wf-MDA"
+        ],
+        "route_capability": "commercial_core:attention_read",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": null
+      },
+      "expect": {
+        "result": "reject",
+        "status": 401,
+        "error_code": "TENANT_ASSERTION_INVALID",
+        "reason": "bad_header"
+      }
+    },
+    {
+      "name": "typ_missing",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "eyJhbGciOiJFZERTQSIsImtpZCI6InRlc3QtazEifQ",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiNmYxYzJkNGUtMWEyYi00YzNkLThlOWYtMGExYjJjM2Q0ZTVmIiwic3ViIjoiM2IyYTFjMGQtOWU4Zi00ZDdjLWE2YjUtYzRkM2UyZjFhMGI5IiwiYWN0IjoiaHVtYW4iLCJwZXJtIjoiaW50ZWxsaWdlbmNlOnJlYWQiLCJjYXAiOiJjb21tZXJjaWFsX2NvcmU6YXR0ZW50aW9uX3JlYWQiLCJpYXQiOjE3OTk5OTk5OTUsImV4cCI6MTgwMDAwMDA1NSwianRpIjoiZDFlMmYzYTQtYjVjNi00ZDdlLThmOWEtMGIxYzJkM2U0ZjVhIiwicmlkIjoicmVxLTAwMDEiLCJ2ZXIiOjF9",
+          "79VKp4RV8-knjBTxsqS4Bv7d23LnTuVdK-B9UCYikNgnwxyRazsFWgQPebrD6pPZPFMCQ-jNiFQw8E4_dFpRAA"
+        ],
+        "route_capability": "commercial_core:attention_read",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": null
+      },
+      "expect": {
+        "result": "reject",
+        "status": 401,
+        "error_code": "TENANT_ASSERTION_INVALID",
+        "reason": "bad_header"
+      }
+    },
+    {
+      "name": "header_extra_field",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "eyJhbGciOiJFZERTQSIsInR5cCI6InNpZS10ZW5hbnQrand0Iiwia2lkIjoidGVzdC1rMSIsImprdSI6Imh0dHBzOi8vYXR0YWNrZXIudGVzdC9rZXlzIn0",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiNmYxYzJkNGUtMWEyYi00YzNkLThlOWYtMGExYjJjM2Q0ZTVmIiwic3ViIjoiM2IyYTFjMGQtOWU4Zi00ZDdjLWE2YjUtYzRkM2UyZjFhMGI5IiwiYWN0IjoiaHVtYW4iLCJwZXJtIjoiaW50ZWxsaWdlbmNlOnJlYWQiLCJjYXAiOiJjb21tZXJjaWFsX2NvcmU6YXR0ZW50aW9uX3JlYWQiLCJpYXQiOjE3OTk5OTk5OTUsImV4cCI6MTgwMDAwMDA1NSwianRpIjoiZDFlMmYzYTQtYjVjNi00ZDdlLThmOWEtMGIxYzJkM2U0ZjVhIiwicmlkIjoicmVxLTAwMDEiLCJ2ZXIiOjF9",
+          "XHXn_SQS1VkDGGxsAuPEGqqZ0eqmREgENkZtGI0Uj9xtBurrhh8W90fsCZoU3Z7Njf2wVb6M72fqdYcFR5NeCA"
+        ],
+        "route_capability": "commercial_core:attention_read",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": null
+      },
+      "expect": {
+        "result": "reject",
+        "status": 401,
+        "error_code": "TENANT_ASSERTION_INVALID",
+        "reason": "bad_header"
+      }
+    },
+    {
+      "name": "kid_missing",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "eyJhbGciOiJFZERTQSIsInR5cCI6InNpZS10ZW5hbnQrand0In0",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiNmYxYzJkNGUtMWEyYi00YzNkLThlOWYtMGExYjJjM2Q0ZTVmIiwic3ViIjoiM2IyYTFjMGQtOWU4Zi00ZDdjLWE2YjUtYzRkM2UyZjFhMGI5IiwiYWN0IjoiaHVtYW4iLCJwZXJtIjoiaW50ZWxsaWdlbmNlOnJlYWQiLCJjYXAiOiJjb21tZXJjaWFsX2NvcmU6YXR0ZW50aW9uX3JlYWQiLCJpYXQiOjE3OTk5OTk5OTUsImV4cCI6MTgwMDAwMDA1NSwianRpIjoiZDFlMmYzYTQtYjVjNi00ZDdlLThmOWEtMGIxYzJkM2U0ZjVhIiwicmlkIjoicmVxLTAwMDEiLCJ2ZXIiOjF9",
+          "iZkIk7huVOnUU6jGLbG4GynzhdFviEsBCYaHLBGRuzW1xYZ1KLah7JT2tkRxHYcy9UiodeWObycw9e1Oo_QhAw"
+        ],
+        "route_capability": "commercial_core:attention_read",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": null
+      },
+      "expect": {
+        "result": "reject",
+        "status": 401,
+        "error_code": "TENANT_ASSERTION_INVALID",
+        "reason": "bad_header"
+      }
+    },
+    {
+      "name": "alg_none_unsigned",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "eyJhbGciOiJub25lIiwidHlwIjoic2llLXRlbmFudCtqd3QiLCJraWQiOiJ0ZXN0LWsxIn0",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiNmYxYzJkNGUtMWEyYi00YzNkLThlOWYtMGExYjJjM2Q0ZTVmIiwic3ViIjoiM2IyYTFjMGQtOWU4Zi00ZDdjLWE2YjUtYzRkM2UyZjFhMGI5IiwiYWN0IjoiaHVtYW4iLCJwZXJtIjoiaW50ZWxsaWdlbmNlOnJlYWQiLCJjYXAiOiJjb21tZXJjaWFsX2NvcmU6YXR0ZW50aW9uX3JlYWQiLCJpYXQiOjE3OTk5OTk5OTUsImV4cCI6MTgwMDAwMDA1NSwianRpIjoiZDFlMmYzYTQtYjVjNi00ZDdlLThmOWEtMGIxYzJkM2U0ZjVhIiwicmlkIjoicmVxLTAwMDEiLCJ2ZXIiOjF9",
+          ""
+        ],
+        "route_capability": "commercial_core:attention_read",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": null
+      },
+      "expect": {
+        "result": "reject",
+        "status": 401,
+        "error_code": "TENANT_ASSERTION_INVALID",
+        "reason": "bad_alg"
+      }
+    },
+    {
+      "name": "alg_hs256_keyed_with_public_key",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "eyJhbGciOiJIUzI1NiIsInR5cCI6InNpZS10ZW5hbnQrand0Iiwia2lkIjoidGVzdC1rMSJ9",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiNmYxYzJkNGUtMWEyYi00YzNkLThlOWYtMGExYjJjM2Q0ZTVmIiwic3ViIjoiM2IyYTFjMGQtOWU4Zi00ZDdjLWE2YjUtYzRkM2UyZjFhMGI5IiwiYWN0IjoiaHVtYW4iLCJwZXJtIjoiaW50ZWxsaWdlbmNlOnJlYWQiLCJjYXAiOiJjb21tZXJjaWFsX2NvcmU6YXR0ZW50aW9uX3JlYWQiLCJpYXQiOjE3OTk5OTk5OTUsImV4cCI6MTgwMDAwMDA1NSwianRpIjoiZDFlMmYzYTQtYjVjNi00ZDdlLThmOWEtMGIxYzJkM2U0ZjVhIiwicmlkIjoicmVxLTAwMDEiLCJ2ZXIiOjF9",
+          "gND4Xf3Ym4Oq_GRRIdhTT5uI5saHe_XA6cuSpIxe8-c"
+        ],
+        "route_capability": "commercial_core:attention_read",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": null
+      },
+      "expect": {
+        "result": "reject",
+        "status": 401,
+        "error_code": "TENANT_ASSERTION_INVALID",
+        "reason": "bad_alg"
+      }
+    },
+    {
+      "name": "unknown_kid",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "eyJhbGciOiJFZERTQSIsInR5cCI6InNpZS10ZW5hbnQrand0Iiwia2lkIjoidGVzdC11bmtub3duIn0",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiNmYxYzJkNGUtMWEyYi00YzNkLThlOWYtMGExYjJjM2Q0ZTVmIiwic3ViIjoiM2IyYTFjMGQtOWU4Zi00ZDdjLWE2YjUtYzRkM2UyZjFhMGI5IiwiYWN0IjoiaHVtYW4iLCJwZXJtIjoiaW50ZWxsaWdlbmNlOnJlYWQiLCJjYXAiOiJjb21tZXJjaWFsX2NvcmU6YXR0ZW50aW9uX3JlYWQiLCJpYXQiOjE3OTk5OTk5OTUsImV4cCI6MTgwMDAwMDA1NSwianRpIjoiZDFlMmYzYTQtYjVjNi00ZDdlLThmOWEtMGIxYzJkM2U0ZjVhIiwicmlkIjoicmVxLTAwMDEiLCJ2ZXIiOjF9",
+          "nXZjsFiblPbeq0YTH3Xrdu3ERH-cp1h2D8-3Pn5jV7-hmJuWxrMH0_E2lEsBJjcThYMnDBWoFbw4eQTbFZ9vCg"
+        ],
+        "route_capability": "commercial_core:attention_read",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": null
+      },
+      "expect": {
+        "result": "reject",
+        "status": 401,
+        "error_code": "TENANT_ASSERTION_INVALID",
+        "reason": "unknown_kid"
+      }
+    },
+    {
+      "name": "known_kid_signed_by_other_key",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "eyJhbGciOiJFZERTQSIsInR5cCI6InNpZS10ZW5hbnQrand0Iiwia2lkIjoidGVzdC1rMSJ9",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiNmYxYzJkNGUtMWEyYi00YzNkLThlOWYtMGExYjJjM2Q0ZTVmIiwic3ViIjoiM2IyYTFjMGQtOWU4Zi00ZDdjLWE2YjUtYzRkM2UyZjFhMGI5IiwiYWN0IjoiaHVtYW4iLCJwZXJtIjoiaW50ZWxsaWdlbmNlOnJlYWQiLCJjYXAiOiJjb21tZXJjaWFsX2NvcmU6YXR0ZW50aW9uX3JlYWQiLCJpYXQiOjE3OTk5OTk5OTUsImV4cCI6MTgwMDAwMDA1NSwianRpIjoiZDFlMmYzYTQtYjVjNi00ZDdlLThmOWEtMGIxYzJkM2U0ZjVhIiwicmlkIjoicmVxLTAwMDEiLCJ2ZXIiOjF9",
+          "nl429KvvsnwtArhPfW9k_j9sUXofL7eQKMAYd-uyOoTWBoPRVhQWZAbIcmIWSDsMEc7DA8q_Xm1a1hINhO8SBA"
+        ],
+        "route_capability": "commercial_core:attention_read",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": null
+      },
+      "expect": {
+        "result": "reject",
+        "status": 401,
+        "error_code": "TENANT_ASSERTION_INVALID",
+        "reason": "bad_signature"
+      }
+    },
+    {
+      "name": "payload_swapped_after_signing",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "eyJhbGciOiJFZERTQSIsInR5cCI6InNpZS10ZW5hbnQrand0Iiwia2lkIjoidGVzdC1rMSJ9",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiOWE4YjdjNmQtNWU0Zi00YTNiLTljMmQtMWUwZjlhOGI3YzZkIiwic3ViIjoiM2IyYTFjMGQtOWU4Zi00ZDdjLWE2YjUtYzRkM2UyZjFhMGI5IiwiYWN0IjoiaHVtYW4iLCJwZXJtIjoiaW50ZWxsaWdlbmNlOnJlYWQiLCJjYXAiOiJjb21tZXJjaWFsX2NvcmU6YXR0ZW50aW9uX3JlYWQiLCJpYXQiOjE3OTk5OTk5OTUsImV4cCI6MTgwMDAwMDA1NSwianRpIjoiZDFlMmYzYTQtYjVjNi00ZDdlLThmOWEtMGIxYzJkM2U0ZjVhIiwicmlkIjoicmVxLTAwMDEiLCJ2ZXIiOjF9",
+          "h3pc80rRePzz2C7St1ba3S_6r0M4viYFfOiiUERDMUT5cRn5pidSy0ROu0upmRM9X1PoNu2VLlm-ARJsDRJgAA"
+        ],
+        "route_capability": "commercial_core:attention_read",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": null
+      },
+      "expect": {
+        "result": "reject",
+        "status": 401,
+        "error_code": "TENANT_ASSERTION_INVALID",
+        "reason": "bad_signature"
+      }
+    },
+    {
+      "name": "signature_empty",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "eyJhbGciOiJFZERTQSIsInR5cCI6InNpZS10ZW5hbnQrand0Iiwia2lkIjoidGVzdC1rMSJ9",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiNmYxYzJkNGUtMWEyYi00YzNkLThlOWYtMGExYjJjM2Q0ZTVmIiwic3ViIjoiM2IyYTFjMGQtOWU4Zi00ZDdjLWE2YjUtYzRkM2UyZjFhMGI5IiwiYWN0IjoiaHVtYW4iLCJwZXJtIjoiaW50ZWxsaWdlbmNlOnJlYWQiLCJjYXAiOiJjb21tZXJjaWFsX2NvcmU6YXR0ZW50aW9uX3JlYWQiLCJpYXQiOjE3OTk5OTk5OTUsImV4cCI6MTgwMDAwMDA1NSwianRpIjoiZDFlMmYzYTQtYjVjNi00ZDdlLThmOWEtMGIxYzJkM2U0ZjVhIiwicmlkIjoicmVxLTAwMDEiLCJ2ZXIiOjF9",
+          ""
+        ],
+        "route_capability": "commercial_core:attention_read",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": null
+      },
+      "expect": {
+        "result": "reject",
+        "status": 401,
+        "error_code": "TENANT_ASSERTION_INVALID",
+        "reason": "bad_signature"
+      }
+    },
+    {
+      "name": "wrong_issuer",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "eyJhbGciOiJFZERTQSIsInR5cCI6InNpZS10ZW5hbnQrand0Iiwia2lkIjoidGVzdC1rMSJ9",
+          "eyJpc3MiOiJodHRwczovL290aGVyLnRlc3QiLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiNmYxYzJkNGUtMWEyYi00YzNkLThlOWYtMGExYjJjM2Q0ZTVmIiwic3ViIjoiM2IyYTFjMGQtOWU4Zi00ZDdjLWE2YjUtYzRkM2UyZjFhMGI5IiwiYWN0IjoiaHVtYW4iLCJwZXJtIjoiaW50ZWxsaWdlbmNlOnJlYWQiLCJjYXAiOiJjb21tZXJjaWFsX2NvcmU6YXR0ZW50aW9uX3JlYWQiLCJpYXQiOjE3OTk5OTk5OTUsImV4cCI6MTgwMDAwMDA1NSwianRpIjoiZDFlMmYzYTQtYjVjNi00ZDdlLThmOWEtMGIxYzJkM2U0ZjVhIiwicmlkIjoicmVxLTAwMDEiLCJ2ZXIiOjF9",
+          "JpFzNPjbnkkdrmcY97ydg2nY0Bmv1UDeHjuvK-4a0av3NC4g8JWE7Gb8Mzt-HY615MCO8E_Ob3bsCgqlKiYqBA"
+        ],
+        "route_capability": "commercial_core:attention_read",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": null
+      },
+      "expect": {
+        "result": "reject",
+        "status": 401,
+        "error_code": "TENANT_ASSERTION_INVALID",
+        "reason": "bad_issuer"
+      }
+    },
+    {
+      "name": "wrong_audience",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "eyJhbGciOiJFZERTQSIsInR5cCI6InNpZS10ZW5hbnQrand0Iiwia2lkIjoidGVzdC1rMSJ9",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzb21lLW90aGVyLXNlcnZpY2UiLCJvcmciOiI2ZjFjMmQ0ZS0xYTJiLTRjM2QtOGU5Zi0wYTFiMmMzZDRlNWYiLCJzdWIiOiIzYjJhMWMwZC05ZThmLTRkN2MtYTZiNS1jNGQzZTJmMWEwYjkiLCJhY3QiOiJodW1hbiIsInBlcm0iOiJpbnRlbGxpZ2VuY2U6cmVhZCIsImNhcCI6ImNvbW1lcmNpYWxfY29yZTphdHRlbnRpb25fcmVhZCIsImlhdCI6MTc5OTk5OTk5NSwiZXhwIjoxODAwMDAwMDU1LCJqdGkiOiJkMWUyZjNhNC1iNWM2LTRkN2UtOGY5YS0wYjFjMmQzZTRmNWEiLCJyaWQiOiJyZXEtMDAwMSIsInZlciI6MX0",
+          "22UQHnaDPrMjTRFceN6K71tFzBsik7yDAW9SP0UgQ2azwMaquD4FY0qmAOLwcSeNDwkFkedLG_eKL5nc6d8QDQ"
+        ],
+        "route_capability": "commercial_core:attention_read",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": null
+      },
+      "expect": {
+        "result": "reject",
+        "status": 401,
+        "error_code": "TENANT_ASSERTION_INVALID",
+        "reason": "bad_audience"
+      }
+    },
+    {
+      "name": "expired_at_skew_boundary",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "eyJhbGciOiJFZERTQSIsInR5cCI6InNpZS10ZW5hbnQrand0Iiwia2lkIjoidGVzdC1rMSJ9",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiNmYxYzJkNGUtMWEyYi00YzNkLThlOWYtMGExYjJjM2Q0ZTVmIiwic3ViIjoiM2IyYTFjMGQtOWU4Zi00ZDdjLWE2YjUtYzRkM2UyZjFhMGI5IiwiYWN0IjoiaHVtYW4iLCJwZXJtIjoiaW50ZWxsaWdlbmNlOnJlYWQiLCJjYXAiOiJjb21tZXJjaWFsX2NvcmU6YXR0ZW50aW9uX3JlYWQiLCJpYXQiOjE3OTk5OTk5MjUsImV4cCI6MTc5OTk5OTk4NSwianRpIjoiZDFlMmYzYTQtYjVjNi00ZDdlLThmOWEtMGIxYzJkM2U0ZjVhIiwicmlkIjoicmVxLTAwMDEiLCJ2ZXIiOjF9",
+          "yJPqIjTjpkDU5XIQ1E-wsudnRIzPavcm6hc9V4NwHwOMe5xPJBnh0uJriT8b-hIlL5qsEVoSwZdiDycQLhH4DQ"
+        ],
+        "route_capability": "commercial_core:attention_read",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": null
+      },
+      "expect": {
+        "result": "reject",
+        "status": 401,
+        "error_code": "TENANT_ASSERTION_INVALID",
+        "reason": "expired"
+      }
+    },
+    {
+      "name": "iat_beyond_skew",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "eyJhbGciOiJFZERTQSIsInR5cCI6InNpZS10ZW5hbnQrand0Iiwia2lkIjoidGVzdC1rMSJ9",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiNmYxYzJkNGUtMWEyYi00YzNkLThlOWYtMGExYjJjM2Q0ZTVmIiwic3ViIjoiM2IyYTFjMGQtOWU4Zi00ZDdjLWE2YjUtYzRkM2UyZjFhMGI5IiwiYWN0IjoiaHVtYW4iLCJwZXJtIjoiaW50ZWxsaWdlbmNlOnJlYWQiLCJjYXAiOiJjb21tZXJjaWFsX2NvcmU6YXR0ZW50aW9uX3JlYWQiLCJpYXQiOjE4MDAwMDAwMTYsImV4cCI6MTgwMDAwMDA3NiwianRpIjoiZDFlMmYzYTQtYjVjNi00ZDdlLThmOWEtMGIxYzJkM2U0ZjVhIiwicmlkIjoicmVxLTAwMDEiLCJ2ZXIiOjF9",
+          "Yl3xj8T_ti2LUsZp5djFtmshiiCL_wmnk_TPGCrSmTS7ErQGFBr-WXYw9zE8Go4dM85F1FmzXC6cJIeMml_gBA"
+        ],
+        "route_capability": "commercial_core:attention_read",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": null
+      },
+      "expect": {
+        "result": "reject",
+        "status": 401,
+        "error_code": "TENANT_ASSERTION_INVALID",
+        "reason": "not_yet_valid"
+      }
+    },
+    {
+      "name": "lifetime_over_max",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "eyJhbGciOiJFZERTQSIsInR5cCI6InNpZS10ZW5hbnQrand0Iiwia2lkIjoidGVzdC1rMSJ9",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiNmYxYzJkNGUtMWEyYi00YzNkLThlOWYtMGExYjJjM2Q0ZTVmIiwic3ViIjoiM2IyYTFjMGQtOWU4Zi00ZDdjLWE2YjUtYzRkM2UyZjFhMGI5IiwiYWN0IjoiaHVtYW4iLCJwZXJtIjoiaW50ZWxsaWdlbmNlOnJlYWQiLCJjYXAiOiJjb21tZXJjaWFsX2NvcmU6YXR0ZW50aW9uX3JlYWQiLCJpYXQiOjE3OTk5OTk5OTUsImV4cCI6MTgwMDAwMDA1NiwianRpIjoiZDFlMmYzYTQtYjVjNi00ZDdlLThmOWEtMGIxYzJkM2U0ZjVhIiwicmlkIjoicmVxLTAwMDEiLCJ2ZXIiOjF9",
+          "XlGXv7CDz08SXs90IbvS6CNWZWtILsfJJXeJ8ksOfcZUCY_y0Dl42xua3alZ4JQUJ0IhrSgXn53DALIDU1NwBg"
+        ],
+        "route_capability": "commercial_core:attention_read",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": null
+      },
+      "expect": {
+        "result": "reject",
+        "status": 401,
+        "error_code": "TENANT_ASSERTION_INVALID",
+        "reason": "lifetime_exceeded"
+      }
+    },
+    {
+      "name": "exp_not_after_iat",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "eyJhbGciOiJFZERTQSIsInR5cCI6InNpZS10ZW5hbnQrand0Iiwia2lkIjoidGVzdC1rMSJ9",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiNmYxYzJkNGUtMWEyYi00YzNkLThlOWYtMGExYjJjM2Q0ZTVmIiwic3ViIjoiM2IyYTFjMGQtOWU4Zi00ZDdjLWE2YjUtYzRkM2UyZjFhMGI5IiwiYWN0IjoiaHVtYW4iLCJwZXJtIjoiaW50ZWxsaWdlbmNlOnJlYWQiLCJjYXAiOiJjb21tZXJjaWFsX2NvcmU6YXR0ZW50aW9uX3JlYWQiLCJpYXQiOjE4MDAwMDAwMDAsImV4cCI6MTgwMDAwMDAwMCwianRpIjoiZDFlMmYzYTQtYjVjNi00ZDdlLThmOWEtMGIxYzJkM2U0ZjVhIiwicmlkIjoicmVxLTAwMDEiLCJ2ZXIiOjF9",
+          "-J_6tiqD8foooRvoITThumZ-drOdjJKtSnS4v0n5PBw5l99ga2EzO67VD8mNqmcY2KcGUElJlAtMelXWe3q7Cw"
+        ],
+        "route_capability": "commercial_core:attention_read",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": null
+      },
+      "expect": {
+        "result": "reject",
+        "status": 401,
+        "error_code": "TENANT_ASSERTION_INVALID",
+        "reason": "bad_claims"
+      }
+    },
+    {
+      "name": "version_2",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "eyJhbGciOiJFZERTQSIsInR5cCI6InNpZS10ZW5hbnQrand0Iiwia2lkIjoidGVzdC1rMSJ9",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiNmYxYzJkNGUtMWEyYi00YzNkLThlOWYtMGExYjJjM2Q0ZTVmIiwic3ViIjoiM2IyYTFjMGQtOWU4Zi00ZDdjLWE2YjUtYzRkM2UyZjFhMGI5IiwiYWN0IjoiaHVtYW4iLCJwZXJtIjoiaW50ZWxsaWdlbmNlOnJlYWQiLCJjYXAiOiJjb21tZXJjaWFsX2NvcmU6YXR0ZW50aW9uX3JlYWQiLCJpYXQiOjE3OTk5OTk5OTUsImV4cCI6MTgwMDAwMDA1NSwianRpIjoiZDFlMmYzYTQtYjVjNi00ZDdlLThmOWEtMGIxYzJkM2U0ZjVhIiwicmlkIjoicmVxLTAwMDEiLCJ2ZXIiOjJ9",
+          "IEJaY-s74C1fBARnRxhd9GXT5gLRbafhJp8vz7jleJPlrY60Zj7dDXDF6_IeEJZhANUEjzTRAf_jSG8Uwz4_DA"
+        ],
+        "route_capability": "commercial_core:attention_read",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": null
+      },
+      "expect": {
+        "result": "reject",
+        "status": 401,
+        "error_code": "TENANT_ASSERTION_INVALID",
+        "reason": "bad_version"
+      }
+    },
+    {
+      "name": "version_as_boolean_true",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "eyJhbGciOiJFZERTQSIsInR5cCI6InNpZS10ZW5hbnQrand0Iiwia2lkIjoidGVzdC1rMSJ9",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiNmYxYzJkNGUtMWEyYi00YzNkLThlOWYtMGExYjJjM2Q0ZTVmIiwic3ViIjoiM2IyYTFjMGQtOWU4Zi00ZDdjLWE2YjUtYzRkM2UyZjFhMGI5IiwiYWN0IjoiaHVtYW4iLCJwZXJtIjoiaW50ZWxsaWdlbmNlOnJlYWQiLCJjYXAiOiJjb21tZXJjaWFsX2NvcmU6YXR0ZW50aW9uX3JlYWQiLCJpYXQiOjE3OTk5OTk5OTUsImV4cCI6MTgwMDAwMDA1NSwianRpIjoiZDFlMmYzYTQtYjVjNi00ZDdlLThmOWEtMGIxYzJkM2U0ZjVhIiwicmlkIjoicmVxLTAwMDEiLCJ2ZXIiOnRydWV9",
+          "a_PV8pwzIDApidm2o_koVbo9eTWVLlizRhkri91LVfE5IeKXYV9Fvihabt0CK5GSyZeuFuA1hKSSh6T0bCwxBA"
+        ],
+        "route_capability": "commercial_core:attention_read",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": null
+      },
+      "expect": {
+        "result": "reject",
+        "status": 401,
+        "error_code": "TENANT_ASSERTION_INVALID",
+        "reason": "bad_version"
+      }
+    },
+    {
+      "name": "iat_as_boolean",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "eyJhbGciOiJFZERTQSIsInR5cCI6InNpZS10ZW5hbnQrand0Iiwia2lkIjoidGVzdC1rMSJ9",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiNmYxYzJkNGUtMWEyYi00YzNkLThlOWYtMGExYjJjM2Q0ZTVmIiwic3ViIjoiM2IyYTFjMGQtOWU4Zi00ZDdjLWE2YjUtYzRkM2UyZjFhMGI5IiwiYWN0IjoiaHVtYW4iLCJwZXJtIjoiaW50ZWxsaWdlbmNlOnJlYWQiLCJjYXAiOiJjb21tZXJjaWFsX2NvcmU6YXR0ZW50aW9uX3JlYWQiLCJpYXQiOnRydWUsImV4cCI6MTgwMDAwMDA1NSwianRpIjoiZDFlMmYzYTQtYjVjNi00ZDdlLThmOWEtMGIxYzJkM2U0ZjVhIiwicmlkIjoicmVxLTAwMDEiLCJ2ZXIiOjF9",
+          "xvKuIB4i9xyjCQI3_qF1huL3wUgF6gWXPnole4z-_g9KwhCqGRSA27CEI2HsO9bCwiUIN6PpS-0tvppvtP-xDA"
+        ],
+        "route_capability": "commercial_core:attention_read",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": null
+      },
+      "expect": {
+        "result": "reject",
+        "status": 401,
+        "error_code": "TENANT_ASSERTION_INVALID",
+        "reason": "bad_claims"
+      }
+    },
+    {
+      "name": "claim_missing_jti",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "eyJhbGciOiJFZERTQSIsInR5cCI6InNpZS10ZW5hbnQrand0Iiwia2lkIjoidGVzdC1rMSJ9",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiNmYxYzJkNGUtMWEyYi00YzNkLThlOWYtMGExYjJjM2Q0ZTVmIiwic3ViIjoiM2IyYTFjMGQtOWU4Zi00ZDdjLWE2YjUtYzRkM2UyZjFhMGI5IiwiYWN0IjoiaHVtYW4iLCJwZXJtIjoiaW50ZWxsaWdlbmNlOnJlYWQiLCJjYXAiOiJjb21tZXJjaWFsX2NvcmU6YXR0ZW50aW9uX3JlYWQiLCJpYXQiOjE3OTk5OTk5OTUsImV4cCI6MTgwMDAwMDA1NSwicmlkIjoicmVxLTAwMDEiLCJ2ZXIiOjF9",
+          "7Dv9ezzaSgwWZem50AOkdvaTybnIrcwvTz7dvVf11zzH68_X-f1PP9yFO9UvZgov9vVHOy8qz7pLX9kh1KiiAg"
+        ],
+        "route_capability": "commercial_core:attention_read",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": null
+      },
+      "expect": {
+        "result": "reject",
+        "status": 401,
+        "error_code": "TENANT_ASSERTION_INVALID",
+        "reason": "bad_claims"
+      }
+    },
+    {
+      "name": "claim_extra_email",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "eyJhbGciOiJFZERTQSIsInR5cCI6InNpZS10ZW5hbnQrand0Iiwia2lkIjoidGVzdC1rMSJ9",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiNmYxYzJkNGUtMWEyYi00YzNkLThlOWYtMGExYjJjM2Q0ZTVmIiwic3ViIjoiM2IyYTFjMGQtOWU4Zi00ZDdjLWE2YjUtYzRkM2UyZjFhMGI5IiwiYWN0IjoiaHVtYW4iLCJwZXJtIjoiaW50ZWxsaWdlbmNlOnJlYWQiLCJjYXAiOiJjb21tZXJjaWFsX2NvcmU6YXR0ZW50aW9uX3JlYWQiLCJpYXQiOjE3OTk5OTk5OTUsImV4cCI6MTgwMDAwMDA1NSwianRpIjoiZDFlMmYzYTQtYjVjNi00ZDdlLThmOWEtMGIxYzJkM2U0ZjVhIiwicmlkIjoicmVxLTAwMDEiLCJ2ZXIiOjEsImVtYWlsIjoic29tZW9uZUBleGFtcGxlLnRlc3QifQ",
+          "d5GFz9Y4C7ZE5UN1qCCsrcIQz--Z95soIsFiVE-TXH74Uy_PHkyuF59jOKXdEwSJjrQSJZDHrHRJxFzSMqSpAw"
+        ],
+        "route_capability": "commercial_core:attention_read",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": null
+      },
+      "expect": {
+        "result": "reject",
+        "status": 401,
+        "error_code": "TENANT_ASSERTION_INVALID",
+        "reason": "bad_claims"
+      }
+    },
+    {
+      "name": "jti_not_version_4",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "eyJhbGciOiJFZERTQSIsInR5cCI6InNpZS10ZW5hbnQrand0Iiwia2lkIjoidGVzdC1rMSJ9",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiNmYxYzJkNGUtMWEyYi00YzNkLThlOWYtMGExYjJjM2Q0ZTVmIiwic3ViIjoiM2IyYTFjMGQtOWU4Zi00ZDdjLWE2YjUtYzRkM2UyZjFhMGI5IiwiYWN0IjoiaHVtYW4iLCJwZXJtIjoiaW50ZWxsaWdlbmNlOnJlYWQiLCJjYXAiOiJjb21tZXJjaWFsX2NvcmU6YXR0ZW50aW9uX3JlYWQiLCJpYXQiOjE3OTk5OTk5OTUsImV4cCI6MTgwMDAwMDA1NSwianRpIjoiYTgwOThjMWEtZjg2ZS0xMWRhLWJkMWEtMDAxMTI0NDRiZTFlIiwicmlkIjoicmVxLTAwMDEiLCJ2ZXIiOjF9",
+          "gaRhZYXx2bcV-QTPDoidFG_wdotJ5JVF0IanYbw46xhLvdVPGGZu8R4FjT_OP8z_mFOTn9UoneJZ-y8hb3ZTAw"
+        ],
+        "route_capability": "commercial_core:attention_read",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": null
+      },
+      "expect": {
+        "result": "reject",
+        "status": 401,
+        "error_code": "TENANT_ASSERTION_INVALID",
+        "reason": "bad_claims"
+      }
+    },
+    {
+      "name": "iat_as_string",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "eyJhbGciOiJFZERTQSIsInR5cCI6InNpZS10ZW5hbnQrand0Iiwia2lkIjoidGVzdC1rMSJ9",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiNmYxYzJkNGUtMWEyYi00YzNkLThlOWYtMGExYjJjM2Q0ZTVmIiwic3ViIjoiM2IyYTFjMGQtOWU4Zi00ZDdjLWE2YjUtYzRkM2UyZjFhMGI5IiwiYWN0IjoiaHVtYW4iLCJwZXJtIjoiaW50ZWxsaWdlbmNlOnJlYWQiLCJjYXAiOiJjb21tZXJjaWFsX2NvcmU6YXR0ZW50aW9uX3JlYWQiLCJpYXQiOiIxNzk5OTk5OTk1IiwiZXhwIjoxODAwMDAwMDU1LCJqdGkiOiJkMWUyZjNhNC1iNWM2LTRkN2UtOGY5YS0wYjFjMmQzZTRmNWEiLCJyaWQiOiJyZXEtMDAwMSIsInZlciI6MX0",
+          "PDP2Yn6imjUqJkbsdKL3AK91gKoigbjG4V64GGDplFYkQ9mOLUzixWKXUP0EOJMhPV_ehW7nJZDJ_VUncarMCw"
+        ],
+        "route_capability": "commercial_core:attention_read",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": null
+      },
+      "expect": {
+        "result": "reject",
+        "status": 401,
+        "error_code": "TENANT_ASSERTION_INVALID",
+        "reason": "bad_claims"
+      }
+    },
+    {
+      "name": "org_not_a_uuid",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "eyJhbGciOiJFZERTQSIsInR5cCI6InNpZS10ZW5hbnQrand0Iiwia2lkIjoidGVzdC1rMSJ9",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiYWNtZSIsInN1YiI6IjNiMmExYzBkLTllOGYtNGQ3Yy1hNmI1LWM0ZDNlMmYxYTBiOSIsImFjdCI6Imh1bWFuIiwicGVybSI6ImludGVsbGlnZW5jZTpyZWFkIiwiY2FwIjoiY29tbWVyY2lhbF9jb3JlOmF0dGVudGlvbl9yZWFkIiwiaWF0IjoxNzk5OTk5OTk1LCJleHAiOjE4MDAwMDAwNTUsImp0aSI6ImQxZTJmM2E0LWI1YzYtNGQ3ZS04ZjlhLTBiMWMyZDNlNGY1YSIsInJpZCI6InJlcS0wMDAxIiwidmVyIjoxfQ",
+          "-dXedHbXT14pnfrX0ac-vx5mzfawb6L2o7jvpM_ERC8PAmb9j0EITmnV37rfAWiskVHiah-q9Iwso0qJ-gY0Bw"
+        ],
+        "route_capability": "commercial_core:attention_read",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": null
+      },
+      "expect": {
+        "result": "reject",
+        "status": 401,
+        "error_code": "TENANT_ASSERTION_INVALID",
+        "reason": "bad_claims"
+      }
+    },
+    {
+      "name": "act_unknown",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "eyJhbGciOiJFZERTQSIsInR5cCI6InNpZS10ZW5hbnQrand0Iiwia2lkIjoidGVzdC1rMSJ9",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiNmYxYzJkNGUtMWEyYi00YzNkLThlOWYtMGExYjJjM2Q0ZTVmIiwic3ViIjoiM2IyYTFjMGQtOWU4Zi00ZDdjLWE2YjUtYzRkM2UyZjFhMGI5IiwiYWN0Ijoic2VydmljZSIsInBlcm0iOiJpbnRlbGxpZ2VuY2U6cmVhZCIsImNhcCI6ImNvbW1lcmNpYWxfY29yZTphdHRlbnRpb25fcmVhZCIsImlhdCI6MTc5OTk5OTk5NSwiZXhwIjoxODAwMDAwMDU1LCJqdGkiOiJkMWUyZjNhNC1iNWM2LTRkN2UtOGY5YS0wYjFjMmQzZTRmNWEiLCJyaWQiOiJyZXEtMDAwMSIsInZlciI6MX0",
+          "fy_EfQ4IL-7F0xPorUtwgoPCio1pk1C-juysvKd5J7NMQ6DSMntWs2fRFIMzuu0djhH9h_ZFPVr0yjKehCpADg"
+        ],
+        "route_capability": "commercial_core:attention_read",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": null
+      },
+      "expect": {
+        "result": "reject",
+        "status": 401,
+        "error_code": "TENANT_ASSERTION_INVALID",
+        "reason": "bad_claims"
+      }
+    },
+    {
+      "name": "cap_unknown",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "eyJhbGciOiJFZERTQSIsInR5cCI6InNpZS10ZW5hbnQrand0Iiwia2lkIjoidGVzdC1rMSJ9",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiNmYxYzJkNGUtMWEyYi00YzNkLThlOWYtMGExYjJjM2Q0ZTVmIiwic3ViIjoiM2IyYTFjMGQtOWU4Zi00ZDdjLWE2YjUtYzRkM2UyZjFhMGI5IiwiYWN0IjoiaHVtYW4iLCJwZXJtIjoiaW50ZWxsaWdlbmNlOnJlYWQiLCJjYXAiOiJjb21tZXJjaWFsX2NvcmU6YWRtaW4iLCJpYXQiOjE3OTk5OTk5OTUsImV4cCI6MTgwMDAwMDA1NSwianRpIjoiZDFlMmYzYTQtYjVjNi00ZDdlLThmOWEtMGIxYzJkM2U0ZjVhIiwicmlkIjoicmVxLTAwMDEiLCJ2ZXIiOjF9",
+          "RIGNDDGgOeXjEqX2QxbyBZQWmM8TXphsdZstk7EpR60ZeTAc8ffmLCgqkIJZ1PsX9z9qQZWDC51eArYRKXz2CQ"
+        ],
+        "route_capability": "commercial_core:attention_read",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": null
+      },
+      "expect": {
+        "result": "reject",
+        "status": 401,
+        "error_code": "TENANT_ASSERTION_INVALID",
+        "reason": "bad_claims"
+      }
+    },
+    {
+      "name": "cap_not_granted_by_perm",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "eyJhbGciOiJFZERTQSIsInR5cCI6InNpZS10ZW5hbnQrand0Iiwia2lkIjoidGVzdC1rMSJ9",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiNmYxYzJkNGUtMWEyYi00YzNkLThlOWYtMGExYjJjM2Q0ZTVmIiwic3ViIjoiM2IyYTFjMGQtOWU4Zi00ZDdjLWE2YjUtYzRkM2UyZjFhMGI5IiwiYWN0IjoiaHVtYW4iLCJwZXJtIjoia25vd2xlZGdlOnJlYWQiLCJjYXAiOiJjb21tZXJjaWFsX2NvcmU6YXR0ZW50aW9uX3JlYWQiLCJpYXQiOjE3OTk5OTk5OTUsImV4cCI6MTgwMDAwMDA1NSwianRpIjoiZDFlMmYzYTQtYjVjNi00ZDdlLThmOWEtMGIxYzJkM2U0ZjVhIiwicmlkIjoicmVxLTAwMDEiLCJ2ZXIiOjF9",
+          "PQ4KwRfun3isijDe5oLSjV_A72qiqdyPVpX6Xyo5SGquFq2A3hjqfFi6igFreQr8HRtyYHxlPOVu_HEFPbGEDQ"
+        ],
+        "route_capability": "commercial_core:attention_read",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": null
+      },
+      "expect": {
+        "result": "reject",
+        "status": 401,
+        "error_code": "TENANT_ASSERTION_INVALID",
+        "reason": "bad_claims"
+      }
+    },
+    {
+      "name": "cap_for_another_route",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "eyJhbGciOiJFZERTQSIsInR5cCI6InNpZS10ZW5hbnQrand0Iiwia2lkIjoidGVzdC1rMSJ9",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiNmYxYzJkNGUtMWEyYi00YzNkLThlOWYtMGExYjJjM2Q0ZTVmIiwic3ViIjoiM2IyYTFjMGQtOWU4Zi00ZDdjLWE2YjUtYzRkM2UyZjFhMGI5IiwiYWN0IjoiaHVtYW4iLCJwZXJtIjoiaW50ZWxsaWdlbmNlOnJlYWQiLCJjYXAiOiJjb21tZXJjaWFsX2NvcmU6YXR0ZW50aW9uX3JlYWQiLCJpYXQiOjE3OTk5OTk5OTUsImV4cCI6MTgwMDAwMDA1NSwianRpIjoiZDFlMmYzYTQtYjVjNi00ZDdlLThmOWEtMGIxYzJkM2U0ZjVhIiwicmlkIjoicmVxLTAwMDEiLCJ2ZXIiOjF9",
+          "h3pc80rRePzz2C7St1ba3S_6r0M4viYFfOiiUERDMUT5cRn5pidSy0ROu0upmRM9X1PoNu2VLlm-ARJsDRJgAA"
+        ],
+        "route_capability": "commercial_core:analytics_read",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": null
+      },
+      "expect": {
+        "result": "reject",
+        "status": 403,
+        "error_code": "AUTHORIZATION_FAILURE",
+        "reason": "capability_mismatch"
+      }
+    },
+    {
+      "name": "read_capability_on_write_route",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "eyJhbGciOiJFZERTQSIsInR5cCI6InNpZS10ZW5hbnQrand0Iiwia2lkIjoidGVzdC1rMSJ9",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiNmYxYzJkNGUtMWEyYi00YzNkLThlOWYtMGExYjJjM2Q0ZTVmIiwic3ViIjoiM2IyYTFjMGQtOWU4Zi00ZDdjLWE2YjUtYzRkM2UyZjFhMGI5IiwiYWN0IjoiaHVtYW4iLCJwZXJtIjoiaW50ZWxsaWdlbmNlOnJlYWQiLCJjYXAiOiJjb21tZXJjaWFsX2NvcmU6YXR0ZW50aW9uX3JlYWQiLCJpYXQiOjE3OTk5OTk5OTUsImV4cCI6MTgwMDAwMDA1NSwianRpIjoiZDFlMmYzYTQtYjVjNi00ZDdlLThmOWEtMGIxYzJkM2U0ZjVhIiwicmlkIjoicmVxLTAwMDEiLCJ2ZXIiOjF9",
+          "h3pc80rRePzz2C7St1ba3S_6r0M4viYFfOiiUERDMUT5cRn5pidSy0ROu0upmRM9X1PoNu2VLlm-ARJsDRJgAA"
+        ],
+        "route_capability": "commercial_core:decisions_write",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": null
+      },
+      "expect": {
+        "result": "reject",
+        "status": 403,
+        "error_code": "AUTHORIZATION_FAILURE",
+        "reason": "capability_mismatch"
+      }
+    },
+    {
+      "name": "organization_header_mismatch",
+      "services": [
+        "gateway",
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "eyJhbGciOiJFZERTQSIsInR5cCI6InNpZS10ZW5hbnQrand0Iiwia2lkIjoidGVzdC1rMSJ9",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiNmYxYzJkNGUtMWEyYi00YzNkLThlOWYtMGExYjJjM2Q0ZTVmIiwic3ViIjoiM2IyYTFjMGQtOWU4Zi00ZDdjLWE2YjUtYzRkM2UyZjFhMGI5IiwiYWN0IjoiaHVtYW4iLCJwZXJtIjoiaW50ZWxsaWdlbmNlOnJlYWQiLCJjYXAiOiJjb21tZXJjaWFsX2NvcmU6YXR0ZW50aW9uX3JlYWQiLCJpYXQiOjE3OTk5OTk5OTUsImV4cCI6MTgwMDAwMDA1NSwianRpIjoiZDFlMmYzYTQtYjVjNi00ZDdlLThmOWEtMGIxYzJkM2U0ZjVhIiwicmlkIjoicmVxLTAwMDEiLCJ2ZXIiOjF9",
+          "h3pc80rRePzz2C7St1ba3S_6r0M4viYFfOiiUERDMUT5cRn5pidSy0ROu0upmRM9X1PoNu2VLlm-ARJsDRJgAA"
+        ],
+        "route_capability": "commercial_core:attention_read",
+        "header_org": "9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d",
+        "body_org": null
+      },
+      "expect": {
+        "result": "reject",
+        "status": 403,
+        "error_code": "TENANT_MISMATCH",
+        "reason": "tenant_mismatch"
+      }
+    },
+    {
+      "name": "body_organization_mismatch",
+      "services": [
+        "domain"
+      ],
+      "input": {
+        "token_segments": [
+          "eyJhbGciOiJFZERTQSIsInR5cCI6InNpZS10ZW5hbnQrand0Iiwia2lkIjoidGVzdC1rMSJ9",
+          "eyJpc3MiOiJodHRwczovL3NpZS50ZXN0L3RlbmFudC1hc3NlcnRpb24iLCJhdWQiOiJzaWUtY29tbWVyY2lhbC1jb3JlIiwib3JnIjoiNmYxYzJkNGUtMWEyYi00YzNkLThlOWYtMGExYjJjM2Q0ZTVmIiwic3ViIjoiM2IyYTFjMGQtOWU4Zi00ZDdjLWE2YjUtYzRkM2UyZjFhMGI5IiwiYWN0IjoiaHVtYW4iLCJwZXJtIjoiaW50ZWxsaWdlbmNlOnJlYWQiLCJjYXAiOiJjb21tZXJjaWFsX2NvcmU6YXR0ZW50aW9uX3JlYWQiLCJpYXQiOjE3OTk5OTk5OTUsImV4cCI6MTgwMDAwMDA1NSwianRpIjoiZDFlMmYzYTQtYjVjNi00ZDdlLThmOWEtMGIxYzJkM2U0ZjVhIiwicmlkIjoicmVxLTAwMDEiLCJ2ZXIiOjF9",
+          "h3pc80rRePzz2C7St1ba3S_6r0M4viYFfOiiUERDMUT5cRn5pidSy0ROu0upmRM9X1PoNu2VLlm-ARJsDRJgAA"
+        ],
+        "route_capability": "commercial_core:attention_read",
+        "header_org": "6f1c2d4e-1a2b-4c3d-8e9f-0a1b2c3d4e5f",
+        "body_org": "9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d"
+      },
+      "expect": {
+        "result": "reject",
+        "status": 403,
+        "error_code": "TENANT_MISMATCH",
+        "reason": "tenant_mismatch"
+      }
+    }
+  ]
+}

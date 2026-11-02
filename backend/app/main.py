@@ -12,17 +12,25 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.health import router as health_router
 from app.api.v1.router import api_router
-from app.core.config import settings
+from app.core.config import settings, validate_startup_settings
 from app.core.errors import register_exception_handlers
 from app.core.observability import AccessLogMiddleware
 from app.core.openapi import custom_openapi
 from app.core.request_id import RequestIdMiddleware
 from app.core.request_limits import RequestSizeLimitMiddleware
 
+# Before anything is built: a misconfigured deployment must not serve at
+# all (see validate_startup_settings()'s own docstring).
+validate_startup_settings(settings)
+
+_docs = settings.api_docs_enabled
 app = FastAPI(
     title=settings.APP_NAME,
     version="0.1.0",
     debug=settings.DEBUG,
+    docs_url="/docs" if _docs else None,
+    redoc_url="/redoc" if _docs else None,
+    openapi_url="/openapi.json" if _docs else None,
 )
 app.openapi = lambda: custom_openapi(app)
 

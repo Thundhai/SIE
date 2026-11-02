@@ -1,37 +1,60 @@
-title = "SIE gitleaks allowlist"
+title = "SIE gitleaks configuration"
 
-# Roadmap Phase 1: this repository's history carries exactly five
-# distinct gitleaks matches (nine occurrences across commits, as the
-# same lines moved through history) — all confirmed false positives in
-# the project's own security audit, none a real credential. Listed
-# individually, by exact secret value, so the gitleaks CI job added
-# alongside this file (.github/workflows/ci.yml's security-scan job)
-# scans real history without permanently failing on these five already-
-# investigated, harmless strings. A genuinely new secret with a
-# different value is still caught — this allowlist matches these exact
-# literal strings only, never a pattern broad enough to hide a real one.
+# gitleaks' default rules, plus five allowlisted false positives.
+#
+# `useDefault = true` is required: a config file that defines no rules of
+# its own and does not extend the defaults has no rules at all, and every
+# scan using it passes no matter what is committed.
+#
+# This repository's history carries exactly five distinct default-rule
+# matches (ten occurrences across commits, as the same lines moved
+# through history) -- all confirmed false positives in the project's own
+# security audits (most recently 2026-10-27), none a real credential.
+# Each allowlist below is attached to the one rule that reports it and
+# allows one exact value in one file: `condition = "AND"` requires both
+# the path and the secret to match, and every regex is anchored. The same
+# string in another file, or a real key that merely contains it, is still
+# reported.
 
-[allowlist]
-regexes = [
-  # src/views/APIIntegrationsView.tsx — a literal, user-facing example
-  # curl command shown in the API Integrations documentation view
-  # before the human ever supplies a real key. Never a real credential.
-  '''YOUR_API_KEY_NOT_CONFIGURED''',
-  # Same view, same example-curl-command purpose — an obviously fake
-  # placeholder key shown as sample output, not a provisioned credential.
-  '''sie_live_9f823b1a''',
+[extend]
+useDefault = true
 
-  # backend/tests/test_risk_assessment_report.py — a test fixture
-  # constant (an ontology concept_key used to exercise deprecation
-  # handling), not a secret of any kind.
-  '''M28_DEPRECATION_TEST''',
+[[rules]]
+id = "curl-auth-header"
 
-  # backend/docs/REAL_ENTERPRISE_DATASET_EVALUATION_REPORT.json — a
-  # UUID used as a governing-standard identifier ("SECRETARIAT") inside
-  # a generated evaluation report, not a credential.
-  '''d7ab218f-8064-4e49-b809-5237139f8c76''',
+[[rules.allowlists]]
+# The example curl command in the API Integrations view:
+# - YOUR_API_KEY_NOT_CONFIGURED: the placeholder shown before a real key
+#   is supplied;
+# - sie_live_9f823b1a: a mock key shown (truncated) as sample output.
+#   SIE issues `secrets.token_urlsafe()` secrets with no `sie_live_`
+#   prefix, so this is not a format the backend can produce.
+description = "API Integrations view: example curl placeholders"
+condition = "AND"
+paths = ['''(^|/)src/views/APIIntegrationsView\.tsx$''']
+regexes = ['''^YOUR_API_KEY_NOT_CONFIGURED$''', '''^sie_live_9f823b1a$''']
 
-  # src/views/GovernanceView.tsx — a mock IoT sensor/device identifier
-  # in sample governance data, not a secret.
-  '''IOT-GAS-SNIF-B104''',
-]
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+# An ontology concept_key used as a test fixture for deprecation handling.
+description = "Risk assessment report test: concept_key fixture"
+condition = "AND"
+paths = ['''(^|/)backend/tests/test_risk_assessment_report\.py$''']
+regexes = ['''^M28_DEPRECATION_TEST$''']
+
+[[rules.allowlists]]
+# An entity identifier (UUID) in a generated evaluation report. The file
+# is no longer on main; this entry covers its history.
+description = "Dataset evaluation report: entity UUID"
+condition = "AND"
+paths = ['''(^|/)backend/docs/REAL_ENTERPRISE_DATASET_EVALUATION_REPORT\.json$''']
+regexes = ['''^d7ab218f-8064-4e49-b809-5237139f8c76$''']
+
+[[rules.allowlists]]
+# A mock IoT sensor identifier in sample governance data.
+description = "Governance view: mock sensor id"
+condition = "AND"
+paths = ['''(^|/)src/views/GovernanceView\.tsx$''']
+regexes = ['''^IOT-GAS-SNIF-B104$''']
