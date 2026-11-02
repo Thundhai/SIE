@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from typing import NoReturn, Protocol
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -124,6 +125,7 @@ class LinkRejection:
     TARGET_PLATFORM_ADMIN = "target_is_platform_admin"
     TARGET_INACTIVE = "target_user_inactive"
     TARGET_ALREADY_BOUND = "target_already_bound_for_issuer"
+    CONCURRENT_CONFLICT = "concurrent_conflict"
 
 
 def subject_fingerprint(issuer: str, subject: str) -> str:
@@ -151,15 +153,7 @@ class IdentityResolverService:
     def resolve_user(self, db: Session, *, claims: ExternalIdentityClaims) -> User:
         identity = self._get_identity(db, issuer=claims.issuer, subject=claims.subject)
         if identity is not None:
-            if identity.user is None:
-                # Its user link was lost. Never re-attach it by email: an
-                # account-link grant is the recovery path.
-                self._reject(db, claims, LinkRejection.ORPHANED_IDENTITY)
-            self._sync_identity_fields(db, identity, claims)
-            identity.last_authenticated_at = utcnow()
-            db.add(identity)
-            db.commit()
-            return identity.user
+            return self._sign_in_bound(db, identity, claims)
 
         if not settings.OIDC_TRUST_VERIFIED_EMAIL_FOR_LINKING:
             self._reject(db, claims, LinkRejection.NO_GRANT)
@@ -201,9 +195,26 @@ class IdentityResolverService:
             self._reject(db, claims, LinkRejection.TARGET_PLATFORM_ADMIN, user_id=user.id)
         if user.status != "active":
             self._reject(db, claims, LinkRejection.TARGET_INACTIVE, user_id=user.id)
+        # A concurrent request may have bound this exact (issuer, subject)
+        # while this one waited for the lock: if so, it is simply that user.
+        identity = self._get_identity(db, issuer=claims.issuer, subject=claims.subject)
+        if identity is not None:
+            return self._sign_in_bound(db, identity, claims)
         if user_has_identity_for_issuer(db, user_id=user.id, issuer=claims.issuer):
             self._reject(db, claims, LinkRejection.TARGET_ALREADY_BOUND, user_id=user.id)
 
+        try:
+            return self._bind_verified_email(db, claims=claims, user=user)
+        except IntegrityError:
+            # Another request (an account-link redemption, say) bound this
+            # (issuer, subject) first; the unique constraint caught it.
+            db.rollback()
+            identity = self._get_identity(db, issuer=claims.issuer, subject=claims.subject)
+            if identity is not None:
+                return self._sign_in_bound(db, identity, claims)
+            self._reject(db, claims, LinkRejection.CONCURRENT_CONFLICT)
+
+    def _bind_verified_email(self, db: Session, *, claims: ExternalIdentityClaims, user: User) -> User:
         identity = Identity(
             user_id=user.id,
             subject=claims.subject,
@@ -231,6 +242,17 @@ class IdentityResolverService:
         )
         db.commit()
         return user
+
+    def _sign_in_bound(self, db: Session, identity: Identity, claims: ExternalIdentityClaims) -> User:
+        if identity.user is None:
+            # Its user link was lost. Never re-attach it by email: an
+            # account-link grant is the recovery path.
+            self._reject(db, claims, LinkRejection.ORPHANED_IDENTITY)
+        self._sync_identity_fields(db, identity, claims)
+        identity.last_authenticated_at = utcnow()
+        db.add(identity)
+        db.commit()
+        return identity.user
 
     def _reject(
         self,
