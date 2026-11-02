@@ -234,6 +234,10 @@ export function ProductionSessionGate({ children }: { children: ReactNode }) {
         <AccountLinkRedemption
           onLinked={() => {
             setGate({ phase: 'loading' });
+            // A session that was 'ready' before it became unlinked still
+            // holds the old provider's 'resolved' outcome; the new provider
+            // must report its own before the workspace renders.
+            setBootstrapStatus({ status: 'resolving' });
             setBootstrapAttempt((attempt) => attempt + 1);
           }}
           onSignOut={() => {

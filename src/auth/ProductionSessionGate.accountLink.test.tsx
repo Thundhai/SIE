@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../services/api/errors';
@@ -110,5 +110,64 @@ describe('ProductionSessionGate: a sign-in that becomes unlinked mid-session', (
     expect(init.body).toBe(JSON.stringify({ code: CODE }));
     expect(String(url)).not.toContain(CODE);
     expect(signOutLocally).not.toHaveBeenCalled();
+  });
+
+  it('keeps the workspace gated until the new bootstrap resolves after linking', async () => {
+    const memberships = {
+      memberships: [{ organization_id: 'org-1', organization_name: 'Org One', role: 'ORG_ADMIN' }],
+      is_platform_admin: false,
+    };
+    const permissions = {
+      user_id: 'user-1',
+      name: 'Prod User',
+      email: 'prod@example.com',
+      organization_id: 'org-1',
+      organization_name: 'Org One',
+      role: 'ORG_ADMIN',
+      permissions: [],
+      is_platform_admin: false,
+      auth_mode: 'production',
+      identity_provider: 'test-idp',
+    };
+    mockUseOidcSession.mockReturnValue(session('first-token'));
+    vi.mocked(listAuthOrganizations).mockResolvedValue(memberships);
+    vi.mocked(getEffectivePermissions).mockResolvedValue(permissions);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async (_input: RequestInfo | URL, _init?: RequestInit) =>
+          new Response(JSON.stringify({ user_id: 'user-1', kind: 'ACCOUNT_LINK', organization_id: null }), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+      ),
+    );
+
+    const { rerender } = render(tree());
+    expect(await screen.findByText('Authenticated Workspace')).toBeInTheDocument();
+
+    vi.mocked(listAuthOrganizations).mockRejectedValue(new ApiError('not linked', { status: 403 }));
+    mockUseOidcSession.mockReturnValue(session('renewed-token'));
+    await act(async () => {
+      rerender(tree());
+    });
+    fireEvent.change(await screen.findByLabelText('Account-link code'), { target: { value: CODE } });
+    fireEvent.click(screen.getByRole('button', { name: 'Link account' }));
+    await screen.findByText('Your account is linked');
+
+    // The new bootstrap: organizations resolve, the provider's own /auth/me
+    // is still pending.
+    let resolvePermissions!: (value: typeof permissions) => void;
+    vi.mocked(listAuthOrganizations).mockResolvedValue(memberships);
+    vi.mocked(getEffectivePermissions).mockReturnValue(new Promise((resolve) => (resolvePermissions = resolve)));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue to SIE' }));
+
+    await waitFor(() => expect(getEffectivePermissions).toHaveBeenCalled());
+    expect(screen.queryByText('Authenticated Workspace')).toBeNull();
+
+    await act(async () => {
+      resolvePermissions(permissions);
+    });
+    expect(await screen.findByText('Authenticated Workspace')).toBeInTheDocument();
   });
 });
