@@ -81,6 +81,8 @@ describe('InvitationsSection', () => {
     const pendingRow = (await screen.findByText('pending@example.com')).closest('tr') as HTMLElement;
     expect(within(pendingRow).getByText('Pending')).toBeInTheDocument();
     expect(within(pendingRow).getByRole('button', { name: /Resend/ })).toBeInTheDocument();
+    expect(within(pendingRow).getByText('You')).toBeInTheDocument(); // created by the signed-in admin
+    expect(screen.getByText(/to Test Org/)).toBeInTheDocument();
     const acceptedRow = screen.getByText('done@example.com').closest('tr') as HTMLElement;
     expect(within(acceptedRow).getByText('Accepted')).toBeInTheDocument();
     expect(within(acceptedRow).queryByRole('button')).not.toBeInTheDocument();

@@ -182,6 +182,18 @@ class InvitationService:
             rows = [r for r in rows if effective_status(r) == status]
         return rows
 
+    def get(self, db: Session, *, organization_id: uuid.UUID, invitation_id: uuid.UUID) -> IdentityLinkGrant:
+        grant = db.execute(
+            select(IdentityLinkGrant).where(
+                IdentityLinkGrant.id == invitation_id,
+                IdentityLinkGrant.organization_id == organization_id,  # tenant isolation
+                IdentityLinkGrant.kind == GRANT_KIND_INVITATION,
+            )
+        ).scalar_one_or_none()
+        if grant is None:
+            raise InvitationError("invitation_not_found", 404, "Invitation not found.")
+        return grant
+
     def resend(
         self,
         db: Session,

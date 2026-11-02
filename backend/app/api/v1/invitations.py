@@ -5,6 +5,7 @@ path, and only sees that organization's invitations:
 
 * `POST   /organizations/{organization_id}/invitations`: invite (the code is shown once)
 * `GET    /organizations/{organization_id}/invitations[?status=]`: list
+* `GET    /organizations/{organization_id}/invitations/{invitation_id}`: one invitation's status
 * `POST   /organizations/{organization_id}/invitations/{invitation_id}/resend`: new code; the old link dies
 * `POST   /organizations/{organization_id}/invitations/{invitation_id}/revoke`
 
@@ -137,6 +138,19 @@ def list_invitations(
     db: Session = Depends(get_db),
 ) -> list[InvitationRead]:
     return [_read(g) for g in invitation_service.list(db, organization_id=organization_id, status=status_filter)]
+
+
+@router.get("/organizations/{organization_id}/invitations/{invitation_id}", response_model=InvitationRead)
+def get_invitation(
+    organization_id: uuid.UUID,
+    invitation_id: uuid.UUID,
+    context: TenantContext = Depends(require_permission(Permission.USERS_MANAGE)),
+    db: Session = Depends(get_db),
+) -> InvitationRead:
+    try:
+        return _read(invitation_service.get(db, organization_id=organization_id, invitation_id=invitation_id))
+    except InvitationError as exc:
+        raise _error(exc) from exc
 
 
 @router.post(

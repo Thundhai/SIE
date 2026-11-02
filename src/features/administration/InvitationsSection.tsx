@@ -59,6 +59,13 @@ function formatDate(value: string | null): string {
   return value ? new Date(value).toLocaleString() : '—';
 }
 
+/** The member API exposes user IDs, not profiles, so the creator is shown the same way. */
+function creatorLabel(creatorId: string | null, currentUserId: string | undefined): string {
+  if (!creatorId) return 'System';
+  if (creatorId === currentUserId) return 'You';
+  return creatorId.slice(0, 8);
+}
+
 function errorText(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
 }
@@ -144,7 +151,7 @@ export function InvitationsSection({ organizationId }: { organizationId: string 
   return (
     <Section
       title="Invitations"
-      description="Invite people by email. They register with email and password or your organization's single sign-on, and get access only after verifying the invited email."
+      description={`Invite people by email to ${auth.organization?.name ?? 'this organization'}. They register with email and password or your organization's single sign-on, and get access only after verifying the invited email.`}
     >
       <form onSubmit={onSubmit} className="grid gap-3 sm:grid-cols-[2fr_1fr_1fr_auto] sm:items-end" aria-label="Invite a person">
         <Input label="Email" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="off" />
@@ -196,10 +203,10 @@ export function InvitationsSection({ organizationId }: { organizationId: string 
             <EmptyState title="No invitations yet" description="Invitations you send appear here with their status." />
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[720px] text-left text-sm">
+              <table className="w-full min-w-[920px] text-left text-sm">
                 <thead>
                   <tr className="border-b border-border text-xs uppercase tracking-wide text-text-muted">
-                    {['Email', 'Role', 'Status', 'Expires', 'Actions'].map((h) => (
+                    {['Email', 'Role', 'Status', 'Created', 'Created by', 'Expires / accepted', 'Actions'].map((h) => (
                       <th key={h} className="px-3 py-2">
                         {h}
                       </th>
@@ -216,6 +223,8 @@ export function InvitationsSection({ organizationId }: { organizationId: string 
                         <td className="px-3 py-3">
                           <StatusBadge label={STATUS_LABELS[inv.status] ?? inv.status} tone={STATUS_TONES[inv.status] ?? 'neutral'} />
                         </td>
+                        <td className="px-3 py-3">{formatDate(inv.created_at)}</td>
+                        <td className="px-3 py-3">{creatorLabel(inv.created_by_user_id, auth.user?.id)}</td>
                         <td className="px-3 py-3">{inv.status === 'ACCEPTED' ? formatDate(inv.accepted_at) : formatDate(inv.expires_at)}</td>
                         <td className="px-3 py-3">
                           {!closed && (

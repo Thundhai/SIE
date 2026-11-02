@@ -751,3 +751,72 @@ def test_rejections_are_audited_without_secrets(client, db_session, production_a
     flat = repr(row.event_metadata)
     for secret in (code, "secret-subject", "private@example.com"):
         assert secret not in flat
+
+
+# --- Viewing one invitation ------------------------------------------------------------------
+
+
+def test_admin_views_one_invitations_status(client, db_session, production_auth):
+    org, _ = _org_with_admin(db_session)
+    created = _invite(client, org)
+
+    response = client.get(f"{_invitations(org.id)}/{created['invitation']['id']}", headers=_as("admin-sub"))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert (body["status"], body["email"], body["role"]) == ("PENDING", "new.hire@example.com", "HSE_ANALYST")
+    assert created["code"] not in repr(body)
+
+
+def test_viewing_another_organizations_invitation_is_refused(client, db_session, production_auth):
+    org_a, _ = _org_with_admin(db_session, "A", subject="admin-a")
+    org_b, _ = _org_with_admin(db_session, "B", subject="admin-b")
+    b_id = _invite(client, org_b, admin_subject="admin-b")["invitation"]["id"]
+
+    assert client.get(f"{_invitations(org_b.id)}/{b_id}", headers=_as("admin-a")).status_code == 403
+    assert client.get(f"{_invitations(org_a.id)}/{b_id}", headers=_as("admin-a")).status_code == 404
+
+
+# --- Transaction rollback --------------------------------------------------------------------
+
+
+def test_a_failure_during_acceptance_leaves_nothing_behind(
+    client, db_session, production_auth, trusted_issuer, monkeypatch
+):
+    """If anything fails after the user, identity and membership are
+    written but before commit, all of it rolls back and the invitation
+    stays open."""
+    from app.services import invitation_service as module
+
+    org, _ = _org_with_admin(db_session)
+    created = _invite(client, org)
+    real_log = module.audit_service.log
+
+    def failing_log(db, *, action, **kwargs):
+        if action == AuditAction.INVITATION_ACCEPTED:
+            raise RuntimeError("simulated failure before commit")
+        return real_log(db, action=action, **kwargs)
+
+    monkeypatch.setattr(module.audit_service, "log", failing_log)
+
+    with pytest.raises(RuntimeError):
+        client.post(
+            _ACCEPT,
+            json={"token": created["code"]},
+            headers=_as("invitee-sub", email="new.hire@example.com", verified=True),
+        )
+
+    db_session.expire_all()
+    assert db_session.query(User).filter(User.email == "new.hire@example.com").count() == 0
+    assert db_session.query(Identity).filter(Identity.subject == "invitee-sub").count() == 0
+    assert db_session.query(OrganizationMembership).filter_by(organization_id=org.id).count() == 1  # the admin only
+    grant = _grant(db_session, created["invitation"]["id"])
+    assert grant.status == "PENDING" and grant.redeemed_at is None
+
+    monkeypatch.setattr(module.audit_service, "log", real_log)
+    retry = client.post(
+        _ACCEPT,
+        json={"token": created["code"]},
+        headers=_as("invitee-sub", email="new.hire@example.com", verified=True),
+    )
+    assert retry.status_code == 200

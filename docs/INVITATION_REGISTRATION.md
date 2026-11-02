@@ -104,6 +104,7 @@ All routes are under `/api/v1`. Errors use the standard envelope. Invitation ref
 |---|---|---|---|
 | `POST /organizations/{org}/invitations` | `users:manage` in `org`; role permissions ⊆ the inviter's | `{email, role, expires_in_hours?}` (1–720) | 201 `{invitation, code}`, `Cache-Control: no-store` |
 | `GET /organizations/{org}/invitations[?status=]` | `users:manage` in `org` | — | `[Invitation]` (no code, no hash) |
+| `GET /organizations/{org}/invitations/{id}` | `users:manage` in `org` | — | `Invitation` (status, email, role, creator, created, expiry; no code) |
 | `POST /organizations/{org}/invitations/{id}/resend` | `users:manage` in `org` | `{expires_in_hours?}` | `{invitation, code}`. The old code stops working; `issue_count`+1 |
 | `POST /organizations/{org}/invitations/{id}/revoke` | `users:manage` in `org` | — | `Invitation` |
 | `POST /invitations/inspect` | anyone with the code; IP rate-limited | `{token}` | `{status, organization_id, organization_name, role, invited_email, expires_at, methods}` |
@@ -173,6 +174,38 @@ Upgrade and rollback:
 | Platform-administrator protection | Unchanged from PR #69. Invitations can't link a new identity to any existing account. |
 | Open redirect after sign-in | `/callback` follows `state.returnTo` only for same-origin absolute paths. |
 | Audit | `INVITATION_CREATED`, `_RESENT`, `_REVOKED`, `_REGISTRATION_STARTED`, `_ACCEPTED`, `_REJECTED`, plus `IDENTITY_LINKED` and `MEMBER_ADDED`. All are org-scoped and carry no codes, tokens, emails or subjects. |
+
+## Security assessment: the 18 required areas
+
+| # | Area | Assessment |
+|---|---|---|
+| 1 | Authentication bypass | Accept needs a valid Bearer access token, verified as everywhere else (signature, `iss`, `aud`, `exp`, `iat`, `sub`). The dev header and machine credentials are refused. Inspect and start grant nothing. |
+| 2 | Identity spoofing | `(issuer, subject)` from the verified token is the only identity key. The body carries no identity. |
+| 3 | Unverified email claims | Only `email_verified` as the JSON boolean `true`, from an issuer explicitly listed in `OIDC_EMAIL_LINKING_TRUSTED_ISSUERS`, counts. If UserInfo is used, its `sub` must equal the token's. |
+| 4 | Invitation token theft | 256-bit code, only in the URL fragment and request bodies, so it never reaches server logs or the Referer header. `no-store`. Hashed at rest, shown once, never audited. Possession alone isn't enough: a verified matching email or the linked account is also required. |
+| 5 | Replay | Single use under a row lock. Resend replaces the hash. Expiry and revocation are checked on every use. |
+| 6 | Brute force | Per-IP limit on inspect, start and accept (`Retry-After`); 256-bit search space; auto-revoke after `INVITATION_MAX_FAILED_ATTEMPTS` mismatches. |
+| 7 | Cross-tenant access | Administrator routes need `users:manage` in the path's organization; invitation IDs are only looked up together with that organization. |
+| 8 | Privilege escalation | An inviter can grant only roles whose permissions they hold. `platform_role` is never touched. |
+| 9 | Role manipulation | The role comes only from the invitation; the accept body forbids extra fields (422). |
+| 10 | Duplicate accounts | Case-insensitive email check, the `users.email` unique constraint, lower-cased invitations, and one open invitation per organization and email. |
+| 11 | Concurrent acceptance | Invitation, identity and user rows locked; unique constraints as backstop; conflicts become audited 409s (Postgres race tests). |
+| 12 | Membership manipulation | Acceptance only adds a membership. It never changes or overwrites one (`membership_exists`). |
+| 13 | Platform administrators | A new identity can't attach to any existing account, including admins. PR #69's operator-only admin linking is unchanged. |
+| 14 | Audit integrity | The audit row is written in the same transaction as the change it records. Refusals are committed separately, so they survive the rollback. |
+| 15 | Sensitive data exposure | No code, hash, token, email or subject in audit metadata or logs. The code appears only in the one-time creation or resend response. |
+| 16 | Rate-limit bypass | The client IP is the socket peer, or the X-Forwarded-For entry `TRUSTED_PROXY_HOPS` from the right, so a client-supplied header can't change it. The limit is process-local (see limitations). |
+| 17 | CSRF, redirects, sessions | Bearer tokens, not cookies, so no ambient credentials to forge. OIDC state and PKCE via `oidc-client-ts`. `/callback` follows only same-origin `state.returnTo` paths. The pending code is in tab-scoped `sessionStorage`. |
+| 18 | Federation and issuer misconfiguration | One issuer (`OIDC_ISSUER`) is accepted. Email trust is a separate, exact-match allow-list that is empty by default. Users can't pick a provider: the SPA only talks to the configured authority. |
+
+## Extensibility (multiple providers later)
+
+Nothing here assumes a single provider:
+- identities are keyed by `(issuer, subject)`
+- invitations store no issuer
+- email trust is a *set* of issuers
+
+A later phase can add per-organization trusted issuers without changing this schema. Multi-provider trust is out of scope for this PR.
 
 ## Limitations
 
