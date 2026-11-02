@@ -103,18 +103,59 @@ for real or rejected, full stop.
 
 ### 3. Identity resolution — `app/services/identity_service.py`
 
-Unchanged logic, two additions:
+> **Changed 2026-11-02 (security/p0-oidc-account-linking).** Automatic
+> provisioning and email-based account linking are gone. See
+> "Account linking" below.
 
-- `Identity.last_authenticated_at` is now actually set on every resolve
-  (it existed on the model since the earlier milestone but was never
-  written).
-- A brand-new `Identity` (a genuinely new external identity, whether or
-  not it links to a pre-existing `User` by email) is now logged as
-  `AuditAction.IDENTITY_PROVISIONED`.
+`(issuer, subject)` is the only identity key. Email and display name are
+profile attributes on `Identity`, synced on every login, and never decide
+which user a token belongs to.
 
-The `(issuer, subject)` identity key — never email — remains exactly as
-it was: email/display name stay profile attributes on `Identity`,
-synced on every resolve, never the primary key.
+- **A bound identity** (an `Identity` row for the token's issuer and
+  subject, with a user) authenticates as that user, exactly as before.
+  `Identity.last_authenticated_at` is set on every login.
+- **An unknown identity** is refused with 403 and audited as
+  `IDENTITY_LINK_REJECTED`. No `User` or `Identity` row is created. The
+  ways in are an invitation or an account-link grant.
+- **An orphaned identity** (a row whose user link was lost) is refused,
+  and is recovered only through an account-link grant, never by email.
+
+#### Account linking
+
+| Path | Who issues it | What redemption does |
+|---|---|---|
+| Invitation: `POST /api/v1/organizations/{id}/invitations` | Org admin (`users:manage` in that org) | Creates a **new** user with the invited role in that org. Never attaches to an existing account; an email already in use is refused (409). |
+| Account link: `POST /api/v1/identity-links` | Platform admin | Binds the caller's identity to one named existing user. Refused for platform-administrator targets. |
+| Account link for a platform admin: `scripts/create_identity_link_grant.py --allow-platform-admin` | Operator (Render shell) | Same, for a platform-administrator account. The only way to link one. |
+| Redeem: `POST /api/v1/auth/identity-links/redeem` | The person, with their Bearer token | The one route that accepts a verified token whose identity isn't bound yet. |
+
+Codes are 256-bit random values, shown once (`Cache-Control: no-store`),
+stored only as SHA-256 hashes, single-use, and expire after
+`IDENTITY_LINK_GRANT_TTL_HOURS` (default 72). An identity already bound to
+a user is never re-bound (409), and an account that already has an
+identity from the issuer is not given a second one. A refusal does not
+use up the code.
+
+**Verified-email linking (off by default).** It runs only when
+`OIDC_TRUST_VERIFIED_EMAIL_FOR_LINKING=true` **and** the token's exact
+issuer is listed in `OIDC_EMAIL_LINKING_TRUSTED_ISSUERS`. The flag alone
+trusts no issuer. Even then it needs:
+
+- the `email_verified` claim to be the JSON boolean `true`
+- exactly one user with that email (case-insensitive)
+- that user to be active and not a platform administrator
+- that user to have no identity from that issuer yet
+
+Enable it only after the identity provider's email verification and
+sign-up policy are confirmed, and only if the provider puts
+`email_verified` in the **access token**, which is the token this backend
+validates.
+
+**Audit.** `IDENTITY_LINKED` (method `invitation`, `account_link` or
+`verified_email`), `IDENTITY_LINK_REJECTED` (a fixed reason code) and
+`IDENTITY_LINK_GRANT_CREATED`. Metadata holds the issuer and a 16-hex
+SHA-256 fingerprint of issuer and subject. It never holds a token, an
+email, a subject or a code.
 
 ### 4. "Inactive identity" — reusing `User.status`, no new column
 
@@ -183,7 +224,7 @@ Three new `AuditAction` values:
   `kid`, inactive identity). Metadata carries a fixed, human-readable
   reason string — never the token, a header value, or exception
   internals that could carry one.
-- `IDENTITY_PROVISIONED` — a new `Identity` row was created.
+- `IDENTITY_PROVISIONED` — no longer written (2026-11-02); new identities are recorded as `IDENTITY_LINKED`.
 
 ## Explicitly not in this milestone (M20)
 

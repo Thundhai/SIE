@@ -174,30 +174,26 @@ def test_known_identity_authenticates_without_creating_a_duplicate(client, db_se
     assert len(identities) == 1
 
 
-def test_unknown_identity_is_provisioned_but_starts_with_no_organization_access(
-    client, db_session, production_auth
-):
+def test_unknown_identity_is_refused_and_nothing_is_provisioned(client, db_session, production_auth):
+    """An identity no invitation or account link has bound is refused
+    (403), and no User or Identity row is created. See
+    tests/test_oidc_account_linking.py for the ways in."""
     token = make_test_token(subject="brand-new-sub", extra_claims={"email": "new.hire@example.com"})
 
     response = client.get(_ORGS_URL, headers=bearer(token))
 
-    assert response.status_code == 200
-    body = response.json()
-    assert body["memberships"] == []
-    assert body["is_platform_admin"] is False
-    # A User + Identity really were provisioned, auditable as such.
-    identity = (
+    assert response.status_code == 403
+    assert (
         db_session.query(Identity)
         .filter(Identity.issuer == TEST_ISSUER, Identity.subject == "brand-new-sub")
-        .one()
-    )
-    assert identity.user_id is not None
-    provisioned = (
-        db_session.query(AuditLog)
-        .filter(AuditLog.action == AuditAction.IDENTITY_PROVISIONED, AuditLog.resource_id == identity.id)
         .one_or_none()
+        is None
     )
-    assert provisioned is not None
+    rejected = (
+        db_session.query(AuditLog).filter(AuditLog.action == AuditAction.IDENTITY_LINK_REJECTED).one_or_none()
+    )
+    assert rejected is not None
+    assert rejected.event_metadata["reason"] == "unknown_identity_no_grant"
 
 
 def test_inactive_user_identity_is_rejected(client, db_session, production_auth):

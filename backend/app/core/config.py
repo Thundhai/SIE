@@ -7,6 +7,7 @@ module hardcodes secrets or environment-specific values.
 
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 #: APP_ENV values that mean "a real deployment" to
@@ -89,6 +90,21 @@ class Settings(BaseSettings):
     # -- display/filtering only, never the actual trust boundary (that's
     # OIDC_ISSUER) -- see app/models/identity.py.
     OIDC_PROVIDER_LABEL: str = "oidc"
+    # Account linking (app/services/identity_service.py). A token whose
+    # (issuer, subject) is not yet bound to a SIE user is refused unless
+    # it redeems an invitation or an account-link grant
+    # (app/services/identity_link_service.py). Matching an existing user
+    # by email is off by default and needs BOTH of these: the flag, and
+    # the token's exact issuer in the list below. The list never defaults
+    # to "every issuer", so turning the flag on alone trusts nobody. Only
+    # set them once that issuer's email verification and sign-up policy
+    # are confirmed; even then a match needs `email_verified` to be the
+    # JSON boolean true, and never reaches a platform administrator.
+    OIDC_TRUST_VERIFIED_EMAIL_FOR_LINKING: bool = False
+    # Comma-separated exact issuer strings (same spelling as OIDC_ISSUER).
+    OIDC_EMAIL_LINKING_TRUSTED_ISSUERS: str = ""
+    # Lifetime of an invitation or account-link grant, in hours.
+    IDENTITY_LINK_GRANT_TTL_HOURS: int = Field(default=72, ge=1, le=720)
 
     # Browser/CORS access (see app/main.py, cors_allowed_origins_list
     # below, docs/FRONTEND_ARCHITECTURE.md's "Browser integration"
@@ -662,6 +678,12 @@ class Settings(BaseSettings):
         docstring. Blank entries are dropped the same way
         `cors_allowed_origins_list` drops them."""
         return [alg.strip() for alg in self.OIDC_ALGORITHMS.split(",") if alg.strip()]
+
+    @property
+    def oidc_email_linking_trusted_issuers(self) -> frozenset[str]:
+        """`OIDC_EMAIL_LINKING_TRUSTED_ISSUERS` as a set of exact issuer
+        strings; empty unless explicitly configured."""
+        return frozenset(i.strip() for i in self.OIDC_EMAIL_LINKING_TRUSTED_ISSUERS.split(",") if i.strip())
 
     @property
     def is_production(self) -> bool:

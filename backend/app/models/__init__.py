@@ -18,6 +18,7 @@ from app.models.governing_standard import GoverningStandard, OrganizationGoverni
 from app.models.hse_expert_review import HseExpertReview
 from app.models.idempotency_key import IdempotencyKey
 from app.models.identity import Identity
+from app.models.identity_link_grant import IdentityLinkGrant
 from app.models.ingested_file import IngestedFile
 from app.models.ingestion_job import IngestionJob
 from app.models.intelligence_decision import IntelligenceDecision
@@ -73,6 +74,7 @@ __all__ = [
     "HseExpertReview",
     "IdempotencyKey",
     "Identity",
+    "IdentityLinkGrant",
     "IngestedFile",
     "IngestionJob",
     "IntelligenceDecision",
