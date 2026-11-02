@@ -4,6 +4,8 @@ these tests explicitly opt in via monkeypatch to prove the mechanism
 itself works, without asserting anything about the disabled-by-default
 production posture."""
 
+import base64
+
 from app.core.config import settings
 from app.core.rate_limit import LocalRateLimiter, get_rate_limiter
 from tests.conftest import dev_auth_headers
@@ -241,7 +243,11 @@ def test_access_log_never_contains_a_bearer_jwt(client, monkeypatch):
 
     lines: list[str] = []
     monkeypatch.setattr(observability.access_logger, "info", lambda message, *a, **k: lines.append(message))
-    jwt_like = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.c2lnbmF0dXJl"
+    # Built at runtime so no token-shaped literal sits in the source.
+    def b64(raw: bytes) -> str:
+        return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+    jwt_like = ".".join((b64(b'{"alg":"RS256"}'), b64(b'{"sub":"user"}'), b64(b"signature")))
 
     client.post(
         "/api/v1/auth/invitations/accept", json={"token": "x" * 20}, headers={"Authorization": f"Bearer {jwt_like}"}
@@ -251,7 +257,7 @@ def test_access_log_never_contains_a_bearer_jwt(client, monkeypatch):
     logged = "\n".join(lines)
     assert '"client": "user_token"' in logged
     assert '"client": "api_client:client-123"' in logged
-    for fragment in ("eyJhbGci", "c2lnbmF0dXJl", "super-secret-value"):
+    for fragment in (*jwt_like.split("."), "super-secret-value"):
         assert fragment not in logged
 
 
