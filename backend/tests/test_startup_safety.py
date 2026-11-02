@@ -265,3 +265,11 @@ def test_an_https_userinfo_url_starts_in_production():
 
 def test_a_plain_http_userinfo_url_is_allowed_off_a_deployment():
     validate_startup_settings(_settings(APP_ENV="development", OIDC_USERINFO_URL="http://localhost:8080/userinfo"))
+
+
+@pytest.mark.parametrize("app_env", ["staging", "qa", "preview"])
+def test_a_non_https_userinfo_url_is_refused_on_staging(app_env):
+    """Staging isn't a "deployment" for the other checks, but it still sends
+    real bearer tokens: plain HTTP is for local development only."""
+    with pytest.raises(UnsafeConfigurationError, match="OIDC_USERINFO_URL must use https"):
+        validate_startup_settings(_settings(APP_ENV=app_env, OIDC_USERINFO_URL="http://idp.example.com/userinfo"))

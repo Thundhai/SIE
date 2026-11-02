@@ -13,6 +13,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 #: APP_ENV values that mean "a real deployment" to
 #: `validate_startup_settings()` below.
 PRODUCTION_APP_ENVS = frozenset({"production", "prod"})
+#: Environments that may use plain-HTTP dev conveniences (e.g. a local OIDC
+#: provider's UserInfo endpoint). Staging and anything unrecognised may not.
+LOCAL_APP_ENVS = frozenset({"development", "dev", "local", "test", "testing"})
 
 #: The local-development fallback password (see POSTGRES_PASSWORD below).
 _DEFAULT_POSTGRES_PASSWORD = "sie"
@@ -712,6 +715,13 @@ class Settings(BaseSettings):
         return self.APP_ENV.strip().lower() in PRODUCTION_APP_ENVS
 
     @property
+    def allows_plain_http_userinfo(self) -> bool:
+        """Plain http:// OIDC_USERINFO_URL is allowed only for local
+        development and tests: never on a deployment, never on staging or
+        any environment this list doesn't name. A bearer token is sent to it."""
+        return self.APP_ENV.strip().lower() in LOCAL_APP_ENVS and not self.is_deployed
+
+    @property
     def is_deployed(self) -> bool:
         """A real deployment, for the startup safety checks and API docs:
         APP_ENV says production, or the process runs on Render and APP_ENV
@@ -769,7 +779,8 @@ def validate_startup_settings(settings: "Settings") -> None:
     (the first trusts an unauthenticated user-id header, the last returns
     tracebacks), and the database must not be reached with the built-in
     development password, whether assembled or inside DATABASE_URL.
-    OIDC_USERINFO_URL, when set, must be https://.
+    Everywhere except local development and tests: OIDC_USERINFO_URL, when
+    set, must be https://.
 
     Called from `app/main.py` before the app is built, so uvicorn exits
     instead of serving; migrations and scripts that only import settings
@@ -788,8 +799,9 @@ def validate_startup_settings(settings: "Settings") -> None:
             problems.append("DATABASE_URL is unset and POSTGRES_PASSWORD is the development default.")
         if settings.DATABASE_URL and _database_url_password(settings.DATABASE_URL) == _DEFAULT_POSTGRES_PASSWORD:
             problems.append("DATABASE_URL uses the development default password.")
-        if settings.OIDC_USERINFO_URL and not settings.OIDC_USERINFO_URL.strip().lower().startswith("https://"):
-            problems.append("OIDC_USERINFO_URL must use https:// (bearer tokens are sent to it).")
+    userinfo = (settings.OIDC_USERINFO_URL or "").strip().lower()
+    if userinfo and not userinfo.startswith("https://") and not settings.allows_plain_http_userinfo:
+        problems.append("OIDC_USERINFO_URL must use https:// (bearer tokens are sent to it).")
     if problems:
         raise UnsafeConfigurationError(
             f"Refusing to start (APP_ENV={settings.APP_ENV!r}, RENDER={settings.RENDER}): " + " ".join(problems)

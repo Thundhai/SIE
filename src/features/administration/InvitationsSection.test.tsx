@@ -172,6 +172,7 @@ describe('InvitationsSection', () => {
       expect(screen.getByRole('button', { name })).toBeDisabled();
     }
     finish({ invitation: invitation({ issue_count: 2 }), code: 'sie_link_X' });
+    await userEvent.click(await screen.findByRole('button', { name: 'Done' }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Resend invitation to other@example.com' })).toBeEnabled());
   });
 
@@ -188,6 +189,7 @@ describe('InvitationsSection', () => {
     expect(screen.getByRole('button', { name: 'Revoke invitation to pending@example.com' })).toBeDisabled();
     finishCreate({ invitation: invitation({ id: 'inv-9', email: 'new@example.com' }), code: 'sie_link_NEW' });
     expect((await screen.findByTestId('invitation-link')).textContent).toContain('sie_link_NEW');
+    await userEvent.click(screen.getByRole('button', { name: 'Done' }));
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'Resend invitation to pending@example.com' })).toBeEnabled(),
     );
@@ -202,6 +204,24 @@ describe('InvitationsSection', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Resend invitation to pending@example.com' }));
 
     expect(screen.getByRole('button', { name: 'Invite' })).toBeDisabled();
+  });
+
+  it('an undistributed link on screen blocks issuing another until Done', async () => {
+    vi.mocked(listInvitations).mockResolvedValue([invitation()]);
+    vi.mocked(resendInvitation).mockResolvedValue({ invitation: invitation({ issue_count: 2 }), code: 'sie_link_FIRST' });
+
+    renderSection();
+    await userEvent.click(await screen.findByRole('button', { name: 'Resend invitation to pending@example.com' }));
+    expect((await screen.findByTestId('invitation-link')).textContent).toContain('sie_link_FIRST');
+    await userEvent.type(screen.getByLabelText('Email'), 'next@example.com');
+
+    expect(screen.getByRole('button', { name: 'Invite' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Resend invitation to pending@example.com' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Revoke invitation to pending@example.com' })).toBeEnabled();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Done' }));
+    expect(screen.getByRole('button', { name: 'Invite' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Resend invitation to pending@example.com' })).toBeEnabled();
   });
 
   it('does not revoke when the confirmation is declined', async () => {

@@ -827,11 +827,12 @@ def test_userinfo_transport_failures_are_unavailable(monkeypatch, status_code, e
     assert (result.email, result.email_verified, result.source) == (None, None, "userinfo_unavailable")
 
 
+@pytest.mark.parametrize("app_env", ["production", "staging"])
 def test_a_plaintext_userinfo_url_never_receives_the_token_on_a_deployment(
-    client, db_session, production_auth, trusted_issuer, monkeypatch
+    client, db_session, production_auth, trusted_issuer, monkeypatch, app_env
 ):
     monkeypatch.setattr(settings, "OIDC_USERINFO_URL", "http://test-issuer.example.com/userinfo")
-    monkeypatch.setattr(settings, "APP_ENV", "production")
+    monkeypatch.setattr(settings, "APP_ENV", app_env)
     calls = []
     monkeypatch.setattr(verified_email_module.httpx, "get", lambda *a, **k: calls.append(a))
     org, _ = _org_with_admin(db_session)

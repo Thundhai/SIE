@@ -238,6 +238,28 @@ describe('InvitationLandingPage', () => {
     expect(screen.getByText('Second Org')).toBeInTheDocument();
   });
 
+  it('a link change invalidates a pending action at once, even before React re-renders', async () => {
+    const oidc = session({ status: 'unauthenticated', user: null });
+    const second = 'sie_link_secondtoken0987654321';
+    vi.mocked(inspectInvitation).mockImplementation(async (token) =>
+      token === TOKEN ? INVITATION : { ...INVITATION, organization_name: 'Second Org' },
+    );
+    let finishStart: (value: PublicInvitation) => void = () => undefined;
+    vi.mocked(startInvitation).mockReturnValue(new Promise((resolve) => (finishStart = resolve)));
+    window.history.replaceState(null, '', `/invite#token=${TOKEN}`);
+
+    renderAt('/invite');
+    await userEvent.click(await screen.findByRole('button', { name: 'Create an account with email and password' }));
+    window.history.replaceState(null, '', `/invite#token=${second}`);
+    await act(async () => {
+      // Same tick: the start result lands before React commits the change.
+      window.dispatchEvent(new HashChangeEvent('hashchange'));
+      finishStart({ ...INVITATION, status: 'REGISTRATION_STARTED' });
+    });
+
+    expect(oidc.signIn).not.toHaveBeenCalled();
+  });
+
   it('explains that invitations need production sign-in in dev mode', () => {
     vi.stubEnv('MODE', 'test');
     session({ status: 'unauthenticated', user: null });

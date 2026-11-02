@@ -110,6 +110,9 @@ export function InvitationsSection({ organizationId }: { organizationId: string 
   // together would each replace the one link on screen, losing one before
   // it could be copied.
   const anyBusy = submitting || rowBusy !== null;
+  // A link on screen is the only copy of that code: no new link may replace
+  // it until the administrator has copied it and clicked Done.
+  const linkPending = issued !== null;
 
   function showIssued(result: IssuedInvitation) {
     setIssued(result);
@@ -173,7 +176,7 @@ export function InvitationsSection({ organizationId }: { organizationId: string 
           options={INVITABLE_ROLES.map((r) => ({ value: r, label: roleLabel(r) }))}
         />
         <Select label="Expires in" value={expiry} onChange={(e) => setExpiry(e.target.value)} options={EXPIRY_OPTIONS} />
-        <Button type="submit" variant="primary" disabled={anyBusy || !email.trim()}>
+        <Button type="submit" variant="primary" disabled={anyBusy || linkPending || !email.trim()}>
           {submitting ? 'Inviting…' : 'Invite'}
         </Button>
       </form>
@@ -189,6 +192,7 @@ export function InvitationsSection({ organizationId }: { organizationId: string 
           <p className="text-sm font-medium text-text-primary">Invitation link for {issued.invitation.email}</p>
           <p className="mt-1 text-xs text-text-secondary">
             Shown only once. Send it through a trusted channel. It expires {formatDate(issued.invitation.expires_at)}.
+            Copy it and click Done before issuing another link.
           </p>
           <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
             <code className="block min-w-0 flex-1 break-all rounded bg-surface px-2 py-1 font-mono text-xs" data-testid="invitation-link">
@@ -244,7 +248,7 @@ export function InvitationsSection({ organizationId }: { organizationId: string 
                                 type="button"
                                 size="sm"
                                 variant="secondary"
-                                disabled={anyBusy}
+                                disabled={anyBusy || linkPending}
                                 onClick={() => onRowAction(inv, 'resend')}
                                 aria-label={`Resend invitation to ${inv.email}`}
                               >

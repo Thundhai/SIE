@@ -47,13 +47,13 @@ class _Unavailable(Exception):
 
 
 def userinfo_url_is_allowed(url: str) -> bool:
-    """https:// always. Plain http:// only off a deployment (local
-    development against a local provider): a deployment never sends a
-    bearer token, or trusts verification claims, over cleartext."""
+    """https:// always. Plain http:// only in local development and tests
+    (`Settings.allows_plain_http_userinfo`): a deployment or staging never
+    sends a bearer token, or trusts verification claims, over cleartext."""
     lowered = url.strip().lower()
     if lowered.startswith("https://"):
         return True
-    return lowered.startswith("http://") and not settings.is_deployed
+    return lowered.startswith("http://") and settings.allows_plain_http_userinfo
 
 
 def _fetch_userinfo(url: str, access_token: str) -> dict:

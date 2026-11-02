@@ -147,11 +147,15 @@ export function InvitationLandingPage() {
   const [linkVersion, setLinkVersion] = useState(0);
   // The link an in-flight action belongs to: an action started for one link
   // must never redirect or update the page once another link has opened.
+  // Bumped synchronously in the event handler, so a pending action sees the
+  // change even before React re-renders.
   const currentLink = useRef(0);
-  currentLink.current = linkVersion;
 
   useEffect(() => {
-    const onHashChange = () => setLinkVersion((v) => v + 1);
+    const onHashChange = () => {
+      currentLink.current += 1;
+      setLinkVersion((v) => v + 1);
+    };
     window.addEventListener('hashchange', onHashChange);
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
