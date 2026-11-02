@@ -137,3 +137,40 @@ def test_machine_client_rate_limit_is_scoped_to_its_own_client_id(client, db_ses
     assert client.get(url, headers=_bearer(credential_a)).status_code == 429
     assert client.get(url, headers=_bearer(credential_b)).status_code == 501
     get_rate_limiter().reset()
+
+
+def test_local_limiter_prunes_expired_windows(monkeypatch):
+    """Keys from one-off callers (e.g. distinct IPs on the public
+    invitation endpoints) must not accumulate forever."""
+    from app.core import rate_limit
+
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(rate_limit.time, "monotonic", lambda: clock["t"])
+    limiter = rate_limit.LocalRateLimiter()
+    monkeypatch.setattr(limiter, "PRUNE_EVERY", 10)
+
+    for i in range(9):
+        limiter.check(f"ip-{i}", limit=5, window_seconds=60.0)
+    assert limiter.tracked_keys() == 9
+
+    clock["t"] += 61  # every window above has expired
+    limiter.check("fresh", limit=5, window_seconds=60.0)  # 10th check -> sweep
+
+    assert limiter.tracked_keys() == 1
+
+
+def test_local_limiter_is_bounded(monkeypatch):
+    from app.core import rate_limit
+
+    clock = {"t": 0.0}
+    monkeypatch.setattr(rate_limit.time, "monotonic", lambda: clock["t"])
+    limiter = rate_limit.LocalRateLimiter()
+    monkeypatch.setattr(limiter, "MAX_KEYS", 100)
+
+    for i in range(1000):
+        clock["t"] += 0.001  # all still inside their window
+        limiter.check(f"ip-{i}", limit=5, window_seconds=60.0)
+
+    assert limiter.tracked_keys() <= 100
+    # The newest key is still counted.
+    assert limiter.check("ip-999", limit=1, window_seconds=60.0).allowed is False

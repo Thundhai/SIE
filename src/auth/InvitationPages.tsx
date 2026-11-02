@@ -421,6 +421,30 @@ function RefusedInvitation({ reason, onSignInAgain }: { reason: string; onSignIn
           </div>
         </Card>
       );
+    case 'account_inactive':
+      return (
+        <Card title="Your SIE account is not active">
+          <Notice>Your account has been deactivated. Ask your administrator to reactivate it, then open the invitation again.</Notice>
+        </Card>
+      );
+    case 'orphaned_identity_requires_account_link':
+      return (
+        <Card title="Your sign-in needs to be relinked">
+          <Notice>
+            This sign-in was linked to an SIE account that no longer matches it. Ask your administrator for an account-link
+            code to restore access.
+          </Notice>
+        </Card>
+      );
+    case 'concurrent_conflict':
+      return (
+        <Card title="Please try again">
+          <Notice>Your account changed while this invitation was being accepted. Sign in again to finish.</Notice>
+          <Button type="button" variant="primary" className="mt-6 w-full justify-center" onClick={() => onSignInAgain(false)}>
+            Sign in again
+          </Button>
+        </Card>
+      );
     default:
       return (
         <Card title="Registration isn't available for this sign-in">

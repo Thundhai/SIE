@@ -252,3 +252,56 @@ def test_check_constraints_refuse_malformed_grants(pg_session, fields):
     with pytest.raises(IntegrityError):
         pg_session.commit()
     pg_session.rollback()
+
+
+@requires_postgres
+@pytest.mark.parametrize("interleaved", ["resend", "accepted"])
+def test_refusal_side_effects_never_overwrite_a_concurrent_change(pg_session, trusted_issuer, monkeypatch, interleaved):
+    """A refused acceptance rolls back (releasing the row lock) before it
+    records its side effect (here: the mismatch that would auto-revoke).
+    If a resend or an acceptance lands in that gap, the side effect must
+    not apply to the changed invitation."""
+    from sqlalchemy import event
+
+    from app.models.identity_link_grant import IdentityLinkGrant as Grant
+
+    monkeypatch.setattr(settings, "INVITATION_MAX_FAILED_ATTEMPTS", 1)
+    org = make_org(pg_session)
+    admin = make_org_member(pg_session, org.id)
+    code = _invite(pg_session, org, admin, "target@example.com")
+    grant_id = pg_session.query(Grant).filter(Grant.organization_id == org.id).one().id
+    factory = sessionmaker(bind=pg_session.get_bind())
+    session = factory()
+    fired = {"done": False}
+
+    def concurrent_change(sess):
+        if fired["done"]:
+            return
+        fired["done"] = True
+        other = factory()
+        try:
+            if interleaved == "resend":
+                invitation_service.resend(other, organization_id=org.id, invitation_id=grant_id, actor_user_id=admin.id)
+            else:
+                g = other.get(Grant, grant_id)
+                g.status, g.redeemed_at = "ACCEPTED", utcnow()
+                other.commit()
+        finally:
+            other.close()
+
+    event.listen(session, "after_rollback", concurrent_change)
+    try:
+        with pytest.raises(InvitationError) as exc:
+            invitation_service.accept(
+                session, claims=_claims("mismatch"), verified=_verified("someone.else@example.com"), code=code
+            )
+    finally:
+        session.close()
+
+    assert exc.value.reason == "email_mismatch"
+    pg_session.expire_all()
+    grant = pg_session.get(Grant, grant_id)
+    if interleaved == "resend":
+        assert (grant.status, grant.failed_attempts, grant.issue_count) == ("PENDING", 0, 2)
+    else:
+        assert grant.status == "ACCEPTED"

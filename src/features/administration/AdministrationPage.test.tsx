@@ -1,4 +1,5 @@
 import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AuthContext } from '../../auth/AuthContext';
 import type { AuthContextValue } from '../../auth/types';
@@ -10,6 +11,7 @@ vi.mock('../../services/api/organizations', () => ({
 vi.mock('../../services/api/invitations', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../services/api/invitations')>()),
   listInvitations: vi.fn(),
+  createInvitation: vi.fn(),
 }));
 vi.mock('../../services/api/administration', () => ({
   listSites: vi.fn(),
@@ -20,7 +22,7 @@ vi.mock('../../services/api/administration', () => ({
 
 import { getOrganization } from '../../services/api/organizations';
 import { listActiveGoverningStandards, listApiClients, listMembers, listSites } from '../../services/api/administration';
-import { listInvitations } from '../../services/api/invitations';
+import { createInvitation, listInvitations } from '../../services/api/invitations';
 
 const ORGANIZATION = { id: 'org-1', name: 'Test Org', industry: 'manufacturing', country: 'US', status: 'active' };
 
@@ -125,5 +127,41 @@ describe('AdministrationPage', () => {
     expect(screen.getByText('Users & membership')).toBeInTheDocument();
     expect(screen.getByText('Governing standards')).toBeInTheDocument();
     expect(screen.getByText('API clients')).toBeInTheDocument();
+  });
+
+  it('remounts the invitations section when the organization changes, so a one-time link never carries over', async () => {
+    vi.mocked(getOrganization).mockResolvedValue(ORGANIZATION);
+    vi.mocked(listApiClients).mockResolvedValue([]);
+    vi.mocked(createInvitation).mockResolvedValue({
+      invitation: {
+        id: 'inv-1', organization_id: 'org-1', email: 'new@example.com', role: 'VIEWER', status: 'PENDING',
+        created_at: '2026-11-02T00:00:00Z', expires_at: '2026-11-05T00:00:00Z', created_by_user_id: 'u1',
+        registration_started_at: null, verified_at: null, accepted_at: null, revoked_at: null,
+        accepted_user_id: null, issue_count: 1,
+      },
+      code: 'sie_link_ORG1-ONLY',
+    });
+    const { rerender } = renderWithAuth(['users:manage']);
+    await userEvent.type(await screen.findByLabelText('Email'), 'new@example.com');
+    await userEvent.click(screen.getByRole('button', { name: 'Invite' }));
+    expect((await screen.findByTestId('invitation-link')).textContent).toContain('sie_link_ORG1-ONLY');
+
+    const value: AuthContextValue = {
+      isAuthenticated: true,
+      isDevIdentity: true,
+      user: { id: 'u1', name: 'Test User', email: 'u@example.com' },
+      organization: { id: 'org-2', name: 'Other Org' },
+      memberships: [],
+      permissions: ['users:manage'],
+      hasPermission: (permission) => permission === 'users:manage',
+    };
+    rerender(
+      <AuthContext.Provider value={value}>
+        <AdministrationPage />
+      </AuthContext.Provider>,
+    );
+
+    await waitFor(() => expect(listInvitations).toHaveBeenCalledWith('org-2', expect.anything()));
+    expect(screen.queryByTestId('invitation-link')).not.toBeInTheDocument();
   });
 });

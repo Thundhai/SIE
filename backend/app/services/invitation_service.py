@@ -291,6 +291,7 @@ class InvitationService:
                 410,
                 "This invitation has expired.",
                 after=lambda g: setattr(g, "status", STATUS_EXPIRED),
+                expected_hash=grant.token_sha256,
             )
 
         identity = db.execute(
@@ -437,6 +438,7 @@ class InvitationService:
                 403,
                 "This sign-in provider is not trusted to verify email for registration.",
                 after=mark_started,
+                expected_hash=grant.token_sha256,
             )
         if not verified.email:
             self._refuse(
@@ -448,6 +450,7 @@ class InvitationService:
                 403,
                 "Your sign-in did not provide an email address.",
                 after=mark_started,
+                expected_hash=grant.token_sha256,
             )
         if verified.email_verified is not True:
             self._refuse(
@@ -459,6 +462,7 @@ class InvitationService:
                 403,
                 "Verify your email address with your sign-in provider, then sign in again.",
                 after=mark_started,
+                expected_hash=grant.token_sha256,
             )
         if verified.email.strip().lower() != grant.invited_email:
             self._refuse_mismatch(db, claims, grant)
@@ -518,6 +522,7 @@ class InvitationService:
             "This invitation was sent to a different email address.",
             user_id=user_id,
             after=count,
+            expected_hash=grant.token_sha256,
         )
 
     def _refuse(
@@ -532,9 +537,15 @@ class InvitationService:
         *,
         user_id: uuid.UUID | None = None,
         after: Callable[[IdentityLinkGrant], None] | None = None,
+        expected_hash: str | None = None,
     ):
         """Roll back, apply `after` to the grant (a state change that must
-        persist even though the request is refused), audit, raise."""
+        persist even though the request is refused), audit, raise.
+
+        The rollback releases the row lock, so the grant is re-locked and
+        `after` applies only if it still carries the same code
+        (`expected_hash`) and is still open. A resend, revoke or acceptance
+        that landed in between is never overwritten."""
         db.rollback()
         metadata: dict = {"reason": reason}
         if claims is not None:
@@ -542,13 +553,20 @@ class InvitationService:
             metadata["subject_fingerprint"] = subject_fingerprint(claims.issuer, claims.subject)
         if grant_id is not None and after is not None:
             grant = db.execute(
-                select(IdentityLinkGrant).where(IdentityLinkGrant.id == grant_id).with_for_update()
-            ).scalar_one()
-            was_revoked = grant.status == STATUS_REVOKED
-            after(grant)
-            db.add(grant)
-            if grant.status == STATUS_REVOKED and not was_revoked:
-                metadata["auto_revoked"] = True
+                select(IdentityLinkGrant)
+                .where(
+                    IdentityLinkGrant.id == grant_id,
+                    IdentityLinkGrant.token_sha256 == expected_hash,
+                    IdentityLinkGrant.status.in_(OPEN_STATUSES),
+                )
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            ).scalar_one_or_none()
+            if grant is not None:
+                after(grant)
+                db.add(grant)
+                if grant.status == STATUS_REVOKED:
+                    metadata["auto_revoked"] = True
         if grant_id is not None:
             metadata["grant_id"] = str(grant_id)
         audit_service.log(

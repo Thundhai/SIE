@@ -12,9 +12,15 @@ VERIFIED -> ACCEPTED, or EXPIRED / REVOKED) to `identity_link_grants`:
 * A partial unique index: one open invitation per (organization, email).
 * An (organization_id, status) index for the administrator's list.
 
-Additive. Existing rows get `status = 'ACCEPTED'` if already redeemed,
-otherwise `'PENDING'`. Downgrade drops these columns and indexes; it
-loses only lifecycle history, never a user, identity or membership.
+Upgrade: redeemed rows become `ACCEPTED`; unredeemed invitations from
+0037 (issued when the code alone was enough) become `EXPIRED`, which also
+clears any duplicates before the unique index is built. Administrators
+resend any that are still wanted. Account-link grants stay `PENDING`.
+
+Downgrade: every unredeemed invitation and every revoked grant is expired
+first, so 0037 can't revive a withdrawn link or accept an invitation
+without the verified-email checks. Then the columns and indexes are
+dropped. No user, identity or membership is touched in either direction.
 """
 
 from __future__ import annotations
@@ -58,6 +64,12 @@ def upgrade() -> None:
         )
 
     op.execute("UPDATE identity_link_grants SET status = 'ACCEPTED' WHERE redeemed_at IS NOT NULL")
+    # Unredeemed invitations from 0037 were issued when the code alone was
+    # enough to accept. They must not become acceptable under any rule but
+    # the new one, and 0037 allowed duplicates per organization and email
+    # that would break the unique index below. Expire them all; an
+    # administrator resends any that are still wanted.
+    op.execute("UPDATE identity_link_grants SET status = 'EXPIRED' WHERE kind = 'INVITATION' AND redeemed_at IS NULL")
     op.create_index(
         "uq_identity_link_grants_open_invitation",
         "identity_link_grants",
@@ -70,6 +82,15 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # Without the status column, 0037 would treat a revoked invitation as
+    # live again, and would accept outstanding invitations without the
+    # verified-email checks. Expire every unredeemed invitation and every
+    # revoked grant first, so a rollback can't revive a withdrawn link.
+    op.execute(
+        "UPDATE identity_link_grants "
+        "SET expires_at = CASE WHEN expires_at < CURRENT_TIMESTAMP THEN expires_at ELSE CURRENT_TIMESTAMP END "
+        "WHERE redeemed_at IS NULL AND (kind = 'INVITATION' OR status = 'REVOKED')"
+    )
     op.drop_index("ix_identity_link_grants_org_status", table_name="identity_link_grants")
     op.drop_index("uq_identity_link_grants_open_invitation", table_name="identity_link_grants")
     with op.batch_alter_table("identity_link_grants") as batch:

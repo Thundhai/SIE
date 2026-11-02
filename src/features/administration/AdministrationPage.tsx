@@ -78,7 +78,10 @@ export function AdministrationPage() {
       <OrganizationSection organizationId={auth.organization.id} />
       <SitesSection organizationId={auth.organization.id} />
       <MembersSection organizationId={auth.organization.id} />
-      <InvitationsSection organizationId={auth.organization.id} />
+      {/* Keyed by organization: switching organizations remounts it, so a
+          one-time link or an in-flight result never shows under another
+          organization. */}
+      <InvitationsSection key={auth.organization.id} organizationId={auth.organization.id} />
       <GoverningStandardsSection organizationId={auth.organization.id} />
       <ApiClientsSection organizationId={auth.organization.id} />
     </PageContainer>

@@ -60,25 +60,51 @@ class LocalRateLimiter:
     exact request-spacing guarantees.
     """
 
+    #: Expired windows are swept every this many checks, so keys from
+    #: one-off callers (e.g. distinct client IPs on a public endpoint)
+    #: don't accumulate forever.
+    PRUNE_EVERY = 1024
+    #: Hard bound on tracked keys. Past it, the oldest windows are dropped
+    #: first; a dropped key simply starts a fresh window.
+    MAX_KEYS = 50_000
+
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        # key -> (window_start_monotonic, count)
-        self._windows: dict[str, tuple[float, int]] = {}
+        # key -> (window_start_monotonic, count, window_seconds)
+        self._windows: dict[str, tuple[float, int, float]] = {}
+        self._checks = 0
 
     def check(self, key: str, *, limit: int, window_seconds: float) -> RateLimitResult:
         now = time.monotonic()
         with self._lock:
-            window_start, count = self._windows.get(key, (now, 0))
+            self._checks += 1
+            if self._checks % self.PRUNE_EVERY == 0 or len(self._windows) >= self.MAX_KEYS:
+                self._prune(now)
+
+            window_start, count, _ = self._windows.get(key, (now, 0, window_seconds))
             if now - window_start >= window_seconds:
                 window_start, count = now, 0
 
             count += 1
-            self._windows[key] = (window_start, count)
+            self._windows[key] = (window_start, count, window_seconds)
 
             allowed = count <= limit
             remaining = max(0, limit - count)
             reset_seconds = max(0.0, window_seconds - (now - window_start))
             return RateLimitResult(allowed=allowed, limit=limit, remaining=remaining, reset_seconds=reset_seconds)
+
+    def _prune(self, now: float) -> None:
+        """Drop expired windows; if still at the cap, drop the oldest."""
+        self._windows = {k: v for k, v in self._windows.items() if now - v[0] < v[2]}
+        overflow = len(self._windows) - (self.MAX_KEYS - 1)
+        if overflow > 0:
+            for k, _ in sorted(self._windows.items(), key=lambda item: item[1][0])[:overflow]:
+                del self._windows[k]
+
+    def tracked_keys(self) -> int:
+        """How many keys are currently tracked (tests and diagnostics)."""
+        with self._lock:
+            return len(self._windows)
 
     def reset(self) -> None:
         """Test-only convenience — clears all counters. Never called from

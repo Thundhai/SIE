@@ -212,6 +212,23 @@ describe('InvitationCompletePage', () => {
     expect(readPendingInvitation()).toBe(TOKEN);
   });
 
+  it.each([
+    ['account_inactive', 'Your SIE account is not active'],
+    ['orphaned_identity_requires_account_link', 'Your sign-in needs to be relinked'],
+    ['concurrent_conflict', 'Please try again'],
+    ['issuer_not_trusted_for_email', "Registration isn't available for this sign-in"],
+  ])('a %s refusal shows its own guidance', async (reason, title) => {
+    session();
+    storePendingInvitation(TOKEN);
+    vi.mocked(inspectInvitation).mockResolvedValue(INVITATION);
+    vi.mocked(acceptInvitation).mockRejectedValue(rejected(reason));
+
+    renderAt('/invite/complete');
+    await userEvent.click(await screen.findByRole('button', { name: 'Join Acme Safety' }));
+
+    expect(await screen.findByText(title)).toBeInTheDocument();
+  });
+
   it('an invitation revoked meanwhile shows the closed screen and forgets the code', async () => {
     session();
     storePendingInvitation(TOKEN);
