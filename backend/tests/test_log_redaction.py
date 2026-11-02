@@ -284,6 +284,13 @@ def test_a_credential_split_between_template_and_argument_is_scrubbed(captured_r
     ]
 
 
+def test_a_value_starting_with_b_is_fully_redacted():
+    """The bytes-repr prefix (`b'...'`) is only a prefix before a quote."""
+    for value in ("Bxyz123", "bxyz123"):
+        assert redact(f"Authorization: {value}") == f"Authorization: {REDACTED}"
+    assert redact("(b'authorization', b'Bearer abc')") == f"(b'authorization', b'{REDACTED}')"
+
+
 def test_short_credentials_are_scrubbed_too():
     assert redact(f"Basic {_b64(b'u:p')}") == f"Basic {REDACTED}"
     assert redact("upstream said Bearer abc") == f"upstream said Bearer {REDACTED}"
@@ -343,6 +350,25 @@ def test_fields_named_as_credentials_are_redacted_whatever_they_hold(captured_re
     assert records[1].getMessage() == f"svc used {REDACTED}"
     rendered = logging.Formatter("%(message)s %(token)s %(upstream)s").format(extra)
     assert opaque not in rendered
+
+
+def test_quoted_reprs_malformed_templates_camel_case_and_nesting_are_scrubbed(captured_records):
+    logger, records = captured_records
+    opaque = secrets.token_urlsafe(24)
+    basic = base64.b64encode(b"user:" + secrets.token_bytes(12))
+
+    logger.info("Bearer %r", opaque)  # Bearer '...'
+    logger.info("Basic %s", basic)  # Basic b'...'
+    logger.info("Bearer %d", opaque)  # a broken template
+    logger.info("%(meta)s", {"meta": {"token": opaque}})
+    logger.info("context %s", {"session": {"accessToken": opaque}})
+    logger.info("outbound", extra={"accessToken": opaque, "clientSecret": opaque, "apiKey": opaque, "promptTokens": 3})
+
+    for record in records[:5]:
+        message = record.getMessage()  # never raises, so no formatting-error report
+        assert opaque not in message and basic.decode() not in message, message
+    extra = records[5]
+    assert (extra.accessToken, extra.clientSecret, extra.apiKey, extra.promptTokens) == (REDACTED, REDACTED, REDACTED, 3)
 
 
 def test_the_raw_exception_does_not_stay_on_the_record(captured_records):

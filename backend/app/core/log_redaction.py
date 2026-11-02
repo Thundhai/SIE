@@ -62,11 +62,15 @@ REDACTED = "[REDACTED]"
 _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     # The value of an Authorization header, however it is rendered.
     (
-        re.compile(r"""(?i)(\bauthorization['"]?\s*[:=,]\s*b?['"]?)[^'"\r\n]+"""),
+        re.compile(r"""(?i)(\bauthorization['"]?\s*[:=,]\s*(?:b(?=['"]))?['"]?)[^'"\r\n]+"""),
         rf"\1{REDACTED}",
     ),
-    # Bearer / Basic credentials anywhere else, whatever their length.
-    (re.compile(r"(?i)\b(bearer|basic)(\s+)[A-Za-z0-9._~+/=:-]+"), rf"\1\2{REDACTED}"),
+    # Bearer / Basic credentials anywhere else, whatever their length, and
+    # also as a quoted str or bytes repr (`Bearer 'x'`, `Basic b'x'`).
+    (
+        re.compile(r"""(?i)\b(bearer|basic)(\s+)(?:b?(['"])[^'"\r\n]+\3|[A-Za-z0-9._~+/=:-]+)"""),
+        rf"\1\2{REDACTED}",
+    ),
     # JWT-shaped values (JWS and JWE both start with a base64url '{"').
     (re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]*)*"), REDACTED),
     # SIE one-time codes (account links and invitations).
@@ -95,10 +99,12 @@ _TYPED_ARGUMENT_LOGGERS = ("uvicorn.access",)
 # `client_secret`, `password`, `authorization`, `api_key`, `cookie`, ...
 # Deliberately not `*_tokens` / `token_count` (LLM usage metrics) or
 # `*_code` (`error_code`, `status_code`).
+# Names are compared in snake_case, so camelCase (`accessToken`,
+# `clientSecret`, `apiKey`) and kebab-case are recognised too.
 _CREDENTIAL_KEY = re.compile(
-    r"(?i)^(?:.*[_-])?(?:token|secret|password|passwd|authorization|api[_-]?key|credentials?|cookie|"
-    r"set[_-]cookie|session[_-]?id)$"
+    r"^(?:.*_)?(?:token|secret|password|passwd|authorization|api_?key|credentials?|cookie|set_cookie|session_?id)$"
 )
+_CAMEL_BOUNDARY = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 
 
 def redact(text: str) -> str:
@@ -124,7 +130,10 @@ def _redact_value(value: Any) -> Any:
 
 
 def _is_credential_key(key: Any) -> bool:
-    return isinstance(key, str) and _CREDENTIAL_KEY.match(key) is not None
+    if not isinstance(key, str):
+        return False
+    normalised = _CAMEL_BOUNDARY.sub("_", key).replace("-", "_").lower()
+    return _CREDENTIAL_KEY.match(normalised) is not None
 
 
 def _redact_named(key: Any, value: Any, depth: int) -> Any:
@@ -148,21 +157,23 @@ def _redact_structure(value: Any, depth: int = 0) -> Any:
 
 
 def _redact_message(record: logging.LogRecord) -> None:
+    # Key-aware and recursive, so a nested `{"token": ...}` is caught too.
     if isinstance(record.args, Mapping):
-        record.args = {
-            key: REDACTED if _is_credential_key(key) and value not in (None, "", b"") else _redact_value(value)
-            for key, value in record.args.items()
-        }
+        record.args = {key: _redact_named(key, value, 1) for key, value in record.args.items()}
     elif isinstance(record.args, tuple):
-        record.args = tuple(_redact_value(arg) for arg in record.args)
+        record.args = tuple(_redact_structure(arg, 1) for arg in record.args)
 
     if any(record.name == name or record.name.startswith(f"{name}.") for name in _TYPED_ARGUMENT_LOGGERS):
         record.msg = _redact_value(record.msg)
         return
     try:
         rendered = record.getMessage()
-    except Exception:  # noqa: BLE001 - a broken format; logging reports it, with the scrubbed args
-        record.msg = _redact_value(record.msg)
+    except Exception:  # noqa: BLE001 - a broken format ("Bearer %d", token)
+        # Without the template an opaque argument can't be recognised, and
+        # logging's formatting-error report would print it: keep only the
+        # scrubbed template.
+        record.msg = redact(str(record.msg))
+        record.args = None
         return
     scrubbed = redact(rendered)
     if scrubbed != rendered:
