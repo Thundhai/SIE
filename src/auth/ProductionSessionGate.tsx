@@ -4,6 +4,7 @@ import { ErrorState } from '../components/ui/ErrorState';
 import { LoadingState } from '../components/ui/LoadingState';
 import { listAuthOrganizations } from '../services/api/auth';
 import { ApiError } from '../services/api/errors';
+import { AccountLinkRedemption } from './AccountLinkRedemption';
 import { setAccessTokenGetter } from './authToken';
 import { registerSessionInvalidationHandler } from './sessionInvalidation';
 import { readPersistedOrganizationId, resolveActiveOrganization } from './organizationPersistence';
@@ -14,6 +15,7 @@ type GateState =
   | { phase: 'loading' }
   | { phase: 'unauthenticated' }
   | { phase: 'error'; message: string }
+  | { phase: 'not_linked' }
   | { phase: 'organization_setup_required' }
   | { phase: 'ready'; organizationId: string };
 
@@ -78,24 +80,30 @@ export function ProductionSessionGate({ children }: { children: ReactNode }) {
   const oidc = useOidcSession();
   const [gate, setGate] = useState<GateState>({ phase: 'loading' });
   const [bootstrapStatus, setBootstrapStatus] = useState<ProdAuthBootstrapStatus>({ status: 'resolving' });
+  // Bumped after an account-link code is redeemed, to re-run the
+  // bootstrap below with the now-linked sign-in.
+  const [bootstrapAttempt, setBootstrapAttempt] = useState(0);
 
   // Blocker fix: register the production token source as soon as the
   // OIDC layer itself is authenticated — declared, and therefore run by
   // React, *before* the effect below that calls `listAuthOrganizations()`
   // (React runs a given component's own effects in declaration order
-  // within the same commit). Cleanup fires only when `oidc.status`
-  // itself stops being `'authenticated'` (session genuinely ended),
-  // not on every gate-phase transition in between — `ProdAuthProvider`
-  // mounting/unmounting around that same, stable window re-registers
-  // the identical function, never races this one into leaving a still-
-  // valid session with no getter registered.
+  // within the same commit). It also re-registers on every gate-phase
+  // change: `ProdAuthProvider` clears the shared getter when it unmounts,
+  // so leaving 'ready' for a phase that still makes authenticated calls
+  // (an identity that became unlinked mid-session shows 'not_linked',
+  // whose redemption needs the Bearer token) would otherwise leave a
+  // valid session with no getter. React runs every cleanup, the
+  // provider's unmount included, before re-running this effect, so the
+  // getter is always the identical function afterwards. It is cleared for
+  // good only when `oidc.status` stops being 'authenticated'.
   useEffect(() => {
     if (oidc.status !== 'authenticated') {
       return;
     }
     setAccessTokenGetter(oidc.getAccessTokenLive);
     return () => setAccessTokenGetter(null);
-  }, [oidc.status, oidc.getAccessTokenLive]);
+  }, [oidc.status, oidc.getAccessTokenLive, gate.phase]);
 
   // SIE Milestone G3-2: the one registrant of auth/sessionInvalidation.ts
   // -- a 401 from ANY later API call (not only the bootstrap calls this
@@ -162,6 +170,15 @@ export function ProductionSessionGate({ children }: { children: ReactNode }) {
           if (!cancelled) setGate({ phase: 'unauthenticated' });
           return;
         }
+        if (err instanceof ApiError && err.status === 403) {
+          // The identity provider signed this person in, but the sign-in
+          // isn't linked to a SIE account (backend/app/api/deps_auth.py:
+          // an unknown or orphaned identity is refused with 403, never
+          // auto-linked). The way in is an administrator's account-link
+          // code, redeemed right here with this same session.
+          setGate({ phase: 'not_linked' });
+          return;
+        }
         setGate({
           phase: 'error',
           message: err instanceof ApiError ? err.message : 'Could not resolve your organizations.',
@@ -172,7 +189,7 @@ export function ProductionSessionGate({ children }: { children: ReactNode }) {
       cancelled = true;
       controller.abort();
     };
-  }, [oidc.status, oidc.user, oidc.signOutLocally]);
+  }, [oidc.status, oidc.user, oidc.signOutLocally, bootstrapAttempt]);
 
   // Blocker hardening: react to ProdAuthProvider's own authoritative
   // 401, exactly like the organizations-probe's 401 handling above —
@@ -210,6 +227,23 @@ export function ProductionSessionGate({ children }: { children: ReactNode }) {
             <ErrorState title="Could not sign you in" description={gate.message} />
           </div>
         </div>
+      );
+
+    case 'not_linked':
+      return (
+        <AccountLinkRedemption
+          onLinked={() => {
+            setGate({ phase: 'loading' });
+            // A session that was 'ready' before it became unlinked still
+            // holds the old provider's 'resolved' outcome; the new provider
+            // must report its own before the workspace renders.
+            setBootstrapStatus({ status: 'resolving' });
+            setBootstrapAttempt((attempt) => attempt + 1);
+          }}
+          onSignOut={() => {
+            void oidc.signOutLocally();
+          }}
+        />
       );
 
     case 'organization_setup_required':
