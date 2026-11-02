@@ -266,3 +266,71 @@ def test_rejections_are_audited_without_token_email_or_subject(db_session):
     assert "secret-subject-value" not in flat
     assert "private@example.com" not in flat
     assert len(row.event_metadata["subject_fingerprint"]) == 16
+
+
+# --- Concurrency (Copilot review on #69) ------------------------------------------------
+
+
+def _first_lookup_misses(monkeypatch, *, misses: int = 1):
+    """Make the first `misses` identity lookups return None, as if a
+    concurrent request bound the identity right after them."""
+    real = identity_resolver_service._get_identity
+    calls = {"n": 0}
+
+    def lookup(db, *, issuer, subject):
+        calls["n"] += 1
+        return None if calls["n"] <= misses else real(db, issuer=issuer, subject=subject)
+
+    monkeypatch.setattr(identity_resolver_service, "_get_identity", lookup)
+
+
+def test_identity_bound_while_waiting_for_the_lock_signs_in_instead_of_403(db_session, email_linking, monkeypatch):
+    user = _user(db_session, "person@example.com")
+    _bind(db_session, user, subject="racing-sub")
+    _first_lookup_misses(monkeypatch, misses=1)
+
+    resolved = identity_resolver_service.resolve_user(
+        db_session, claims=_claims("racing-sub", email="person@example.com", email_verified=True)
+    )
+
+    assert resolved.id == user.id
+    assert db_session.query(Identity).filter(Identity.subject == "racing-sub").count() == 1
+    assert _rejections(db_session) == []
+
+
+def test_unique_conflict_while_linking_resolves_the_now_bound_identity(db_session, email_linking, monkeypatch):
+    """A grant redemption bound this (issuer, subject) to another user while
+    the email link was in flight: the insert conflicts, and the caller
+    signs in as the identity's actual user rather than getting a 500."""
+    email_owner = _user(db_session, "person@example.com")
+    grant_target = _user(db_session, "someone.else@example.com")
+    _bind(db_session, grant_target, subject="contested-sub")
+    _first_lookup_misses(monkeypatch, misses=2)
+
+    resolved = identity_resolver_service.resolve_user(
+        db_session, claims=_claims("contested-sub", email="person@example.com", email_verified=True)
+    )
+
+    assert resolved.id == grant_target.id
+    assert db_session.query(Identity).filter(Identity.user_id == email_owner.id).count() == 0
+
+
+def test_unique_conflict_with_nothing_bound_afterwards_is_an_audited_refusal(db_session, email_linking, monkeypatch):
+    _user(db_session, "person@example.com")
+    monkeypatch.setattr(identity_resolver_service, "_get_identity", lambda db, *, issuer, subject: None)
+
+    def conflict(db, *, claims, user):
+        from sqlalchemy.exc import IntegrityError
+
+        raise IntegrityError("INSERT", {}, Exception("uq_identities_issuer_subject"))
+
+    monkeypatch.setattr(identity_resolver_service, "_bind_verified_email", conflict)
+
+    with pytest.raises(IdentityLinkRejectedError) as exc:
+        identity_resolver_service.resolve_user(
+            db_session, claims=_claims("new-sub", email="person@example.com", email_verified=True)
+        )
+
+    assert exc.value.reason == LinkRejection.CONCURRENT_CONFLICT
+    (row,) = _rejections(db_session)
+    assert row.event_metadata["reason"] == "concurrent_conflict"
