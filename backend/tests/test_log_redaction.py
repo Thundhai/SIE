@@ -307,11 +307,42 @@ def test_extra_fields_are_scrubbed_and_keep_their_shape(captured_records):
 
     record = records[0]
     assert record.error == f"provider said Bearer {REDACTED}"
-    assert record.details == {"headers": {"authorization": f"Bearer {REDACTED}"}, "attempts": [1, f"retry with {REDACTED}"]}
+    # A credential-named key is replaced outright (see the next test).
+    assert record.details == {"headers": {"authorization": REDACTED}, "attempts": [1, f"retry with {REDACTED}"]}
     assert record.status_code == 401 and record.latency_ms == 12.5 and record.provider == "openai"
     rendered = logging.Formatter("%(message)s %(error)s %(details)s %(status_code)d").format(record)
     for fragment in (*_fragments(jwt), secret):
         assert fragment not in rendered
+
+
+def test_fields_named_as_credentials_are_redacted_whatever_they_hold(captured_records):
+    logger, records = captured_records
+    opaque = secrets.token_urlsafe(24)  # no Bearer, JWT or query-string shape
+
+    logger.info(
+        "outbound call",
+        extra={
+            "token": opaque,
+            "auth_token": opaque,
+            "upstream": {"client_secret": opaque, "Authorization": opaque, "api_key": opaque, "Cookie": opaque},
+            "password": "",  # empty stays empty
+            # Not credentials, and kept as they are:
+            "prompt_tokens": 120,
+            "token_count": 7,
+            "error_code": "UPSTREAM_TIMEOUT",
+            "status_code": 504,
+        },
+    )
+    logger.info("%(user)s used %(token)s", {"user": "svc", "token": opaque})
+
+    extra = records[0]
+    assert extra.token == REDACTED and extra.auth_token == REDACTED
+    assert extra.upstream == {"client_secret": REDACTED, "Authorization": REDACTED, "api_key": REDACTED, "Cookie": REDACTED}
+    assert extra.password == ""
+    assert (extra.prompt_tokens, extra.token_count, extra.error_code, extra.status_code) == (120, 7, "UPSTREAM_TIMEOUT", 504)
+    assert records[1].getMessage() == f"svc used {REDACTED}"
+    rendered = logging.Formatter("%(message)s %(token)s %(upstream)s").format(extra)
+    assert opaque not in rendered
 
 
 def test_the_raw_exception_does_not_stay_on_the_record(captured_records):

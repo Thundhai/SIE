@@ -22,7 +22,11 @@ On each record it scrubs:
 * each argument, keeping numbers and `None` as they are. Uvicorn's access
   logger keeps its arguments as arguments, because its formatter unpacks
   them and reads the status code as an int; its template is fixed
-* every `extra` field, recursively through dicts, lists and tuples
+* every `extra` field, recursively through dicts, lists and tuples. A
+  field (or dict key, or `%(name)s` argument) whose name says it is a
+  credential (`token`, `client_secret`, `password`, `authorization`,
+  `api_key`, `cookie`, ...) is replaced outright, whatever its value
+  looks like
 * the traceback and every chained exception message. The scrubbed
   traceback is stored in `exc_text`, which standard formatters print,
   and the raw exception objects are dropped from the record, so nothing
@@ -86,6 +90,15 @@ _STANDARD_ATTRIBUTES = frozenset(logging.LogRecord("", 0, "", 0, "", None, None)
 # (no credential can sit in it): their arguments are scrubbed one by one
 # and always kept. Collapsing them into text would break the formatter.
 _TYPED_ARGUMENT_LOGGERS = ("uvicorn.access",)
+# Field names that say their value is a credential, whatever it looks like
+# (an opaque token has no recognisable shape): `token`, `auth_token`,
+# `client_secret`, `password`, `authorization`, `api_key`, `cookie`, ...
+# Deliberately not `*_tokens` / `token_count` (LLM usage metrics) or
+# `*_code` (`error_code`, `status_code`).
+_CREDENTIAL_KEY = re.compile(
+    r"(?i)^(?:.*[_-])?(?:token|secret|password|passwd|authorization|api[_-]?key|credentials?|cookie|"
+    r"set[_-]cookie|session[_-]?id)$"
+)
 
 
 def redact(text: str) -> str:
@@ -110,12 +123,24 @@ def _redact_value(value: Any) -> Any:
     return value if scrubbed == rendered else scrubbed
 
 
+def _is_credential_key(key: Any) -> bool:
+    return isinstance(key, str) and _CREDENTIAL_KEY.match(key) is not None
+
+
+def _redact_named(key: Any, value: Any, depth: int) -> Any:
+    """A field's value; a field whose name says it is a credential is
+    replaced outright (unless it is empty), whatever its shape."""
+    if _is_credential_key(key) and value not in (None, "", b""):
+        return REDACTED
+    return _redact_structure(value, depth)
+
+
 def _redact_structure(value: Any, depth: int = 0) -> Any:
     """Like `_redact_value`, but keeps the shape of dicts, lists and tuples
     (structured `extra` fields) and scrubs inside them."""
     if depth < _MAX_DEPTH:
         if isinstance(value, Mapping):
-            return {key: _redact_structure(item, depth + 1) for key, item in value.items()}
+            return {key: _redact_named(key, item, depth + 1) for key, item in value.items()}
         if isinstance(value, (list, tuple)):
             items = [_redact_structure(item, depth + 1) for item in value]
             return items if isinstance(value, list) else tuple(items)
@@ -124,7 +149,10 @@ def _redact_structure(value: Any, depth: int = 0) -> Any:
 
 def _redact_message(record: logging.LogRecord) -> None:
     if isinstance(record.args, Mapping):
-        record.args = {key: _redact_value(value) for key, value in record.args.items()}
+        record.args = {
+            key: REDACTED if _is_credential_key(key) and value not in (None, "", b"") else _redact_value(value)
+            for key, value in record.args.items()
+        }
     elif isinstance(record.args, tuple):
         record.args = tuple(_redact_value(arg) for arg in record.args)
 
@@ -167,7 +195,7 @@ def redact_record(record: logging.LogRecord) -> logging.LogRecord:
 def redact_extra(record: logging.LogRecord) -> logging.LogRecord:
     for key in list(record.__dict__):
         if key not in _STANDARD_ATTRIBUTES:
-            record.__dict__[key] = _redact_structure(record.__dict__[key])
+            record.__dict__[key] = _redact_named(key, record.__dict__[key], 0)
     return record
 
 
