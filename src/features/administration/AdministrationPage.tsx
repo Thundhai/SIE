@@ -7,6 +7,7 @@ import { EmptyState } from '../../components/ui/EmptyState';
 import { ErrorState } from '../../components/ui/ErrorState';
 import { LoadingState } from '../../components/ui/LoadingState';
 import { StatusBadge } from '../../components/ui/StatusBadge';
+import { InvitationsSection } from './InvitationsSection';
 import { getOrganization, type OrganizationMembership } from '../../services/api/organizations';
 import {
   listSites,
@@ -77,6 +78,7 @@ export function AdministrationPage() {
       <OrganizationSection organizationId={auth.organization.id} />
       <SitesSection organizationId={auth.organization.id} />
       <MembersSection organizationId={auth.organization.id} />
+      <InvitationsSection organizationId={auth.organization.id} />
       <GoverningStandardsSection organizationId={auth.organization.id} />
       <ApiClientsSection organizationId={auth.organization.id} />
     </PageContainer>

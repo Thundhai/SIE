@@ -101,10 +101,32 @@ class Settings(BaseSettings):
     # are confirmed; even then a match needs `email_verified` to be the
     # JSON boolean true, and never reaches a platform administrator.
     OIDC_TRUST_VERIFIED_EMAIL_FOR_LINKING: bool = False
-    # Comma-separated exact issuer strings (same spelling as OIDC_ISSUER).
+    # Comma-separated exact issuer strings (same spelling as OIDC_ISSUER):
+    # the issuers whose `email_verified` claim SIE believes. Accepting an
+    # invitation as a NEW user needs the issuer listed here (and a
+    # verified email equal to the invited one); the automatic linking
+    # above additionally needs its flag. Empty means no issuer is trusted,
+    # so new-user invitations cannot be accepted until this is set.
     OIDC_EMAIL_LINKING_TRUSTED_ISSUERS: str = ""
+    # Optional OIDC UserInfo endpoint. When set, invitation acceptance reads
+    # `email` and `email_verified` from it (called with the caller's access
+    # token; its `sub` must equal the token's) instead of from the access
+    # token, for providers that don't put those claims in access tokens.
+    OIDC_USERINFO_URL: str | None = None
     # Lifetime of an invitation or account-link grant, in hours.
     IDENTITY_LINK_GRANT_TTL_HOURS: int = Field(default=72, ge=1, le=720)
+    # Invitations (app/services/invitation_service.py). An invitation whose
+    # verified email doesn't match is refused, and after this many refusals
+    # it is revoked (the administrator can resend it).
+    INVITATION_MAX_FAILED_ATTEMPTS: int = Field(default=5, ge=1, le=50)
+    # Per-client-IP limit on the public invitation endpoints (inspect,
+    # start) and on acceptance, per minute. Always on, independent of
+    # RATE_LIMIT_ENABLED; 0 disables it (tests only).
+    INVITATION_RATE_LIMIT_PER_MINUTE: int = Field(default=20, ge=0)
+    # Reverse proxies in front of this service that append to
+    # X-Forwarded-For. 0 (default) uses the socket peer address; set it to 1
+    # on Render so the limit applies per real client, not per proxy.
+    TRUSTED_PROXY_HOPS: int = Field(default=0, ge=0, le=5)
 
     # Browser/CORS access (see app/main.py, cors_allowed_origins_list
     # below, docs/FRONTEND_ARCHITECTURE.md's "Browser integration"

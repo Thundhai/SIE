@@ -3,9 +3,13 @@ import { Navigate } from 'react-router-dom';
 import { ErrorState } from '../components/ui/ErrorState';
 import { LoadingState } from '../components/ui/LoadingState';
 import { getAuthMode } from './authMode';
+import { safeReturnPath } from './invitationFlow';
 import { getOidcUserManager } from './oidcSession';
 
-type CallbackResult = { status: 'pending' } | { status: 'success' } | { status: 'error'; message: string };
+type CallbackResult =
+  | { status: 'pending' }
+  | { status: 'success'; returnTo: string }
+  | { status: 'error'; message: string };
 
 /**
  * OIDC redirect target — SIE Milestone G3-1. Registered as this
@@ -45,8 +49,11 @@ export function CallbackPage() {
     const promise = isSilentRenewFrame ? manager.signinSilentCallback() : manager.signinRedirectCallback();
 
     promise
-      .then(() => {
-        setResult({ status: 'success' });
+      .then((user) => {
+        // A flow that started sign-in elsewhere (the invitation pages) asks
+        // to come back via `state.returnTo`; only a same-origin path is honoured.
+        const state = user ? (user.state as { returnTo?: unknown } | undefined) : undefined;
+        setResult({ status: 'success', returnTo: safeReturnPath(state?.returnTo) ?? '/' });
       })
       .catch((err: unknown) => {
         setResult({
@@ -68,7 +75,7 @@ export function CallbackPage() {
   if (result.status === 'success') {
     // Replaces the `?code=...&state=...` query entirely rather than
     // merely navigating on top of it.
-    return <Navigate to="/" replace />;
+    return <Navigate to={result.returnTo} replace />;
   }
 
   if (result.status === 'error') {

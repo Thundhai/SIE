@@ -12,6 +12,7 @@ import { KnowledgePage } from '../features/knowledge/KnowledgePage';
 import { ReportsPage } from '../features/reports/ReportsPage';
 import { AdministrationPage } from '../features/administration/AdministrationPage';
 import { CallbackPage } from '../auth/CallbackPage';
+import { InvitationCompletePage, InvitationLandingPage } from '../auth/InvitationPages';
 import { LoginPage } from '../auth/LoginPage';
 import { AuthGate } from '../auth/AuthGate';
 import { PermissionRoute } from '../auth/PermissionRoute';
@@ -29,8 +30,8 @@ import { ROUTE_PERMISSIONS } from '../auth/routePermissions';
  * by real backend data (never a fake/placeholder page — §9/§22). Any
  * unknown path redirects to Home rather than 404ing.
  *
- * **`/login` and `/callback` (SIE Milestone G3-1).** The only two public
- * routes — reachable with no session at all, in either auth mode. Every
+ * **`/login`, `/callback`, `/invite` and `/invite/complete`.** The public
+ * routes (the last two: invitation-based registration) — reachable with no session at all, in either auth mode. Every
  * other route is nested under `<AuthGate>`, which in dev mode is exactly
  * today's unchanged `<DevAuthProvider>`, and in production is
  * `<ProductionSessionGate>` (redirect-to-`/login` + organization
@@ -60,6 +61,8 @@ export function AppRoutes() {
     <Routes>
       <Route path="login" element={<LoginPage />} />
       <Route path="callback" element={<CallbackPage />} />
+      <Route path="invite" element={<InvitationLandingPage />} />
+      <Route path="invite/complete" element={<InvitationCompletePage />} />
       <Route
         element={
           <AuthGate>

@@ -1,11 +1,15 @@
 import { render, screen, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AuthContext } from '../../auth/AuthContext';
 import type { AuthContextValue } from '../../auth/types';
 import { AdministrationPage } from './AdministrationPage';
 
 vi.mock('../../services/api/organizations', () => ({
   getOrganization: vi.fn(),
+}));
+vi.mock('../../services/api/invitations', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../services/api/invitations')>()),
+  listInvitations: vi.fn(),
 }));
 vi.mock('../../services/api/administration', () => ({
   listSites: vi.fn(),
@@ -16,6 +20,7 @@ vi.mock('../../services/api/administration', () => ({
 
 import { getOrganization } from '../../services/api/organizations';
 import { listActiveGoverningStandards, listApiClients, listMembers, listSites } from '../../services/api/administration';
+import { listInvitations } from '../../services/api/invitations';
 
 const ORGANIZATION = { id: 'org-1', name: 'Test Org', industry: 'manufacturing', country: 'US', status: 'active' };
 
@@ -37,6 +42,10 @@ function renderWithAuth(permissions: string[]) {
 }
 
 describe('AdministrationPage', () => {
+  beforeEach(() => {
+    vi.mocked(listInvitations).mockResolvedValue([]);
+  });
+
   afterEach(() => {
     vi.resetAllMocks();
   });

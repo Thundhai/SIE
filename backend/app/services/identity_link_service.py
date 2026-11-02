@@ -13,8 +13,8 @@ Rules that hold for every redemption:
 * An identity already bound to a user is never re-bound (no silent
   reassignment). An orphaned identity, one whose user link was lost, can
   be re-bound only through an ACCOUNT_LINK grant.
-* An invitation creates a new user. It never attaches to an existing
-  one, whatever the email.
+* Invitations are accepted only through app/services/invitation_service.py,
+  which also requires a verified, matching email. This module refuses them.
 * A platform-administrator account can be linked only through a grant
   the operator script issued (`allows_platform_admin`), never through
   the API or by email.
@@ -29,21 +29,18 @@ import uuid
 from dataclasses import dataclass
 from datetime import timedelta, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.base import utcnow
-from app.models.enums import MembershipStatus
 from app.models.identity import Identity
 from app.models.identity_link_grant import (
     GRANT_KIND_ACCOUNT_LINK,
-    GRANT_KIND_INVITATION,
+    STATUS_ACCEPTED,
     IdentityLinkGrant,
 )
-from app.models.organization import Organization
-from app.models.organization_membership import OrganizationMembership
 from app.models.user import User
 from app.services.audit_service import AuditAction, audit_service
 from app.services.identity_service import (
@@ -52,7 +49,6 @@ from app.services.identity_service import (
     subject_fingerprint,
     user_has_identity_for_issuer,
 )
-from app.services.permissions import OrganizationRole
 
 CODE_PREFIX = "sie_link_"
 
@@ -121,43 +117,8 @@ def _audit_created(db: Session, grant: IdentityLinkGrant, *, actor_user_id: uuid
     )
 
 
-def _email_in_use(db: Session, email: str) -> bool:
-    return db.execute(select(User.id).where(func.lower(User.email) == email.lower()).limit(1)).first() is not None
-
 
 class IdentityLinkService:
-    def create_invitation(
-        self,
-        db: Session,
-        *,
-        organization_id: uuid.UUID,
-        email: str,
-        role: OrganizationRole,
-        actor_user_id: uuid.UUID,
-    ) -> CreatedGrant:
-        """An invitation for a new person to join `organization_id` with
-        `role`. The caller must already be authorized to manage that
-        organization's members (`users:manage`)."""
-        if db.get(Organization, organization_id) is None:
-            raise GrantCreationError(404, "Organization not found.")
-        code = _new_code()
-        grant = IdentityLinkGrant(
-            kind=GRANT_KIND_INVITATION,
-            token_sha256=hash_code(code),
-            organization_id=organization_id,
-            role=role.value,
-            # Lower-cased, so the unique constraint on users.email also stops
-            # two concurrent redemptions of case-variant invitations.
-            invited_email=email.strip().lower(),
-            created_by_user_id=actor_user_id,
-            expires_at=_expiry(),
-        )
-        db.add(grant)
-        db.flush()
-        _audit_created(db, grant, actor_user_id=actor_user_id)
-        db.commit()
-        return CreatedGrant(grant=grant, code=code)
-
     def create_account_link(
         self,
         db: Session,
@@ -217,6 +178,17 @@ class IdentityLinkService:
             .where(Identity.issuer == claims.issuer, Identity.subject == claims.subject)
             .with_for_update()
         ).scalar_one_or_none()
+        if grant.kind != GRANT_KIND_ACCOUNT_LINK:
+            # Invitations need a verified, matching email: accept them at
+            # /auth/invitations/accept (invitation_service), never here.
+            self._refuse(
+                db,
+                claims,
+                "invitation_requires_acceptance",
+                409,
+                "Open the invitation link to accept this invitation.",
+                grant_id=grant.id,
+            )
         if identity is not None and identity.user_id is not None:
             self._refuse(
                 db,
@@ -226,23 +198,9 @@ class IdentityLinkService:
                 "This sign-in is already linked to a SIE account.",
                 grant_id=grant.id,
             )
-        if identity is not None and grant.kind != GRANT_KIND_ACCOUNT_LINK:
-            # Orphan recovery binds to a known, named account only.
-            self._refuse(
-                db,
-                claims,
-                "orphaned_identity_requires_account_link",
-                409,
-                "This sign-in needs an account-link code from an administrator.",
-                grant_id=grant.id,
-            )
-
         grant_id = grant.id  # readable after a failed flush, unlike grant.id
         try:
-            if grant.kind == GRANT_KIND_ACCOUNT_LINK:
-                user = self._account_link_target(db, claims, grant)
-            else:
-                user = self._create_invited_user(db, claims, grant)
+            user = self._account_link_target(db, claims, grant)
 
             if identity is None:
                 identity = Identity(
@@ -260,6 +218,7 @@ class IdentityLinkService:
             db.flush()
 
             grant.redeemed_at = utcnow()
+            grant.status = STATUS_ACCEPTED
             grant.redeemed_identity_id = identity.id
             grant.target_user_id = user.id
             db.add(grant)
@@ -337,45 +296,6 @@ class IdentityLinkService:
                 grant_id=grant.id,
                 user_id=user.id,
             )
-        return user
-
-    def _create_invited_user(self, db: Session, claims: ExternalIdentityClaims, grant: IdentityLinkGrant) -> User:
-        email = grant.invited_email
-        if _email_in_use(db, email):
-            # Never attach an invitation to an existing account.
-            self._refuse(
-                db,
-                claims,
-                "invited_email_in_use",
-                409,
-                "An account with this email already exists. Ask an administrator for an account-link code instead.",
-                grant_id=grant.id,
-            )
-        if db.get(Organization, grant.organization_id) is None:
-            self._refuse(
-                db, claims, "grant_invalid_or_expired", 404, "This code is invalid or has expired.", grant_id=grant.id
-            )
-        user = User(email=email, name=claims.display_name or email)
-        db.add(user)
-        db.flush()
-        membership = OrganizationMembership(
-            organization_id=grant.organization_id,
-            user_id=user.id,
-            role=grant.role,
-            status=MembershipStatus.ACTIVE,
-        )
-        db.add(membership)
-        db.flush()
-        audit_service.log(
-            db,
-            action=AuditAction.MEMBER_ADDED,
-            resource_type="OrganizationMembership",
-            resource_id=membership.id,
-            organization_id=grant.organization_id,
-            user_id=grant.created_by_user_id,
-            metadata={"member_user_id": str(user.id), "role": membership.role, "via": "invitation"},
-            commit=False,
-        )
         return user
 
     def _refuse(
