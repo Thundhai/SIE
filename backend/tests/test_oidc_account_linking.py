@@ -369,3 +369,26 @@ def test_invitation_email_is_validated(client, db_session, production_auth, emai
     _org_admin(db_session, org)
     response = client.post(_invitations(org.id), json={"email": email, "role": "VIEWER"}, headers=_as("admin-sub"))
     assert response.status_code == 422
+
+
+def test_operator_script_prints_a_working_code_for_a_platform_admin(
+    client, db_session, production_auth, monkeypatch, capsys
+):
+    """Runs the script end to end, with its own session that expires
+    objects on commit, the same as the real `SessionLocal`."""
+    from sqlalchemy.orm import sessionmaker
+
+    import app.core.database as database
+    from scripts.create_identity_link_grant import main
+
+    admin = make_platform_admin_user(db_session)
+    monkeypatch.setattr(database, "SessionLocal", sessionmaker(bind=db_session.get_bind(), expire_on_commit=True))
+    monkeypatch.setenv("SIE_CONFIRM_IDENTITY_LINK_GRANT", "true")
+
+    assert main(["--user-id", str(admin.id), "--allow-platform-admin"]) == 0
+
+    out = capsys.readouterr().out
+    code = next(line.split()[-1] for line in out.splitlines() if line.startswith("code:"))
+    response = client.post(_REDEEM, json={"code": code}, headers=_as("script-admin-sub"))
+    assert response.status_code == 200
+    assert response.json()["user_id"] == str(admin.id)

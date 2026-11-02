@@ -56,14 +56,16 @@ def main(argv: list[str] | None = None) -> int:
             actor_user_id=None,
             allow_platform_admin=args.allow_platform_admin,
         )
+        # Read while the session is open: the commit expired the grant.
+        grant_id, expires_at = created.grant.id, created.grant.expires_at
     except GrantCreationError as exc:
         print(f"Refused: {exc.message}", file=sys.stderr)
         return 1
     finally:
         db.close()
 
-    print(f"grant_id:   {created.grant.id}")
-    print(f"expires_at: {created.grant.expires_at.isoformat()}")
+    print(f"grant_id:   {grant_id}")
+    print(f"expires_at: {expires_at.isoformat()}")
     print(f"code:       {created.code}")
     print("Shown once. Hand it over through a trusted channel.")
     return 0

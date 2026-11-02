@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from datetime import timedelta, timezone
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -120,6 +121,10 @@ def _audit_created(db: Session, grant: IdentityLinkGrant, *, actor_user_id: uuid
     )
 
 
+def _email_in_use(db: Session, email: str) -> bool:
+    return db.execute(select(User.id).where(func.lower(User.email) == email.lower()).limit(1)).first() is not None
+
+
 class IdentityLinkService:
     def create_invitation(
         self,
@@ -141,7 +146,9 @@ class IdentityLinkService:
             token_sha256=hash_code(code),
             organization_id=organization_id,
             role=role.value,
-            invited_email=email.strip(),
+            # Lower-cased, so the unique constraint on users.email also stops
+            # two concurrent redemptions of case-variant invitations.
+            invited_email=email.strip().lower(),
             created_by_user_id=actor_user_id,
             expires_at=_expiry(),
         )
@@ -230,51 +237,71 @@ class IdentityLinkService:
                 grant_id=grant.id,
             )
 
-        if grant.kind == GRANT_KIND_ACCOUNT_LINK:
-            user = self._account_link_target(db, claims, grant)
-        else:
-            user = self._create_invited_user(db, claims, grant)
+        grant_id = grant.id  # readable after a failed flush, unlike grant.id
+        try:
+            if grant.kind == GRANT_KIND_ACCOUNT_LINK:
+                user = self._account_link_target(db, claims, grant)
+            else:
+                user = self._create_invited_user(db, claims, grant)
 
-        if identity is None:
-            identity = Identity(
+            if identity is None:
+                identity = Identity(
+                    user_id=user.id,
+                    subject=claims.subject,
+                    issuer=claims.issuer,
+                    email=claims.email,
+                    display_name=claims.display_name,
+                    provider=claims.provider,
+                )
+            else:
+                identity.user_id = user.id  # orphan recovery
+            identity.last_authenticated_at = utcnow()
+            db.add(identity)
+            db.flush()
+
+            grant.redeemed_at = utcnow()
+            grant.redeemed_identity_id = identity.id
+            grant.target_user_id = user.id
+            db.add(grant)
+            audit_service.log(
+                db,
+                action=AuditAction.IDENTITY_LINKED,
+                resource_type="Identity",
+                resource_id=identity.id,
+                organization_id=grant.organization_id,
                 user_id=user.id,
-                subject=claims.subject,
-                issuer=claims.issuer,
-                email=claims.email,
-                display_name=claims.display_name,
-                provider=claims.provider,
+                metadata={
+                    "issuer": claims.issuer,
+                    "provider": claims.provider,
+                    "method": grant.kind.lower(),
+                    "grant_id": str(grant.id),
+                    "subject_fingerprint": subject_fingerprint(claims.issuer, claims.subject),
+                },
+                commit=False,
             )
-        else:
-            identity.user_id = user.id  # orphan recovery
-        identity.last_authenticated_at = utcnow()
-        db.add(identity)
-        db.flush()
-
-        grant.redeemed_at = utcnow()
-        grant.redeemed_identity_id = identity.id
-        grant.target_user_id = user.id
-        db.add(grant)
-        audit_service.log(
-            db,
-            action=AuditAction.IDENTITY_LINKED,
-            resource_type="Identity",
-            resource_id=identity.id,
-            organization_id=grant.organization_id,
-            user_id=user.id,
-            metadata={
-                "issuer": claims.issuer,
-                "provider": claims.provider,
-                "method": grant.kind.lower(),
-                "grant_id": str(grant.id),
-                "subject_fingerprint": subject_fingerprint(claims.issuer, claims.subject),
-            },
-            commit=False,
-        )
-        db.commit()
+            db.commit()
+        except IntegrityError:
+            # A concurrent redemption bound this identity or created this
+            # email first; the database's unique constraint caught it.
+            self._refuse(
+                db,
+                claims,
+                "concurrent_conflict",
+                409,
+                "This sign-in or account was linked by a concurrent request. Try signing in again.",
+                grant_id=grant_id,
+            )
         return user, grant
 
     def _account_link_target(self, db: Session, claims: ExternalIdentityClaims, grant: IdentityLinkGrant) -> User:
-        user = db.get(User, grant.target_user_id)
+        # Lock the target row: concurrent links for one user then run the
+        # "already bound for this issuer" check one at a time.
+        user = db.execute(
+            select(User)
+            .where(User.id == grant.target_user_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).scalar_one_or_none()
         if user is None:
             self._refuse(
                 db, claims, "grant_invalid_or_expired", 404, "This code is invalid or has expired.", grant_id=grant.id
@@ -314,8 +341,7 @@ class IdentityLinkService:
 
     def _create_invited_user(self, db: Session, claims: ExternalIdentityClaims, grant: IdentityLinkGrant) -> User:
         email = grant.invited_email
-        taken = db.execute(select(User.id).where(func.lower(User.email) == email.lower()).limit(1)).first()
-        if taken is not None:
+        if _email_in_use(db, email):
             # Never attach an invitation to an existing account.
             self._refuse(
                 db,

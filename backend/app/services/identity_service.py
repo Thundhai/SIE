@@ -180,9 +180,18 @@ class IdentityResolverService:
         if claims.email_verified is not True:
             self._reject(db, claims, LinkRejection.EMAIL_NOT_VERIFIED)
 
-        matches = db.execute(
-            select(User).where(func.lower(User.email) == claims.email.lower())
-        ).scalars().all()
+        # Locked, so concurrent links for one user run the checks below one
+        # at a time.
+        matches = (
+            db.execute(
+                select(User)
+                .where(func.lower(User.email) == claims.email.lower())
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            .scalars()
+            .all()
+        )
         if not matches:
             self._reject(db, claims, LinkRejection.NO_MATCHING_USER)
         if len(matches) > 1:
@@ -235,9 +244,7 @@ class IdentityResolverService:
         log_link_rejection(db, issuer=claims.issuer, subject=claims.subject, reason=reason, user_id=user_id)
         raise IdentityLinkRejectedError(reason)
 
-    def _sync_identity_fields(
-        self, db: Session, identity: Identity, claims: ExternalIdentityClaims
-    ) -> None:
+    def _sync_identity_fields(self, db: Session, identity: Identity, claims: ExternalIdentityClaims) -> None:
         # Profile attributes only. They never change which user this is.
         identity.email = claims.email
         identity.display_name = claims.display_name
