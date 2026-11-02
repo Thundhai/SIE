@@ -371,6 +371,41 @@ def test_quoted_reprs_malformed_templates_camel_case_and_nesting_are_scrubbed(ca
     assert (extra.accessToken, extra.clientSecret, extra.apiKey, extra.promptTokens) == (REDACTED, REDACTED, REDACTED, 3)
 
 
+def test_review_round_four_cases(captured_records):
+    """Child loggers of uvicorn.access, deep nesting, structured messages,
+    camelCase query parameters, and values that can't be compared."""
+    logger, records = captured_records
+    opaque = secrets.token_urlsafe(24)
+
+    child = logging.getLogger(f"uvicorn.access.{uuid.uuid4().hex}")
+    child.setLevel(logging.INFO)
+    child.propagate = False
+    child.handlers = logger.handlers
+    child.info("Bearer %s", opaque)  # not Uvicorn's template: judged as rendered
+
+    deep: dict = {"token": opaque}
+    for _ in range(10):
+        deep = {"layer": deep}
+    logger.info("deep", extra={"payload": deep})
+    logger.info({"token": opaque, "user": "svc"})
+    logger.info(f"GET /x?api_key={opaque}&apiKey={opaque}&accessToken={opaque} HTTP/1.1")
+
+    class Uncomparable:
+        def __eq__(self, other):  # like a NumPy array: truthiness of == raises
+            raise ValueError("ambiguous")
+
+        __hash__ = object.__hash__
+
+    logger.info("telemetry", extra={"token": Uncomparable()})
+
+    child_record, deep_record, structured, query, uncomparable = records
+    for record in (child_record, structured, query):
+        assert opaque not in record.getMessage(), record.getMessage()
+    assert opaque not in repr(deep_record.payload)
+    assert "'user': 'svc'" in structured.getMessage()
+    assert uncomparable.token == REDACTED
+
+
 def test_the_raw_exception_does_not_stay_on_the_record(captured_records):
     logger, records = captured_records
     jwt = _jwt()
@@ -397,24 +432,25 @@ def test_uvicorn_access_lines_are_scrubbed_and_still_format():
 
     install_log_redaction()
     jwt = _jwt()
-    logger = logging.getLogger(f"uvicorn.access.test.{uuid.uuid4().hex}")
-    logger.setLevel(logging.INFO)
-    logger.propagate = False
-    buffer = io.StringIO()
-    handler = logging.StreamHandler(buffer)
-    handler.setFormatter(AccessFormatter('%(client_addr)s - "%(request_line)s" %(status_code)s', use_colors=False))
-    logger.addHandler(handler)
-    try:
-        logger.info(
-            '%s - "%s %s HTTP/%s" %d', "203.0.113.9:5000", "GET", f"/api/v1/me?access_token={jwt}", "1.1", 401
-        )
-        # A path that only looks like a credential once joined to the rest
-        # of the line ("bearer HTTP/1.1") must not break the formatter.
-        logger.info('%s - "%s %s HTTP/%s" %d', "203.0.113.9:5000", "GET", "/files/bearer", "1.1", 200)
-    finally:
-        logger.removeHandler(handler)
+    formatter = AccessFormatter('%(client_addr)s - "%(request_line)s" %(status_code)s', use_colors=False)
+    template = '%s - "%s %s HTTP/%s" %d'
 
-    out = buffer.getvalue()
+    def access_line(path: str, status: int) -> str:
+        # Built through the record factory, as Uvicorn's own logger would;
+        # the real "uvicorn.access" logger may be disabled by a fileConfig.
+        record = logging.getLogRecordFactory()(
+            "uvicorn.access", logging.INFO, __file__, 1, template, ("203.0.113.9:5000", "GET", path, "1.1", status), None
+        )
+        return formatter.format(record)
+
+    out = "\n".join(
+        (
+            access_line(f"/api/v1/me?access_token={jwt}", 401),
+            # A path that only looks like a credential once joined to the rest
+            # of the line ("bearer HTTP/1.1") must not break the formatter.
+            access_line("/files/bearer", 200),
+        )
+    )
     assert f'"GET /api/v1/me?access_token={REDACTED} HTTP/1.1" 401' in out
     assert '"GET /files/bearer HTTP/1.1" 200' in out
     for fragment in _fragments(jwt):

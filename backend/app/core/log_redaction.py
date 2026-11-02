@@ -19,9 +19,12 @@ On each record it scrubs:
 * the message, judged as it will be rendered (template and arguments
   together), so a credential split between them (`"Bearer %s", token`)
   is caught too
-* each argument, keeping numbers and `None` as they are. Uvicorn's access
-  logger keeps its arguments as arguments, because its formatter unpacks
-  them and reads the status code as an int; its template is fixed
+* each argument, keeping numbers and `None` as they are. Uvicorn's own
+  access record (that exact logger and template) keeps its arguments as
+  arguments, because its formatter unpacks them and reads the status code
+  as an int; its template is fixed
+* a structured message (a dict or list passed as the message) key by key;
+  structures nested deeper than the inspection limit are replaced whole
 * every `extra` field, recursively through dicts, lists and tuples. A
   field (or dict key, or `%(name)s` argument) whose name says it is a
   credential (`token`, `client_secret`, `password`, `authorization`,
@@ -78,7 +81,8 @@ _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     # Credential-like query parameters.
     (
         re.compile(
-            r"(?i)([?&](?:access_token|id_token|refresh_token|token|code|client_secret|secret|password)=)"
+            r"(?i)([?&](?:access_?token|id_?token|refresh_?token|auth_?token|token|code|client_?secret|secret|"
+            r"password|passwd|api_?key|access_?key|session_?id|signature|sig)=)"
             r"[^&\s'\"#]+"
         ),
         rf"\1{REDACTED}",
@@ -90,10 +94,13 @@ _MARKER = "_sie_log_redaction"
 _MAX_DEPTH = 6
 # Attributes every LogRecord has; anything else on a record came from `extra`.
 _STANDARD_ATTRIBUTES = frozenset(logging.LogRecord("", 0, "", 0, "", None, None).__dict__) | {"message", "asctime"}
-# Loggers whose formatter unpacks the arguments and whose template is fixed
-# (no credential can sit in it): their arguments are scrubbed one by one
-# and always kept. Collapsing them into text would break the formatter.
-_TYPED_ARGUMENT_LOGGERS = ("uvicorn.access",)
+# Uvicorn's access record: its formatter unpacks the arguments (and reads
+# the status code as an int), and its template is fixed, so no credential
+# can sit in it. Only a record with exactly this logger name AND this
+# template keeps its (individually scrubbed) arguments; anything else,
+# a child logger included, is judged as rendered like every other record.
+_UVICORN_ACCESS_LOGGER = "uvicorn.access"
+_UVICORN_ACCESS_TEMPLATE = '%s - "%s %s HTTP/%s" %d'
 # Field names that say their value is a credential, whatever it looks like
 # (an opaque token has no recognisable shape): `token`, `auth_token`,
 # `client_secret`, `password`, `authorization`, `api_key`, `cookie`, ...
@@ -136,10 +143,16 @@ def _is_credential_key(key: Any) -> bool:
     return _CREDENTIAL_KEY.match(normalised) is not None
 
 
+def _is_empty(value: Any) -> bool:
+    # Identity and type checks only: `==` on an arbitrary object (a NumPy
+    # array, say) can raise while the record is being built.
+    return value is None or (isinstance(value, (str, bytes, bytearray)) and len(value) == 0)
+
+
 def _redact_named(key: Any, value: Any, depth: int) -> Any:
     """A field's value; a field whose name says it is a credential is
     replaced outright (unless it is empty), whatever its shape."""
-    if _is_credential_key(key) and value not in (None, "", b""):
+    if _is_credential_key(key) and not _is_empty(value):
         return REDACTED
     return _redact_structure(value, depth)
 
@@ -147,12 +160,15 @@ def _redact_named(key: Any, value: Any, depth: int) -> Any:
 def _redact_structure(value: Any, depth: int = 0) -> Any:
     """Like `_redact_value`, but keeps the shape of dicts, lists and tuples
     (structured `extra` fields) and scrubs inside them."""
-    if depth < _MAX_DEPTH:
+    if isinstance(value, (Mapping, list, tuple)):
+        if depth >= _MAX_DEPTH:
+            # Too deep to inspect key by key: fail closed rather than fall
+            # back to text patterns that can't see a credential-named key.
+            return REDACTED
         if isinstance(value, Mapping):
             return {key: _redact_named(key, item, depth + 1) for key, item in value.items()}
-        if isinstance(value, (list, tuple)):
-            items = [_redact_structure(item, depth + 1) for item in value]
-            return items if isinstance(value, list) else tuple(items)
+        items = [_redact_structure(item, depth + 1) for item in value]
+        return items if isinstance(value, list) else tuple(items)
     return _redact_value(value)
 
 
@@ -163,9 +179,12 @@ def _redact_message(record: logging.LogRecord) -> None:
     elif isinstance(record.args, tuple):
         record.args = tuple(_redact_structure(arg, 1) for arg in record.args)
 
-    if any(record.name == name or record.name.startswith(f"{name}.") for name in _TYPED_ARGUMENT_LOGGERS):
-        record.msg = _redact_value(record.msg)
+    if record.name == _UVICORN_ACCESS_LOGGER and record.msg == _UVICORN_ACCESS_TEMPLATE:
         return
+    # A structured message (`logger.info({"token": t})`) is scrubbed key by
+    # key before it is ever turned into text.
+    if isinstance(record.msg, (Mapping, list, tuple)):
+        record.msg = _redact_structure(record.msg, 1)
     try:
         rendered = record.getMessage()
     except Exception:  # noqa: BLE001 - a broken format ("Bearer %d", token)
