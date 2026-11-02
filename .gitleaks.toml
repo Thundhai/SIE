@@ -1,6 +1,6 @@
 title = "SIE gitleaks configuration"
 
-# gitleaks' default rules, plus five allowlisted false positives.
+# gitleaks' default rules, plus six allowlisted false positives.
 #
 # `useDefault = true` is required: a config file that defines no rules of
 # its own and does not extend the defaults has no rules at all, and every
@@ -58,3 +58,17 @@ description = "Governance view: mock sensor id"
 condition = "AND"
 paths = ['''(^|/)src/views/GovernanceView\.tsx$''']
 regexes = ['''^IOT-GAS-SNIF-B104$''']
+
+[[rules]]
+id = "jwt"
+
+[[rules.allowlists]]
+# A fake, unsigned token in the access-log test, proving the log never
+# records a bearer token. It decodes to {"alg":"RS256"}.{"sub":"user"}.
+# "signature": no key, no issuer, nothing it could authenticate to. The
+# test now builds it at runtime; this entry covers the one commit
+# (8e9721d) where it was a literal.
+description = "Access-log test: fake JWT"
+condition = "AND"
+paths = ['''(^|/)backend/tests/test_rate_limiting\.py$''']
+regexes = ['''^eyJhbGciOiJSUzI1NiJ9\.eyJzdWIiOiJ1c2VyIn0\.c2lnbmF0dXJl$''']

@@ -35,11 +35,22 @@ access_logger = logging.getLogger("sie.api.access")
 
 
 def _caller_identity(request: Request) -> str | None:
+    """A log-safe label for the caller. Never any part of a secret.
+
+    A machine credential is `<client_id>:<secret>` (app.api.deps_machine_auth):
+    only the public client id before the colon is logged. Anything else
+    after `Bearer ` is a person's OIDC access token (a JWT, which has no
+    colon); it is a credential in its own right, so it is recorded only as
+    `user_token`, never in whole or in part."""
     authorization = request.headers.get("authorization", "")
     if authorization.lower().startswith("bearer "):
         token = authorization[len("Bearer ") :].strip()
-        client_id = token.split(":", 1)[0]
-        return f"api_client:{client_id}" if client_id else None
+        if not token:
+            return None
+        client_id, separator, _secret = token.partition(":")
+        if separator and client_id:
+            return f"api_client:{client_id}"
+        return "user_token"
     return None  # never attribute a metric line to an unverified dev-mode header value
 
 
