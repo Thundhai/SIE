@@ -22,7 +22,8 @@ On each record it scrubs:
 * each argument, keeping numbers and `None` as they are. Uvicorn's own
   access record (that exact logger and template) keeps its arguments as
   arguments, because its formatter unpacks them and reads the status code
-  as an int; its template is fixed
+  as an int; its joined line is also checked, so a credential split
+  across two fields is caught (`_redact_uvicorn_access`)
 * a structured message (a dict or list passed as the message) key by key;
   structures nested deeper than the inspection limit are replaced whole
 * every `extra` field, recursively through dicts, lists and tuples. A
@@ -101,6 +102,12 @@ _STANDARD_ATTRIBUTES = frozenset(logging.LogRecord("", 0, "", 0, "", None, None)
 # a child logger included, is judged as rendered like every other record.
 _UVICORN_ACCESS_LOGGER = "uvicorn.access"
 _UVICORN_ACCESS_TEMPLATE = '%s - "%s %s HTTP/%s" %d'
+# The shape of the fields Uvicorn itself puts on that record. Only the
+# client address and the path are free text; the method, HTTP version and
+# status are constrained. See `_redact_uvicorn_access`.
+_HTTP_METHODS = frozenset({"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE", "CONNECT"})
+_HTTP_VERSION = re.compile(r"^\d(?:\.\d)?$")
+_CLIENT_ADDR = re.compile(r"^[^\s'\"]*$")
 # Field names that say their value is a credential, whatever it looks like
 # (an opaque token has no recognisable shape): `token`, `auth_token`,
 # `client_secret`, `password`, `authorization`, `api_key`, `cookie`, ...
@@ -172,6 +179,50 @@ def _redact_structure(value: Any, depth: int = 0) -> Any:
     return _redact_value(value)
 
 
+def _redact_uvicorn_access(record: logging.LogRecord) -> bool:
+    """Uvicorn's access line, checked whole. Returns False when the record
+    isn't usable as an access record, so the caller treats it like any
+    other record.
+
+    Each argument has already been scrubbed on its own. A credential can
+    still be split across two fields and only appear once the formatter
+    joins them, so the joined line is checked too:
+
+    * no credential in the joined line: the record is kept as it is.
+    * a credential, and every field has the shape Uvicorn gives it (a
+      standard method, a numeric HTTP version, an int status, a client
+      address with no space or quote): kept as it is. With those shapes
+      the only pattern that can cross a field boundary is a path ending in
+      "bearer"/"basic" running into the template's own " HTTP/1.1", which
+      carries no secret: the method, version and status can't hold one,
+      and the template's spaces and quotes stop every other pattern.
+      So `/files/bearer` stays visible.
+    * a credential and any other shape (a forged record): every text
+      field is replaced, keeping the status code, so the formatter still
+      works and nothing of the credential is emitted.
+    """
+    args = record.args
+    if not (isinstance(args, tuple) and len(args) == 5 and isinstance(args[4], int)):
+        return False
+    try:
+        line = _UVICORN_ACCESS_TEMPLATE % args
+    except Exception:  # noqa: BLE001 - not a usable access record
+        return False
+    if redact(line) == line:
+        return True
+    client_addr, method, _path, http_version, status = args
+    genuine = (
+        isinstance(client_addr, str)
+        and _CLIENT_ADDR.match(client_addr) is not None
+        and method in _HTTP_METHODS
+        and isinstance(http_version, str)
+        and _HTTP_VERSION.match(http_version) is not None
+    )
+    if not genuine:
+        record.args = (REDACTED, REDACTED, REDACTED, REDACTED, status)
+    return True
+
+
 def _redact_message(record: logging.LogRecord) -> None:
     # Key-aware and recursive, so a nested `{"token": ...}` is caught too.
     if isinstance(record.args, Mapping):
@@ -179,7 +230,11 @@ def _redact_message(record: logging.LogRecord) -> None:
     elif isinstance(record.args, tuple):
         record.args = tuple(_redact_structure(arg, 1) for arg in record.args)
 
-    if record.name == _UVICORN_ACCESS_LOGGER and record.msg == _UVICORN_ACCESS_TEMPLATE:
+    if (
+        record.name == _UVICORN_ACCESS_LOGGER
+        and record.msg == _UVICORN_ACCESS_TEMPLATE
+        and _redact_uvicorn_access(record)
+    ):
         return
     # A structured message (`logger.info({"token": t})`) is scrubbed key by
     # key before it is ever turned into text.

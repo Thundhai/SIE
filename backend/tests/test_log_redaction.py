@@ -457,6 +457,103 @@ def test_uvicorn_access_lines_are_scrubbed_and_still_format():
         assert fragment not in out
 
 
+_UVICORN_TEMPLATE = '%s - "%s %s HTTP/%s" %d'
+
+
+def _uvicorn_template_is_uvicorns_own() -> None:
+    import inspect
+
+    from uvicorn.protocols.http import h11_impl
+
+    assert repr(_UVICORN_TEMPLATE) in inspect.getsource(h11_impl)
+
+
+def _access_record(*args):
+    """An access record exactly as Uvicorn makes it: its logger name, its
+    template, built through the (redacting) record factory."""
+    return logging.getLogRecordFactory()("uvicorn.access", logging.INFO, __file__, 1, _UVICORN_TEMPLATE, args, None)
+
+
+def _emit_through_a_real_handler(record) -> tuple[str, str]:
+    """Format with Uvicorn's AccessFormatter through a real handler, and
+    capture what logging itself writes to stderr if formatting fails
+    (Handler.handleError prints the record's message and arguments)."""
+    import contextlib
+
+    from uvicorn.logging import AccessFormatter
+
+    out, err = io.StringIO(), io.StringIO()
+    handler = logging.StreamHandler(out)
+    handler.setFormatter(AccessFormatter('%(client_addr)s - "%(request_line)s" %(status_code)s', use_colors=False))
+    with contextlib.redirect_stderr(err):
+        handler.handle(record)
+    return out.getvalue(), err.getvalue()
+
+
+def test_a_credential_split_across_uvicorn_access_fields_is_never_emitted():
+    install_log_redaction()
+    _uvicorn_template_is_uvicorns_own()
+    opaque = secrets.token_urlsafe(24)  # no recognisable shape on its own
+    basic = _b64(b"user:" + secrets.token_bytes(12))
+
+    forged = [
+        ("203.0.113.9:5000", "Bearer", f"/{opaque}", "1.1", 200),  # "Bearer /<token>"
+        ("203.0.113.9:5000", "bearer", opaque, "1.1", 200),
+        ("203.0.113.9:5000", "Basic", basic, "1.1", 200),
+        ("203.0.113.9:5000", "Authorization:", opaque, "1.1", 200),  # header-style split
+        ("Bearer", opaque, "/x", "1.1", 200),  # across client address and method
+        ("203.0.113.9:5000", "GET", "/files/bearer", opaque, 200),  # path keyword, version payload
+    ]
+    for args in forged:
+        record = _access_record(*args)
+        out, err = _emit_through_a_real_handler(record)
+        for secret in (opaque, basic):
+            assert secret not in out and secret not in err, (args, out, err)
+        assert err == ""  # formatting never failed
+        # Useful metadata that is safe to keep is kept.
+        assert out.endswith(" 200 OK\n"), out
+        assert record.args[4] == 200
+
+
+def test_ordinary_uvicorn_access_lines_stay_visible():
+    install_log_redaction()
+    for method, path in (("GET", "/files/bearer"), ("POST", "/files/basic"), ("GET", "/docs/bearer-tokens"), ("GET", "/")):
+        out, err = _emit_through_a_real_handler(_access_record("203.0.113.9:5000", method, path, "1.1", 200))
+        assert out == f'203.0.113.9:5000 - "{method} {path} HTTP/1.1" 200 OK\n', out
+        assert err == ""
+
+
+def test_supported_patterns_inside_one_uvicorn_field_are_redacted_and_the_rest_kept():
+    install_log_redaction()
+    jwt = _jwt()
+    opaque = secrets.token_urlsafe(24)
+    for path, expected in (
+        (f"/x?apiKey={opaque}&page=2", f"/x?apiKey={REDACTED}&page=2"),
+        (f"/x?api_key={opaque}", f"/x?api_key={REDACTED}"),
+        (f"/x?access_token={jwt}", f"/x?access_token={REDACTED}"),
+        (f"/callback/{jwt}", f"/callback/{REDACTED}"),
+    ):
+        out, err = _emit_through_a_real_handler(_access_record("203.0.113.9:5000", "GET", path, "1.1", 401))
+        assert out == f'203.0.113.9:5000 - "GET {expected} HTTP/1.1" 401 Unauthorized\n', out
+        assert err == ""
+
+
+def test_a_malformed_uvicorn_access_record_falls_back_without_leaking():
+    """Wrong arity or a non-int status: not a usable access record, so it
+    is judged as rendered like any other record. If the formatter then
+    fails, logging's own error report must not print the credential."""
+    install_log_redaction()
+    opaque = secrets.token_urlsafe(24)
+    for args in (
+        ("203.0.113.9:5000", "Bearer", f"/{opaque}", "1.1"),  # 4 arguments
+        ("203.0.113.9:5000", "Bearer", f"/{opaque}", "1.1", "200"),  # status as text
+    ):
+        record = _access_record(*args)
+        assert opaque not in record.getMessage()
+        out, err = _emit_through_a_real_handler(record)
+        assert opaque not in out and opaque not in err, (out, err)
+
+
 def test_install_is_idempotent_and_keeps_the_previous_factory(monkeypatch):
     seen: list[str] = []
     base = logging.getLogRecordFactory()
