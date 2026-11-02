@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useRef, useState } from 'react';
+import { FormEvent, useEffect, useId, useRef, useState } from 'react';
 import { CheckCircle2, Link2 } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
@@ -68,8 +68,16 @@ export function AccountLinkRedemption({ onLinked, onSignOut }: { onLinked: () =>
   const [phase, setPhase] = useState<Phase>('idle');
   const [error, setError] = useState<string | null>(null);
   const controllerRef = useRef<AbortController | null>(null);
+  const fieldRef = useRef<HTMLInputElement>(null);
+  const errorId = useId();
 
   useEffect(() => () => controllerRef.current?.abort(), []);
+
+  // After a refusal, put the person back in the (re-enabled) field. The
+  // message itself is announced by the alert region below.
+  useEffect(() => {
+    if (phase === 'idle' && error) fieldRef.current?.focus();
+  }, [phase, error]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -128,6 +136,7 @@ export function AccountLinkRedemption({ onLinked, onSignOut }: { onLinked: () =>
         </p>
         <form onSubmit={submit} noValidate className="flex flex-col gap-3">
           <Input
+            ref={fieldRef}
             label="Account-link code"
             value={code}
             onChange={(event) => setCode(event.target.value)}
@@ -137,10 +146,15 @@ export function AccountLinkRedemption({ onLinked, onSignOut }: { onLinked: () =>
             spellCheck={false}
             maxLength={ACCOUNT_LINK_CODE_MAX_LENGTH + 20}
             disabled={submitting}
-            errorText={error ?? undefined}
             helperText="Paste the code exactly as you received it."
-            className="font-mono"
+            className={error ? 'border-critical font-mono' : 'font-mono'}
+            {...(error ? { 'aria-invalid': true, 'aria-describedby': errorId } : {})}
           />
+          {/* Always present, so assistive technology announces each new
+              message as it arrives, not only the first. */}
+          <p id={errorId} role="alert" className="text-xs text-critical empty:hidden">
+            {error ?? ''}
+          </p>
           <Button type="submit" disabled={submitting || code.trim() === ''}>
             {submitting ? 'Linking…' : 'Link account'}
           </Button>

@@ -116,6 +116,23 @@ describe('AccountLinkRedemption', () => {
     expect(screen.queryByText('Your account is linked')).toBeNull();
   });
 
+  it('announces a refusal and returns focus to the field', async () => {
+    vi.mocked(redeemAccountLinkCode).mockRejectedValue(new ApiError('server text', { status: 404 }));
+    renderForm();
+    const alert = screen.getByRole('alert');
+    expect(alert).toBeEmptyDOMElement();
+
+    enterAndSubmit(CODE);
+
+    await waitFor(() =>
+      expect(alert).toHaveTextContent('This code is invalid, already used, or has expired.'),
+    );
+    expect(screen.getAllByRole('alert')).toHaveLength(1); // the same, persistent region
+    await waitFor(() => expect(codeField()).toHaveFocus());
+    expect(codeField()).toHaveAttribute('aria-invalid', 'true');
+    expect(codeField().getAttribute('aria-describedby')).toBe(alert.id);
+  });
+
   it.each([
     [409, 'This sign-in is already linked to a SIE account.'],
     [403, 'This code cannot link a platform administrator account.'],

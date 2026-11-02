@@ -88,19 +88,22 @@ export function ProductionSessionGate({ children }: { children: ReactNode }) {
   // OIDC layer itself is authenticated — declared, and therefore run by
   // React, *before* the effect below that calls `listAuthOrganizations()`
   // (React runs a given component's own effects in declaration order
-  // within the same commit). Cleanup fires only when `oidc.status`
-  // itself stops being `'authenticated'` (session genuinely ended),
-  // not on every gate-phase transition in between — `ProdAuthProvider`
-  // mounting/unmounting around that same, stable window re-registers
-  // the identical function, never races this one into leaving a still-
-  // valid session with no getter registered.
+  // within the same commit). It also re-registers on every gate-phase
+  // change: `ProdAuthProvider` clears the shared getter when it unmounts,
+  // so leaving 'ready' for a phase that still makes authenticated calls
+  // (an identity that became unlinked mid-session shows 'not_linked',
+  // whose redemption needs the Bearer token) would otherwise leave a
+  // valid session with no getter. React runs every cleanup, the
+  // provider's unmount included, before re-running this effect, so the
+  // getter is always the identical function afterwards. It is cleared for
+  // good only when `oidc.status` stops being 'authenticated'.
   useEffect(() => {
     if (oidc.status !== 'authenticated') {
       return;
     }
     setAccessTokenGetter(oidc.getAccessTokenLive);
     return () => setAccessTokenGetter(null);
-  }, [oidc.status, oidc.getAccessTokenLive]);
+  }, [oidc.status, oidc.getAccessTokenLive, gate.phase]);
 
   // SIE Milestone G3-2: the one registrant of auth/sessionInvalidation.ts
   // -- a 401 from ANY later API call (not only the bootstrap calls this
