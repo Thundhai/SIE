@@ -4,6 +4,7 @@ import { ErrorState } from '../components/ui/ErrorState';
 import { LoadingState } from '../components/ui/LoadingState';
 import { listAuthOrganizations } from '../services/api/auth';
 import { ApiError } from '../services/api/errors';
+import { AccountLinkRedemption } from './AccountLinkRedemption';
 import { setAccessTokenGetter } from './authToken';
 import { registerSessionInvalidationHandler } from './sessionInvalidation';
 import { readPersistedOrganizationId, resolveActiveOrganization } from './organizationPersistence';
@@ -14,6 +15,7 @@ type GateState =
   | { phase: 'loading' }
   | { phase: 'unauthenticated' }
   | { phase: 'error'; message: string }
+  | { phase: 'not_linked' }
   | { phase: 'organization_setup_required' }
   | { phase: 'ready'; organizationId: string };
 
@@ -78,6 +80,9 @@ export function ProductionSessionGate({ children }: { children: ReactNode }) {
   const oidc = useOidcSession();
   const [gate, setGate] = useState<GateState>({ phase: 'loading' });
   const [bootstrapStatus, setBootstrapStatus] = useState<ProdAuthBootstrapStatus>({ status: 'resolving' });
+  // Bumped after an account-link code is redeemed, to re-run the
+  // bootstrap below with the now-linked sign-in.
+  const [bootstrapAttempt, setBootstrapAttempt] = useState(0);
 
   // Blocker fix: register the production token source as soon as the
   // OIDC layer itself is authenticated — declared, and therefore run by
@@ -162,6 +167,15 @@ export function ProductionSessionGate({ children }: { children: ReactNode }) {
           if (!cancelled) setGate({ phase: 'unauthenticated' });
           return;
         }
+        if (err instanceof ApiError && err.status === 403) {
+          // The identity provider signed this person in, but the sign-in
+          // isn't linked to a SIE account (backend/app/api/deps_auth.py:
+          // an unknown or orphaned identity is refused with 403, never
+          // auto-linked). The way in is an administrator's account-link
+          // code, redeemed right here with this same session.
+          setGate({ phase: 'not_linked' });
+          return;
+        }
         setGate({
           phase: 'error',
           message: err instanceof ApiError ? err.message : 'Could not resolve your organizations.',
@@ -172,7 +186,7 @@ export function ProductionSessionGate({ children }: { children: ReactNode }) {
       cancelled = true;
       controller.abort();
     };
-  }, [oidc.status, oidc.user, oidc.signOutLocally]);
+  }, [oidc.status, oidc.user, oidc.signOutLocally, bootstrapAttempt]);
 
   // Blocker hardening: react to ProdAuthProvider's own authoritative
   // 401, exactly like the organizations-probe's 401 handling above —
@@ -210,6 +224,19 @@ export function ProductionSessionGate({ children }: { children: ReactNode }) {
             <ErrorState title="Could not sign you in" description={gate.message} />
           </div>
         </div>
+      );
+
+    case 'not_linked':
+      return (
+        <AccountLinkRedemption
+          onLinked={() => {
+            setGate({ phase: 'loading' });
+            setBootstrapAttempt((attempt) => attempt + 1);
+          }}
+          onSignOut={() => {
+            void oidc.signOutLocally();
+          }}
+        />
       );
 
     case 'organization_setup_required':
