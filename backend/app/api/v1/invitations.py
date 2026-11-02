@@ -30,6 +30,7 @@ from app.api.deps_public_rate_limit import require_invitation_rate_limit
 from app.api.deps_rate_limit import RateLimitClass, require_rate_limit
 from app.core.errors import ApiError, ErrorCode
 from app.models.identity_link_grant import ALL_STATUSES, IdentityLinkGrant
+from app.models.organization import Organization
 from app.schemas.invitation import (
     InvitationAccept,
     InvitationAcceptRead,
@@ -87,8 +88,10 @@ def _admin_refused(
         action=AuditAction.INVITATION_REJECTED,
         resource_type="IdentityLinkGrant",
         resource_id=invitation_id,
-        # Never reference an organization that doesn't exist.
-        organization_id=None if exc.reason == "organization_not_found" else organization_id,
+        # Reference the organization only if it exists: a platform
+        # administrator can name any UUID in the path, and audit_logs has a
+        # foreign key, so a missing one must not turn a 404 into a 500.
+        organization_id=organization_id if db.get(Organization, organization_id) is not None else None,
         user_id=actor_user_id,
         metadata={"reason": exc.reason, "operation": operation},
     )

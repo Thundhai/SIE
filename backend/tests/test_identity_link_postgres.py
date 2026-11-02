@@ -368,3 +368,29 @@ def test_an_over_long_name_claim_never_breaks_later_sign_ins_or_account_links(pg
     assert linked_user.id == target.id
     linked = pg_session.query(Identity).filter(Identity.subject == "link-sub").one()
     assert len(linked.display_name) == 255
+
+
+@requires_postgres
+def test_a_refusal_for_a_nonexistent_organization_is_audited_without_breaking(pg_session):
+    """A platform administrator can name any organization UUID. Auditing the
+    refusal must not reference an organization that doesn't exist: the
+    audit_logs foreign key would turn the expected 404 into a 500."""
+    import uuid as _uuid
+
+    from app.api.v1.invitations import _admin_refused
+    from app.models.audit_log import AuditLog
+
+    missing_org = _uuid.uuid4()
+    error = _admin_refused(
+        pg_session,
+        InvitationError("invitation_not_found", 404, "Invitation not found."),
+        operation="resend",
+        organization_id=missing_org,
+        actor_user_id=None,
+        invitation_id=_uuid.uuid4(),
+    )
+
+    assert error.status_code == 404
+    row = pg_session.query(AuditLog).filter(AuditLog.action == "INVITATION_REJECTED").order_by(AuditLog.timestamp.desc()).first()
+    assert row is not None and row.organization_id is None
+    assert row.event_metadata == {"reason": "invitation_not_found", "operation": "resend"}
