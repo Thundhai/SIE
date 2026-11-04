@@ -191,6 +191,9 @@ class OIDCTokenVerifier:
 
         email = payload.get("email")
         display_name = payload.get("name")
+        # Only the JSON boolean counts: a string "true", 1, or a missing
+        # claim is "not verified" (None), never True.
+        email_verified = payload.get("email_verified")
 
         return ExternalIdentityClaims(
             subject=subject,
@@ -198,6 +201,7 @@ class OIDCTokenVerifier:
             email=email if isinstance(email, str) and email else None,
             display_name=display_name if isinstance(display_name, str) and display_name else None,
             provider=self._provider_label,
+            email_verified=email_verified if isinstance(email_verified, bool) else None,
         )
 
 

@@ -8,6 +8,7 @@ from app.api.v1 import (
     data_sources,
     events,
     governing_standards,
+    identity_links,
     ingestion,
     intelligence,
     intelligence_decisions,
@@ -33,6 +34,7 @@ api_router.include_router(projects.router)
 api_router.include_router(data_sources.router)
 api_router.include_router(knowledge.router)
 api_router.include_router(memberships.router)
+api_router.include_router(identity_links.router)
 api_router.include_router(ingestion.router)
 api_router.include_router(data_ingestion.router)
 api_router.include_router(retrieval.router)

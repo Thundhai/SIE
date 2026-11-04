@@ -45,7 +45,11 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.database import get_db
 from app.services.audit_service import AuditAction, audit_service
-from app.services.identity_service import identity_resolver_service
+from app.services.identity_service import (
+    ExternalIdentityClaims,
+    IdentityLinkRejectedError,
+    identity_resolver_service,
+)
 from app.services.oidc_verifier import (
     OIDCConfigurationError,
     TokenVerificationError,
@@ -113,30 +117,9 @@ def _log_auth_rejected(
     )
 
 
-def get_production_authenticated_user_id(token: str, db: Session) -> uuid.UUID:
-    """Verify a production Bearer token (real OIDC/OAuth2, never
-    development trust) and resolve it to an existing-or-newly-provisioned
-    SIE `User`, exactly the way `get_dev_authenticated_user_id` resolves
-    the dev header to one — same return type, same downstream contract,
-    so `get_tenant_context`/`authorize_tenant_context` and everything
-    built on them are completely unaware which mechanism produced the id.
-
-    Fails closed at every step, per the milestone's security requirements:
-
-      * OIDC not configured (`OIDC_ISSUER`/`OIDC_AUDIENCE`/`OIDC_JWKS_URL`
-        missing) -> 501, never a silent pass-through.
-      * signature invalid, expired, wrong issuer/audience, missing
-        subject, malformed, unknown key id -> 401, auditable
-        (`AuditAction.AUTH_REJECTED`), never the raw token logged.
-      * token verifies but the resolved user's `status` is not `"active"`
-        (an inactive/deactivated SIE user — the identity-level analogue
-        of a `MembershipStatus` that isn't ACTIVE) -> 401, auditable.
-
-    A verified, active identity is logged as `AuditAction.AUTH_SUCCEEDED`
-    and its `user.id` returned — from there, tenant resolution and
-    authorization are entirely the existing, unchanged
-    `authorize_tenant_context`/`AuthorizationService` pipeline.
-    """
+def _verify_production_token(token: str, db: Session) -> ExternalIdentityClaims:
+    """Verify a production Bearer token and return its claims: 501 when
+    OIDC is not configured, 401 (audited) when the token is invalid."""
     if not token or token.count(".") != 2:
         # Obviously not a JWT (e.g. empty, or garbage with no "." at all)
         # -- a client error, independent of whether OIDC itself happens
@@ -170,7 +153,50 @@ def get_production_authenticated_user_id(token: str, db: Session) -> uuid.UUID:
             detail="Invalid or expired authentication token.",
         ) from exc
 
-    user = identity_resolver_service.resolve_or_create_user(db, claims=claims)
+    return claims
+
+
+def get_production_authenticated_user_id(token: str, db: Session) -> uuid.UUID:
+    """Verify a production Bearer token (real OIDC/OAuth2, never
+    development trust) and resolve it to the SIE `User` its
+    (issuer, subject) is bound to, exactly the way `get_dev_authenticated_user_id` resolves
+    the dev header to one — same return type, same downstream contract,
+    so `get_tenant_context`/`authorize_tenant_context` and everything
+    built on them are completely unaware which mechanism produced the id.
+
+    Fails closed at every step, per the milestone's security requirements:
+
+      * OIDC not configured (`OIDC_ISSUER`/`OIDC_AUDIENCE`/`OIDC_JWKS_URL`
+        missing) -> 501, never a silent pass-through.
+      * signature invalid, expired, wrong issuer/audience, missing
+        subject, malformed, unknown key id -> 401, auditable
+        (`AuditAction.AUTH_REJECTED`), never the raw token logged.
+      * token verifies but its (issuer, subject) is not bound to a user,
+        and may not be bound automatically -> 403, audited
+        (`AuditAction.IDENTITY_LINK_REJECTED`). See
+        `IdentityResolverService.resolve_user`.
+      * token verifies but the resolved user's `status` is not `"active"`
+        (an inactive/deactivated SIE user — the identity-level analogue
+        of a `MembershipStatus` that isn't ACTIVE) -> 401, auditable.
+
+    A verified, active identity is logged as `AuditAction.AUTH_SUCCEEDED`
+    and its `user.id` returned — from there, tenant resolution and
+    authorization are entirely the existing, unchanged
+    `authorize_tenant_context`/`AuthorizationService` pipeline.
+    """
+    claims = _verify_production_token(token, db)
+    try:
+        user = identity_resolver_service.resolve_user(db, claims=claims)
+    except IdentityLinkRejectedError as exc:
+        # A valid token for an identity SIE has not bound: authenticated,
+        # not authorized. Already audited as IDENTITY_LINK_REJECTED.
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "This sign-in is not linked to a SIE account. Ask an administrator for an "
+                "invitation or an account-link code."
+            ),
+        ) from exc
 
     if user.status != "active":
         _log_auth_rejected(db, reason="Resolved identity's user is not active.", user_id=user.id)
@@ -254,6 +280,28 @@ def get_authenticated_user_id(
         )
 
     return get_dev_authenticated_user_id(request=request, db=db)
+
+
+def get_verified_identity_claims(
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> ExternalIdentityClaims:
+    """The verified claims of a production Bearer token, without resolving
+    them to a user. Only for redeeming an invitation or account-link code,
+    where the identity is not bound yet. A machine credential, the
+    development header, or a missing token are all refused."""
+    if not authorization or not authorization.lower().startswith(BEARER_PREFIX):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing authentication token. Provide an 'Authorization: Bearer <token>' header.",
+        )
+    token = authorization[len(BEARER_PREFIX) :].strip()
+    if ":" in token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="A machine client credential cannot be used to authenticate as a human user.",
+        )
+    return _verify_production_token(token, db)
 
 
 def get_tenant_context(

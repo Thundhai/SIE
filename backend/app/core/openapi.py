@@ -46,6 +46,13 @@ OPENAPI_TAGS = [
     },
     {"name": "memberships", "description": "Human user membership and role administration."},
     {
+        "name": "identity-links",
+        "description": (
+            "Invitations and account-link codes: the explicit ways an identity-provider sign-in is "
+            "bound to a SIE account. Unknown sign-ins are refused, never matched by email by default."
+        ),
+    },
+    {
         "name": "ingestion",
         "description": "File upload into the knowledge base (human-authenticated, `knowledge:manage`).",
     },
