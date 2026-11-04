@@ -15,10 +15,15 @@ from app.api.v1.router import api_router
 from app.core.cache_control import NoStoreMiddleware
 from app.core.config import settings, validate_startup_settings
 from app.core.errors import register_exception_handlers
+from app.core.log_redaction import install_log_redaction
 from app.core.observability import AccessLogMiddleware
 from app.core.openapi import custom_openapi
 from app.core.request_id import RequestIdMiddleware
 from app.core.request_limits import RequestSizeLimitMiddleware
+
+# First of all: no log record, from any logger, may carry a credential
+# (app/core/log_redaction.py).
+install_log_redaction()
 
 # Before anything is built: a misconfigured deployment must not serve at
 # all (see validate_startup_settings()'s own docstring).
