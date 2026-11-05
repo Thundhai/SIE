@@ -153,7 +153,7 @@ Upgrade and rollback:
 | `IDENTITY_LINK_GRANT_TTL_HOURS` | 72 | Default invitation lifetime. |
 | `INVITATION_MAX_FAILED_ATTEMPTS` | 5 | Email mismatches before auto-revoke. |
 | `INVITATION_RATE_LIMIT_PER_MINUTE` | 20 | Per client IP, on inspect, start and accept. Always on. |
-| `TRUSTED_PROXY_HOPS` | 0 | Set to `1` on Render so the limit is per real client, not per proxy. |
+| `TRUSTED_PROXY_HOPS` | 0 | Set to `3` on Render so the limit is per real client, not per proxy. Measured on 2026-11-05: Render delivers `X-Forwarded-For: <client>, <Cloudflare edge>, <Render internal 10.x>` from socket peer `127.0.0.1`, and a client-sent header is only prepended. `1` or `2` would key every client on a shared proxy address. |
 | `VITE_OIDC_SIGNUP_PROMPT_CREATE` (frontend) | unset | `true` sends OIDC `prompt=create` for the email and password option. |
 
 **Identity-provider setup** (owner, outside this repo):

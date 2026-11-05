@@ -8,7 +8,8 @@ before, or without, an identity. It uses the same process-local limiter
 instance counts on its own if the service is scaled out.
 
 The client address is the socket peer unless `TRUSTED_PROXY_HOPS` says
-how many proxies append to X-Forwarded-For (1 on Render). The value
+how many proxies append to X-Forwarded-For (3 on Render: Cloudflare's
+edge, then Render's internal proxy, append after the client). The value
 `TRUSTED_PROXY_HOPS` entries from the right is used, so a client cannot
 spoof its address by sending its own X-Forwarded-For.
 """

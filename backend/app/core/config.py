@@ -127,8 +127,11 @@ class Settings(BaseSettings):
     # RATE_LIMIT_ENABLED; 0 disables it (tests only).
     INVITATION_RATE_LIMIT_PER_MINUTE: int = Field(default=20, ge=0)
     # Reverse proxies in front of this service that append to
-    # X-Forwarded-For. 0 (default) uses the socket peer address; set it to 1
-    # on Render so the limit applies per real client, not per proxy.
+    # X-Forwarded-For. 0 (default) uses the socket peer address. On Render
+    # set it to 3: measured 2026-11-05, the chain arrives as
+    # "<client>, <Cloudflare edge>, <Render internal 10.x>" with the socket
+    # peer 127.0.0.1, and a client-sent X-Forwarded-For is only prepended.
+    # 1 or 2 would key every client on a shared proxy address.
     TRUSTED_PROXY_HOPS: int = Field(default=0, ge=0, le=5)
 
     # Browser/CORS access (see app/main.py, cors_allowed_origins_list

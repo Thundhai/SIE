@@ -738,6 +738,28 @@ def test_client_ip_honours_only_the_configured_proxy_hops(monkeypatch):
     assert deps_public_rate_limit.client_ip(_Req(None, "10.0.0.1")) == "10.0.0.1"
 
 
+def test_client_ip_on_renders_measured_proxy_chain(monkeypatch):
+    """Render, measured 2026-11-05: the client, then Cloudflare's edge,
+    then Render's internal proxy, from socket peer 127.0.0.1. A header
+    the client sends itself is only prepended."""
+
+    class _Req:
+        def __init__(self, xff):
+            self.headers = {"x-forwarded-for": xff}
+            self.client = type("C", (), {"host": "127.0.0.1"})()
+
+    honest = _Req("198.51.100.7, 172.64.192.114, 10.195.77.222")
+    spoofed = _Req("1.2.3.4,198.51.100.7, 172.64.192.114, 10.195.77.222")
+    monkeypatch.setattr(settings, "TRUSTED_PROXY_HOPS", 3)
+    assert deps_public_rate_limit.client_ip(honest) == "198.51.100.7"
+    assert deps_public_rate_limit.client_ip(spoofed) == "198.51.100.7"  # the forged entry is ignored
+    # Too few hops key every client on a shared proxy address.
+    monkeypatch.setattr(settings, "TRUSTED_PROXY_HOPS", 1)
+    assert deps_public_rate_limit.client_ip(honest) == "10.195.77.222"
+    monkeypatch.setattr(settings, "TRUSTED_PROXY_HOPS", 2)
+    assert deps_public_rate_limit.client_ip(honest) == "172.64.192.114"
+
+
 # --- Email from the UserInfo endpoint -----------------------------------------------------
 
 
