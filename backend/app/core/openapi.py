@@ -46,6 +46,13 @@ OPENAPI_TAGS = [
     },
     {"name": "memberships", "description": "Human user membership and role administration."},
     {
+        "name": "invitations",
+        "description": (
+            "Invitation-based registration: administrators invite by email and role; the invitee signs "
+            "in with the identity provider and is admitted only with a verified, matching email."
+        ),
+    },
+    {
         "name": "identity-links",
         "description": (
             "Invitations and account-link codes: the explicit ways an identity-provider sign-in is "

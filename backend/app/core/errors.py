@@ -50,6 +50,9 @@ class ErrorCode:
     PRIVACY_BLOCKED = "PRIVACY_BLOCKED"
     MODEL_NOT_AVAILABLE = "MODEL_NOT_AVAILABLE"
     INTERNAL_ERROR = "INTERNAL_ERROR"
+    # An invitation was refused; `details.reason` says why (see
+    # app/services/invitation_service.py).
+    INVITATION_REJECTED = "INVITATION_REJECTED"
 
 
 # A reasonable default `code` inferred purely from an ordinary

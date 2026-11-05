@@ -18,7 +18,7 @@ shown once, at creation, and is never logged.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, String, Uuid
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Integer, String, Uuid, text
 from sqlalchemy import false as sa_false
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -26,6 +26,20 @@ from app.models.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 
 GRANT_KIND_INVITATION = "INVITATION"
 GRANT_KIND_ACCOUNT_LINK = "ACCOUNT_LINK"
+
+# Lifecycle (app/services/invitation_service.py). PENDING ->
+# REGISTRATION_STARTED -> VERIFIED -> ACCEPTED, or EXPIRED / REVOKED.
+# EXPIRED is also derived on read from `expires_at`, so a stale row that
+# still says PENDING is treated as expired everywhere.
+STATUS_PENDING = "PENDING"
+STATUS_REGISTRATION_STARTED = "REGISTRATION_STARTED"
+STATUS_VERIFIED = "VERIFIED"
+STATUS_ACCEPTED = "ACCEPTED"
+STATUS_EXPIRED = "EXPIRED"
+STATUS_REVOKED = "REVOKED"
+OPEN_STATUSES = (STATUS_PENDING, STATUS_REGISTRATION_STARTED, STATUS_VERIFIED)
+ALL_STATUSES = (*OPEN_STATUSES, STATUS_ACCEPTED, STATUS_EXPIRED, STATUS_REVOKED)
+_OPEN_INVITATION_WHERE = "kind = 'INVITATION' AND status IN ('PENDING', 'REGISTRATION_STARTED', 'VERIFIED')"
 
 
 class IdentityLinkGrant(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -38,6 +52,20 @@ class IdentityLinkGrant(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             "OR (kind = 'ACCOUNT_LINK' AND target_user_id IS NOT NULL)",
             name="ck_identity_link_grants_shape",
         ),
+        CheckConstraint(
+            "status IN ('PENDING', 'REGISTRATION_STARTED', 'VERIFIED', 'ACCEPTED', 'EXPIRED', 'REVOKED')",
+            name="ck_identity_link_grants_status",
+        ),
+        # One open invitation per person per organization.
+        Index(
+            "uq_identity_link_grants_open_invitation",
+            "organization_id",
+            "invited_email",
+            unique=True,
+            postgresql_where=text(_OPEN_INVITATION_WHERE),
+            sqlite_where=text(_OPEN_INVITATION_WHERE),
+        ),
+        Index("ix_identity_link_grants_org_status", "organization_id", "status"),
     )
 
     kind: Mapped[str] = mapped_column(String(16), nullable=False)
@@ -53,7 +81,8 @@ class IdentityLinkGrant(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         Uuid(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True, index=True
     )
     role: Mapped[str | None] = mapped_column(String(50), nullable=True)
-    # The new user's email. Admin-entered, never compared with a token's claim.
+    # Lower-cased. Acceptance needs a verified identity email equal to it
+    # (new user) or an already-linked account with this email (existing user).
     invited_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
 
     # True only for a grant the operator script issued for a platform
@@ -71,6 +100,24 @@ class IdentityLinkGrant(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     redeemed_identity_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("identities.id", ondelete="SET NULL"), nullable=True
     )
+
+    status: Mapped[str] = mapped_column(
+        String(24), nullable=False, default=STATUS_PENDING, server_default=STATUS_PENDING
+    )
+    registration_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    accepted_membership_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("organization_memberships.id", ondelete="SET NULL"), nullable=True
+    )
+    # How many codes this invitation has had (1 + resends); each resend
+    # replaces the stored hash, so only the newest code works.
+    issue_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    # Refused acceptances with a mismatched email since the last (re)issue.
+    failed_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<IdentityLinkGrant id={self.id!s} kind={self.kind!r}>"

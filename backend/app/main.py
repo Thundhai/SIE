@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.health import router as health_router
 from app.api.v1.router import api_router
+from app.core.cache_control import NoStoreMiddleware
 from app.core.config import settings, validate_startup_settings
 from app.core.errors import register_exception_handlers
 from app.core.log_redaction import install_log_redaction
@@ -43,6 +44,9 @@ app.openapi = lambda: custom_openapi(app)
 # (including the access-log line and every error response) ever runs;
 # the access log then reports on the fully-completed response, including
 # its final status code. See each middleware's own module docstring.
+# Innermost: invitation and identity-link responses, errors included,
+# are never cached (app/core/cache_control.py).
+app.add_middleware(NoStoreMiddleware, prefix=settings.API_V1_PREFIX)
 app.add_middleware(AccessLogMiddleware)
 app.add_middleware(RequestSizeLimitMiddleware)
 app.add_middleware(RequestIdMiddleware)

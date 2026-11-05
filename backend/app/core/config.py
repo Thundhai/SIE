@@ -13,6 +13,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 #: APP_ENV values that mean "a real deployment" to
 #: `validate_startup_settings()` below.
 PRODUCTION_APP_ENVS = frozenset({"production", "prod"})
+#: Environments that may use plain-HTTP dev conveniences (e.g. a local OIDC
+#: provider's UserInfo endpoint). Staging and anything unrecognised may not.
+LOCAL_APP_ENVS = frozenset({"development", "dev", "local", "test", "testing"})
 
 #: The local-development fallback password (see POSTGRES_PASSWORD below).
 _DEFAULT_POSTGRES_PASSWORD = "sie"
@@ -101,10 +104,35 @@ class Settings(BaseSettings):
     # are confirmed; even then a match needs `email_verified` to be the
     # JSON boolean true, and never reaches a platform administrator.
     OIDC_TRUST_VERIFIED_EMAIL_FOR_LINKING: bool = False
-    # Comma-separated exact issuer strings (same spelling as OIDC_ISSUER).
+    # Comma-separated exact issuer strings (same spelling as OIDC_ISSUER):
+    # the issuers whose `email_verified` claim SIE believes. Accepting an
+    # invitation as a NEW user needs the issuer listed here (and a
+    # verified email equal to the invited one); the automatic linking
+    # above additionally needs its flag. Empty means no issuer is trusted,
+    # so new-user invitations cannot be accepted until this is set.
     OIDC_EMAIL_LINKING_TRUSTED_ISSUERS: str = ""
+    # Optional OIDC UserInfo endpoint. When set, invitation acceptance reads
+    # `email` and `email_verified` from it (called with the caller's access
+    # token; its `sub` must equal the token's) instead of from the access
+    # token, for providers that don't put those claims in access tokens.
+    OIDC_USERINFO_URL: str | None = None
     # Lifetime of an invitation or account-link grant, in hours.
     IDENTITY_LINK_GRANT_TTL_HOURS: int = Field(default=72, ge=1, le=720)
+    # Invitations (app/services/invitation_service.py). An invitation whose
+    # verified email doesn't match is refused, and after this many refusals
+    # it is revoked (the administrator can resend it).
+    INVITATION_MAX_FAILED_ATTEMPTS: int = Field(default=5, ge=1, le=50)
+    # Per-client-IP limit on the public invitation endpoints (inspect,
+    # start) and on acceptance, per minute. Always on, independent of
+    # RATE_LIMIT_ENABLED; 0 disables it (tests only).
+    INVITATION_RATE_LIMIT_PER_MINUTE: int = Field(default=20, ge=0)
+    # Reverse proxies in front of this service that append to
+    # X-Forwarded-For. 0 (default) uses the socket peer address. On Render
+    # set it to 3: measured 2026-11-05, the chain arrives as
+    # "<client>, <Cloudflare edge>, <Render internal 10.x>" with the socket
+    # peer 127.0.0.1, and a client-sent X-Forwarded-For is only prepended.
+    # 1 or 2 would key every client on a shared proxy address.
+    TRUSTED_PROXY_HOPS: int = Field(default=0, ge=0, le=5)
 
     # Browser/CORS access (see app/main.py, cors_allowed_origins_list
     # below, docs/FRONTEND_ARCHITECTURE.md's "Browser integration"
@@ -690,6 +718,13 @@ class Settings(BaseSettings):
         return self.APP_ENV.strip().lower() in PRODUCTION_APP_ENVS
 
     @property
+    def allows_plain_http_userinfo(self) -> bool:
+        """Plain http:// OIDC_USERINFO_URL is allowed only for local
+        development and tests: never on a deployment, never on staging or
+        any environment this list doesn't name. A bearer token is sent to it."""
+        return self.APP_ENV.strip().lower() in LOCAL_APP_ENVS and not self.is_deployed
+
+    @property
     def is_deployed(self) -> bool:
         """A real deployment, for the startup safety checks and API docs:
         APP_ENV says production, or the process runs on Render and APP_ENV
@@ -747,6 +782,8 @@ def validate_startup_settings(settings: "Settings") -> None:
     (the first trusts an unauthenticated user-id header, the last returns
     tracebacks), and the database must not be reached with the built-in
     development password, whether assembled or inside DATABASE_URL.
+    Everywhere except local development and tests: OIDC_USERINFO_URL, when
+    set, must be https://.
 
     Called from `app/main.py` before the app is built, so uvicorn exits
     instead of serving; migrations and scripts that only import settings
@@ -765,6 +802,9 @@ def validate_startup_settings(settings: "Settings") -> None:
             problems.append("DATABASE_URL is unset and POSTGRES_PASSWORD is the development default.")
         if settings.DATABASE_URL and _database_url_password(settings.DATABASE_URL) == _DEFAULT_POSTGRES_PASSWORD:
             problems.append("DATABASE_URL uses the development default password.")
+    userinfo = (settings.OIDC_USERINFO_URL or "").strip().lower()
+    if userinfo and not userinfo.startswith("https://") and not settings.allows_plain_http_userinfo:
+        problems.append("OIDC_USERINFO_URL must use https:// (bearer tokens are sent to it).")
     if problems:
         raise UnsafeConfigurationError(
             f"Refusing to start (APP_ENV={settings.APP_ENV!r}, RENDER={settings.RENDER}): " + " ".join(problems)

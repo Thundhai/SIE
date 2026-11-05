@@ -282,6 +282,17 @@ def get_authenticated_user_id(
     return get_dev_authenticated_user_id(request=request, db=db)
 
 
+def get_verified_identity_claims_and_token(
+    authorization: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> tuple[ExternalIdentityClaims, str]:
+    """`get_verified_identity_claims` plus the raw access token, for the
+    one caller that must forward it (the OIDC UserInfo lookup during
+    invitation acceptance). The token is never logged or stored."""
+    claims = get_verified_identity_claims(authorization=authorization, db=db)
+    return claims, authorization[len(BEARER_PREFIX) :].strip()
+
+
 def get_verified_identity_claims(
     authorization: str | None = Header(default=None),
     db: Session = Depends(get_db),

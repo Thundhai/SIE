@@ -122,6 +122,15 @@ class AuditAction:
     IDENTITY_LINKED = "IDENTITY_LINKED"
     IDENTITY_LINK_REJECTED = "IDENTITY_LINK_REJECTED"
     IDENTITY_LINK_GRANT_CREATED = "IDENTITY_LINK_GRANT_CREATED"
+    # Invitation lifecycle (app/services/invitation_service.py). Each row
+    # carries the organization, so it shows in that organization's audit
+    # trail. Never the code, a token, or the invitee's identity claims.
+    INVITATION_CREATED = "INVITATION_CREATED"
+    INVITATION_RESENT = "INVITATION_RESENT"
+    INVITATION_REVOKED = "INVITATION_REVOKED"
+    INVITATION_REGISTRATION_STARTED = "INVITATION_REGISTRATION_STARTED"
+    INVITATION_ACCEPTED = "INVITATION_ACCEPTED"
+    INVITATION_REJECTED = "INVITATION_REJECTED"
     # SIE Milestone 25: Enterprise Risk Assessment Foundation v0.1, item
     # 24. app/services/risk_assessment_service.py is the one write path
     # for every one of these (called from app/api/v1/risk_assessments.py).

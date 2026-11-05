@@ -4,6 +4,8 @@ these tests explicitly opt in via monkeypatch to prove the mechanism
 itself works, without asserting anything about the disabled-by-default
 production posture."""
 
+import base64
+
 from app.core.config import settings
 from app.core.rate_limit import LocalRateLimiter, get_rate_limiter
 from tests.conftest import dev_auth_headers
@@ -137,3 +139,140 @@ def test_machine_client_rate_limit_is_scoped_to_its_own_client_id(client, db_ses
     assert client.get(url, headers=_bearer(credential_a)).status_code == 429
     assert client.get(url, headers=_bearer(credential_b)).status_code == 501
     get_rate_limiter().reset()
+
+
+def test_local_limiter_prunes_expired_windows(monkeypatch):
+    """Keys from one-off callers (e.g. distinct IPs on the public
+    invitation endpoints) must not accumulate forever."""
+    from app.core import rate_limit
+
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(rate_limit.time, "monotonic", lambda: clock["t"])
+    limiter = rate_limit.LocalRateLimiter()
+    monkeypatch.setattr(limiter, "PRUNE_EVERY", 10)
+
+    for i in range(9):
+        limiter.check(f"ip-{i}", limit=5, window_seconds=60.0)
+    assert limiter.tracked_keys() == 9
+
+    clock["t"] += 61  # every window above has expired
+    limiter.check("fresh", limit=5, window_seconds=60.0)  # 10th check -> sweep
+
+    assert limiter.tracked_keys() == 1
+
+
+def test_local_limiter_is_bounded(monkeypatch):
+    from app.core import rate_limit
+
+    clock = {"t": 0.0}
+    monkeypatch.setattr(rate_limit.time, "monotonic", lambda: clock["t"])
+    limiter = rate_limit.LocalRateLimiter()
+    monkeypatch.setattr(limiter, "MAX_KEYS", 100)
+    monkeypatch.setattr(limiter, "EVICT_BATCH", 10)
+
+    for i in range(1000):
+        clock["t"] += 0.001  # all still inside their window
+        limiter.check(f"ip-{i}", limit=5, window_seconds=60.0)
+
+    assert limiter.tracked_keys() <= 100
+    # The newest key is still counted.
+    assert limiter.check("ip-999", limit=1, window_seconds=60.0).allowed is False
+
+
+def test_a_refused_key_checked_at_capacity_stays_refused(monkeypatch):
+    """At the cap, checking a key that is already tracked must never evict
+    that key's live counter: otherwise a refused client is let through
+    again just by calling once more."""
+    from app.core import rate_limit
+
+    clock = {"t": 0.0}
+    monkeypatch.setattr(rate_limit.time, "monotonic", lambda: clock["t"])
+    limiter = rate_limit.LocalRateLimiter()
+    monkeypatch.setattr(limiter, "MAX_KEYS", 50)
+    monkeypatch.setattr(limiter, "EVICT_BATCH", 5)
+
+    clock["t"] += 0.001
+    assert limiter.check("attacker", limit=1, window_seconds=60.0).allowed is True
+    assert limiter.check("attacker", limit=1, window_seconds=60.0).allowed is False
+    for i in range(49):  # fill to the cap; "attacker" is now the oldest window
+        clock["t"] += 0.001
+        limiter.check(f"ip-{i}", limit=5, window_seconds=60.0)
+    assert limiter.tracked_keys() == 50
+
+    for _ in range(20):
+        assert limiter.check("attacker", limit=1, window_seconds=60.0).allowed is False
+    assert limiter.tracked_keys() == 50
+
+
+def test_eviction_at_capacity_is_batched(monkeypatch):
+    """A flood of new keys at the cap pays for one scan per batch, not one
+    full scan per request."""
+    from app.core import rate_limit
+
+    clock = {"t": 0.0}
+    monkeypatch.setattr(rate_limit.time, "monotonic", lambda: clock["t"])
+    scans = {"n": 0}
+    real_nsmallest = rate_limit.heapq.nsmallest
+
+    def counting_nsmallest(*args, **kwargs):
+        scans["n"] += 1
+        return real_nsmallest(*args, **kwargs)
+
+    monkeypatch.setattr(rate_limit.heapq, "nsmallest", counting_nsmallest)
+    limiter = rate_limit.LocalRateLimiter()
+    monkeypatch.setattr(limiter, "MAX_KEYS", 100)
+    monkeypatch.setattr(limiter, "EVICT_BATCH", 10)
+
+    for i in range(1100):
+        clock["t"] += 0.001
+        limiter.check(f"ip-{i}", limit=5, window_seconds=60.0)
+
+    assert limiter.tracked_keys() <= 100
+    assert scans["n"] <= 1000 // 10 + 1  # ~one scan per 10 new keys, not 1000
+
+
+def test_access_log_never_contains_a_bearer_jwt(client, monkeypatch):
+    """A person's OIDC access token is a credential: the access log may
+    record that one was sent, never its content. A machine credential
+    (`<client_id>:<secret>`) logs only the public client id.
+
+    The logger's calls are captured directly: Alembic's fileConfig (run by
+    the migration tests) disables existing loggers, so caplog can't be
+    relied on in a full run."""
+    from app.core import observability
+
+    lines: list[str] = []
+    monkeypatch.setattr(observability.access_logger, "info", lambda message, *a, **k: lines.append(message))
+    # Built at runtime so no token-shaped literal sits in the source.
+    def b64(raw: bytes) -> str:
+        return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+    jwt_like = ".".join((b64(b'{"alg":"RS256"}'), b64(b'{"sub":"user"}'), b64(b"signature")))
+
+    client.post(
+        "/api/v1/auth/invitations/accept", json={"token": "x" * 20}, headers={"Authorization": f"Bearer {jwt_like}"}
+    )
+    client.get("/api/v1/organizations", headers={"Authorization": "Bearer client-123:super-secret-value"})
+
+    logged = "\n".join(lines)
+    assert '"client": "user_token"' in logged
+    assert '"client": "api_client:client-123"' in logged
+    for fragment in (*jwt_like.split("."), "super-secret-value"):
+        assert fragment not in logged
+
+
+def test_caller_identity_labels_without_secrets():
+    from starlette.requests import Request
+
+    from app.core.observability import _caller_identity
+
+    def req(authorization: str | None) -> Request:
+        headers = [] if authorization is None else [(b"authorization", authorization.encode())]
+        return Request({"type": "http", "headers": headers})
+
+    assert _caller_identity(req("Bearer eyJ.abc.def")) == "user_token"
+    assert _caller_identity(req("Bearer cid:secret")) == "api_client:cid"
+    assert _caller_identity(req("Bearer :secret")) == "user_token"
+    assert _caller_identity(req("Bearer ")) is None
+    assert _caller_identity(req("Basic abc")) is None
+    assert _caller_identity(req(None)) is None

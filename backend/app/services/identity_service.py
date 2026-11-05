@@ -128,6 +128,24 @@ class LinkRejection:
     CONCURRENT_CONFLICT = "concurrent_conflict"
 
 
+#: Column limits of `Identity.email` / `Identity.display_name` (app/models/identity.py).
+IDENTITY_EMAIL_MAX = 320
+IDENTITY_DISPLAY_NAME_MAX = 255
+
+
+def bounded_email(value: str | None) -> str | None:
+    """A claim email that fits `Identity.email`, or None. An address longer
+    than the column isn't valid anyway, so it's dropped, never cut into a
+    different string. Profile data only: no decision reads it."""
+    return value if value and len(value) <= IDENTITY_EMAIL_MAX else None
+
+
+def bounded_display_name(value: str | None) -> str | None:
+    """A provider's `name` claim cut to `Identity.display_name`'s length, so
+    an over-long name can never make a sign-in fail with a database error."""
+    return value[:IDENTITY_DISPLAY_NAME_MAX] if value else None
+
+
 def subject_fingerprint(issuer: str, subject: str) -> str:
     """A short, non-reversible handle for an external identity, so audit
     rows can be correlated without storing the subject itself."""
@@ -219,8 +237,8 @@ class IdentityResolverService:
             user_id=user.id,
             subject=claims.subject,
             issuer=claims.issuer,
-            email=claims.email,
-            display_name=claims.display_name,
+            email=bounded_email(claims.email),
+            display_name=bounded_display_name(claims.display_name),
             provider=claims.provider,
             last_authenticated_at=utcnow(),
         )
@@ -268,8 +286,8 @@ class IdentityResolverService:
 
     def _sync_identity_fields(self, db: Session, identity: Identity, claims: ExternalIdentityClaims) -> None:
         # Profile attributes only. They never change which user this is.
-        identity.email = claims.email
-        identity.display_name = claims.display_name
+        identity.email = bounded_email(claims.email)
+        identity.display_name = bounded_display_name(claims.display_name)
         identity.provider = claims.provider
         db.add(identity)
 

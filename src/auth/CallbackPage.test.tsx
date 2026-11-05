@@ -15,6 +15,7 @@ function renderCallbackPage() {
         <Route path="/callback" element={<CallbackPage />} />
         <Route path="/" element={<div>Home</div>} />
         <Route path="/login" element={<div>Login</div>} />
+        <Route path="/invite/complete" element={<div>Invitation complete</div>} />
       </Routes>
     </MemoryRouter>,
   );
@@ -80,4 +81,25 @@ describe('CallbackPage', () => {
 
     Object.defineProperty(window, 'top', { value: originalTop, configurable: true });
   });
+
+  it('returns to a same-origin path the sign-in asked for (the invitation flow)', async () => {
+    const signinRedirectCallback = vi.fn().mockResolvedValue({ access_token: 'tok', state: { returnTo: '/invite/complete' } });
+    mockGetOidcUserManager.mockReturnValue({ signinRedirectCallback, signinSilentCallback: vi.fn() });
+
+    renderCallbackPage();
+
+    await waitFor(() => expect(screen.getByText('Invitation complete')).toBeInTheDocument());
+  });
+
+  it.each(['https://evil.example.com/', '//evil.example.com', '/\\evil.example.com', 'invite/complete'])(
+    'ignores an unsafe return path (%s) and goes home',
+    async (returnTo) => {
+      const signinRedirectCallback = vi.fn().mockResolvedValue({ access_token: 'tok', state: { returnTo } });
+      mockGetOidcUserManager.mockReturnValue({ signinRedirectCallback, signinSilentCallback: vi.fn() });
+
+      renderCallbackPage();
+
+      await waitFor(() => expect(screen.getByText('Home')).toBeInTheDocument());
+    },
+  );
 });

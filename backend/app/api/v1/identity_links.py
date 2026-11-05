@@ -1,8 +1,7 @@
 """Invitation and account-link endpoints: the explicit ways an external
 identity is bound to a SIE user (app/services/identity_link_service.py).
 
-* `POST /organizations/{organization_id}/invitations`: an organization
-  admin (`users:manage` in that organization) invites a new person.
+* Invitations live in app/api/v1/invitations.py.
 * `POST /identity-links`: a platform administrator issues an
   account-link code for one existing, non-administrator user (migration
   and recovery). Platform-administrator accounts are linked only with the
@@ -22,14 +21,13 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
-from app.api.deps_auth import get_authenticated_user_id, get_verified_identity_claims, require_permission
+from app.api.deps_auth import get_authenticated_user_id, get_verified_identity_claims
 from app.api.deps_rate_limit import RateLimitClass, require_rate_limit
 from app.schemas.identity_link import (
     AccountLinkCreate,
     GrantCreatedRead,
     GrantRedeem,
     GrantRedeemedRead,
-    InvitationCreate,
 )
 from app.services.authorization_service import authorization_service
 from app.services.identity_link_service import (
@@ -40,7 +38,6 @@ from app.services.identity_link_service import (
 )
 from app.services.identity_service import ExternalIdentityClaims
 from app.services.permissions import Permission
-from app.services.tenant_context import TenantContext
 
 router = APIRouter(tags=["identity-links"])
 
@@ -57,32 +54,6 @@ def _created(response: Response, created: CreatedGrant) -> GrantCreatedRead:
         role=grant.role,
         target_user_id=grant.target_user_id,
     )
-
-
-@router.post(
-    "/organizations/{organization_id}/invitations",
-    response_model=GrantCreatedRead,
-    status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_rate_limit(RateLimitClass.WRITE))],
-)
-def create_invitation(
-    organization_id: uuid.UUID,
-    payload: InvitationCreate,
-    response: Response,
-    context: TenantContext = Depends(require_permission(Permission.USERS_MANAGE)),
-    db: Session = Depends(get_db),
-) -> GrantCreatedRead:
-    try:
-        created = identity_link_service.create_invitation(
-            db,
-            organization_id=organization_id,
-            email=payload.email,
-            role=payload.role,
-            actor_user_id=context.user_id,
-        )
-    except GrantCreationError as exc:
-        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
-    return _created(response, created)
 
 
 @router.post(
