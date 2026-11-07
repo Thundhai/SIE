@@ -886,6 +886,36 @@ def test_rejections_are_audited_without_secrets(client, db_session, production_a
         assert secret not in flat
 
 
+def test_email_refusals_record_where_the_email_came_from(
+    client, db_session, production_auth, trusted_issuer, monkeypatch
+):
+    """A refusal records VerifiedEmail.source, so "no email" can be told
+    apart: the access token (UserInfo not configured) or UserInfo itself."""
+    org, _ = _org_with_admin(db_session)
+
+    code = _invite(client, org, email="first.person@example.com")["code"]
+    client.post(_ACCEPT, json={"token": code}, headers=_as("token-only-sub"))
+
+    monkeypatch.setattr(settings, "OIDC_USERINFO_URL", "https://test-issuer.example.com/userinfo")
+    monkeypatch.setattr(verified_email_module, "_fetch_userinfo", lambda url, token: {"sub": "userinfo-sub"})
+    code = _invite(client, org, email="second.person@example.com")["code"]
+    client.post(_ACCEPT, json={"token": code}, headers=_as("userinfo-sub"))
+
+    # An existing account whose stored email differs from the invitation.
+    home = make_org(db_session, "Home")
+    existing = make_org_member(db_session, home.id)
+    _bind(db_session, existing, "userinfo-sub")
+    code = _invite(client, org, email="third.person@example.com")["code"]
+    client.post(_ACCEPT, json={"token": code}, headers=_as("userinfo-sub"))
+
+    rows = sorted(_audit(db_session, AuditAction.INVITATION_REJECTED), key=lambda row: row.timestamp)
+    assert [(row.event_metadata["reason"], row.event_metadata["email_source"]) for row in rows] == [
+        ("email_claim_missing", "access_token"),
+        ("email_claim_missing", "userinfo"),
+        ("email_mismatch", "userinfo"),
+    ]
+
+
 # --- Viewing one invitation ------------------------------------------------------------------
 
 

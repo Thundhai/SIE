@@ -430,7 +430,7 @@ class InvitationService:
                 user_id=user.id,
             )
         if user.email.strip().lower() != grant.invited_email:
-            self._refuse_mismatch(db, claims, grant, user_id=user.id)
+            self._refuse_mismatch(db, claims, grant, user_id=user.id, email_source=verified.source)
         self._require_verified_invited_email(db, claims, verified, grant, user_id=user.id)
         return user
 
@@ -459,6 +459,7 @@ class InvitationService:
                 403,
                 "This sign-in provider is not trusted to verify email for invitations.",
                 user_id=user_id,
+                email_source=verified.source,
                 after=mark_started,
                 expected_hash=grant.token_sha256,
             )
@@ -474,6 +475,7 @@ class InvitationService:
                 503,
                 "Your email could not be verified with your sign-in provider right now. Try again shortly.",
                 user_id=user_id,
+                email_source=verified.source,
             )
         if verified.source in (SOURCE_USERINFO_SUBJECT_MISMATCH, SOURCE_USERINFO_INSECURE):
             self._refuse(
@@ -485,6 +487,7 @@ class InvitationService:
                 403,
                 "Your email could not be verified with your sign-in provider.",
                 user_id=user_id,
+                email_source=verified.source,
             )
         if not verified.email:
             self._refuse(
@@ -496,6 +499,7 @@ class InvitationService:
                 403,
                 "Your sign-in did not provide an email address.",
                 user_id=user_id,
+                email_source=verified.source,
                 after=mark_started,
                 expected_hash=grant.token_sha256,
             )
@@ -509,11 +513,12 @@ class InvitationService:
                 403,
                 "Verify your email address with your sign-in provider, then sign in again.",
                 user_id=user_id,
+                email_source=verified.source,
                 after=mark_started,
                 expected_hash=grant.token_sha256,
             )
         if verified.email.strip().lower() != grant.invited_email:
-            self._refuse_mismatch(db, claims, grant, user_id=user_id)
+            self._refuse_mismatch(db, claims, grant, user_id=user_id, email_source=verified.source)
 
     def _new_account(
         self,
@@ -561,7 +566,13 @@ class InvitationService:
             grant.registration_started_at = utcnow()
 
     def _refuse_mismatch(
-        self, db: Session, claims: ExternalIdentityClaims, grant: IdentityLinkGrant, *, user_id: uuid.UUID | None = None
+        self,
+        db: Session,
+        claims: ExternalIdentityClaims,
+        grant: IdentityLinkGrant,
+        *,
+        user_id: uuid.UUID | None = None,
+        email_source: str | None = None,
     ):
         limit = settings.INVITATION_MAX_FAILED_ATTEMPTS
 
@@ -582,6 +593,7 @@ class InvitationService:
             user_id=user_id,
             after=count,
             expected_hash=grant.token_sha256,
+            email_source=email_source,
         )
 
     def _refuse(
@@ -597,6 +609,7 @@ class InvitationService:
         user_id: uuid.UUID | None = None,
         after: Callable[[IdentityLinkGrant], None] | None = None,
         expected_hash: str | None = None,
+        email_source: str | None = None,
     ):
         """Roll back, apply `after` to the grant (a state change that must
         persist even though the request is refused), audit, raise.
@@ -607,6 +620,11 @@ class InvitationService:
         that landed in between is never overwritten."""
         db.rollback()
         metadata: dict = {"reason": reason}
+        if email_source is not None:
+            # Where the email checks got their answer (VerifiedEmail.source):
+            # "access_token", "userinfo" or a UserInfo failure. Never the
+            # email itself, so a refusal can be diagnosed from the audit log.
+            metadata["email_source"] = email_source
         if claims is not None:
             metadata["issuer"] = claims.issuer
             metadata["subject_fingerprint"] = subject_fingerprint(claims.issuer, claims.subject)
