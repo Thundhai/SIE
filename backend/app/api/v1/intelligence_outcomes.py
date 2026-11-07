@@ -11,13 +11,19 @@ HTTP 501. See docs/M43_IP_03_PUBLIC_EXTRACTION.md.
 The underlying `IntelligenceOutcome`/`IntelligenceOutcomeVerification`
 database models and their enums are not deleted -- same deferred
 database-boundary rationale as `intelligence_decisions.py`.
+
+**Human callers only for the two write routes.** Outcome and Verification
+records are human-authored only (owner decision, 2026-10-21;
+`sie-contract` 0.7.0). A machine (API-client) caller is refused with 403
+before anything else happens, even though it may hold
+`INTELLIGENCE_DECISION_WRITE` for Decisions. Read routes are unchanged.
 """
 
 from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
@@ -32,9 +38,33 @@ def _unavailable():
     raise commercial_core_client.unavailable("Intelligence outcome tracking/verification")
 
 
-@router.post("/outcomes", status_code=201)
+_authorize_write = require_context_permission(Permission.INTELLIGENCE_DECISION_WRITE)
+
+_HUMAN_ONLY_WRITE_RESPONSES = {
+    403: {
+        "description": (
+            "Missing `intelligence:decision_write` in the organization, or the caller is an API client: "
+            "outcomes and verifications can only be recorded by a human user."
+        )
+    }
+}
+
+
+def _require_human_writer(context: RequestContext = Depends(_authorize_write)) -> RequestContext:
+    """Normal permission check first (so an unauthorized caller still gets
+    the usual 403 and audit entry), then refuse any machine caller: an
+    Outcome or Verification must be recorded by a person."""
+    if context.is_machine:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Outcomes and verifications can only be recorded by a human user, not an API client.",
+        )
+    return context
+
+
+@router.post("/outcomes", status_code=201, responses=_HUMAN_ONLY_WRITE_RESPONSES)
 def create_intelligence_outcome(
-    context: RequestContext = Depends(require_context_permission(Permission.INTELLIGENCE_DECISION_WRITE)),
+    context: RequestContext = Depends(_require_human_writer),
     db: Session = Depends(get_db),
 ):
     _unavailable()
@@ -59,10 +89,10 @@ def get_intelligence_outcome(
     _unavailable()
 
 
-@router.post("/outcomes/{outcome_id}/verifications", status_code=201)
+@router.post("/outcomes/{outcome_id}/verifications", status_code=201, responses=_HUMAN_ONLY_WRITE_RESPONSES)
 def create_outcome_verification(
     outcome_id: uuid.UUID,
-    context: RequestContext = Depends(require_context_permission(Permission.INTELLIGENCE_DECISION_WRITE)),
+    context: RequestContext = Depends(_require_human_writer),
     db: Session = Depends(get_db),
 ):
     _unavailable()
