@@ -430,7 +430,7 @@ class InvitationService:
                 user_id=user.id,
             )
         if user.email.strip().lower() != grant.invited_email:
-            self._refuse_mismatch(db, claims, grant, user_id=user.id)
+            self._refuse_mismatch(db, claims, grant, user_id=user.id, email_source=verified.source)
         self._require_verified_invited_email(db, claims, verified, grant, user_id=user.id)
         return user
 

@@ -901,10 +901,18 @@ def test_email_refusals_record_where_the_email_came_from(
     code = _invite(client, org, email="second.person@example.com")["code"]
     client.post(_ACCEPT, json={"token": code}, headers=_as("userinfo-sub"))
 
+    # An existing account whose stored email differs from the invitation.
+    home = make_org(db_session, "Home")
+    existing = make_org_member(db_session, home.id)
+    _bind(db_session, existing, "userinfo-sub")
+    code = _invite(client, org, email="third.person@example.com")["code"]
+    client.post(_ACCEPT, json={"token": code}, headers=_as("userinfo-sub"))
+
     rows = sorted(_audit(db_session, AuditAction.INVITATION_REJECTED), key=lambda row: row.timestamp)
     assert [(row.event_metadata["reason"], row.event_metadata["email_source"]) for row in rows] == [
         ("email_claim_missing", "access_token"),
         ("email_claim_missing", "userinfo"),
+        ("email_mismatch", "userinfo"),
     ]
 
 
