@@ -133,6 +133,21 @@ class Settings(BaseSettings):
     # peer 127.0.0.1, and a client-sent X-Forwarded-For is only prepended.
     # 1 or 2 would key every client on a shared proxy address.
     TRUSTED_PROXY_HOPS: int = Field(default=0, ge=0, le=5)
+    # Administrator-added users (app/services/user_provisioning_service.py):
+    # an administrator adds a person by email; SIE creates their Auth0
+    # database account through the Management API, binds it to a new SIE
+    # user, and Auth0 emails them a set-password link. Off until all four
+    # are set. DOMAIN is the tenant's Auth0 host (no scheme), e.g.
+    # "example.us.auth0.com". CLIENT_ID/SECRET belong to a machine-to-machine
+    # application granted read:users and create:users on the Management
+    # API; the secret is never logged. PASSWORD_EMAIL_CLIENT_ID is the SPA's
+    # public client id: the set-password email is sent for that application.
+    AUTH0_MANAGEMENT_DOMAIN: str | None = None
+    AUTH0_MANAGEMENT_CLIENT_ID: str | None = None
+    AUTH0_MANAGEMENT_CLIENT_SECRET: str | None = None
+    AUTH0_PASSWORD_EMAIL_CLIENT_ID: str | None = None
+    # The Auth0 database connection new users are created in.
+    AUTH0_DB_CONNECTION: str = "Username-Password-Authentication"
 
     # Browser/CORS access (see app/main.py, cors_allowed_origins_list
     # below, docs/FRONTEND_ARCHITECTURE.md's "Browser integration"
@@ -718,6 +733,20 @@ class Settings(BaseSettings):
         return self.APP_ENV.strip().lower() in PRODUCTION_APP_ENVS
 
     @property
+    def auth0_management_configured(self) -> bool:
+        """All four AUTH0_MANAGEMENT_* / AUTH0_PASSWORD_EMAIL_CLIENT_ID
+        settings are set (startup refuses a partial set)."""
+        return all(
+            (value or "").strip()
+            for value in (
+                self.AUTH0_MANAGEMENT_DOMAIN,
+                self.AUTH0_MANAGEMENT_CLIENT_ID,
+                self.AUTH0_MANAGEMENT_CLIENT_SECRET,
+                self.AUTH0_PASSWORD_EMAIL_CLIENT_ID,
+            )
+        )
+
+    @property
     def allows_plain_http_userinfo(self) -> bool:
         """Plain http:// OIDC_USERINFO_URL is allowed only for local
         development and tests: never on a deployment, never on staging or
@@ -805,6 +834,20 @@ def validate_startup_settings(settings: "Settings") -> None:
     userinfo = (settings.OIDC_USERINFO_URL or "").strip().lower()
     if userinfo and not userinfo.startswith("https://") and not settings.allows_plain_http_userinfo:
         problems.append("OIDC_USERINFO_URL must use https:// (bearer tokens are sent to it).")
+    auth0_names = (
+        "AUTH0_MANAGEMENT_DOMAIN",
+        "AUTH0_MANAGEMENT_CLIENT_ID",
+        "AUTH0_MANAGEMENT_CLIENT_SECRET",
+        "AUTH0_PASSWORD_EMAIL_CLIENT_ID",
+    )
+    auth0_missing = [name for name in auth0_names if not (getattr(settings, name) or "").strip()]
+    if 0 < len(auth0_missing) < len(auth0_names):
+        problems.append("Adding users needs all of " + ", ".join(auth0_names) + "; missing: " + ", ".join(auth0_missing) + ".")
+    domain = (settings.AUTH0_MANAGEMENT_DOMAIN or "").strip()
+    if domain and ("/" in domain or ":" in domain or any(c.isspace() for c in domain)):
+        problems.append("AUTH0_MANAGEMENT_DOMAIN must be a bare host name, e.g. example.us.auth0.com.")
+    if not auth0_missing and not settings.OIDC_ISSUER:
+        problems.append("Adding users needs OIDC_ISSUER: new accounts are bound to that issuer.")
     if problems:
         raise UnsafeConfigurationError(
             f"Refusing to start (APP_ENV={settings.APP_ENV!r}, RENDER={settings.RENDER}): " + " ".join(problems)

@@ -7,6 +7,7 @@ import { EmptyState } from '../../components/ui/EmptyState';
 import { ErrorState } from '../../components/ui/ErrorState';
 import { LoadingState } from '../../components/ui/LoadingState';
 import { StatusBadge } from '../../components/ui/StatusBadge';
+import { AddUserSection } from './AddUserSection';
 import { InvitationsSection } from './InvitationsSection';
 import { getOrganization, type OrganizationMembership } from '../../services/api/organizations';
 import {
@@ -53,6 +54,8 @@ import type { AsyncState } from '../../types/common';
  */
 export function AdministrationPage() {
   const auth = useAuth();
+  // Bumped after Add user succeeds, so the member list reloads.
+  const [membersVersion, setMembersVersion] = useState(0);
 
   if (!auth.organization) {
     return (
@@ -77,11 +80,18 @@ export function AdministrationPage() {
 
       <OrganizationSection organizationId={auth.organization.id} />
       <SitesSection organizationId={auth.organization.id} />
-      <MembersSection organizationId={auth.organization.id} />
-      {/* Keyed by organization: switching organizations remounts it, so a
-          one-time link or an in-flight result never shows under another
-          organization. */}
-      <InvitationsSection key={auth.organization.id} organizationId={auth.organization.id} />
+      <MembersSection organizationId={auth.organization.id} version={membersVersion} />
+      {/* Keyed by organization: switching organizations remounts these, so a
+          result (or a one-time link) never shows under another organization. */}
+      <AddUserSection
+        key={`add-${auth.organization.id}`}
+        organizationId={auth.organization.id}
+        onAdded={() => setMembersVersion((v) => v + 1)}
+      />
+      {/* Copy-a-link invitations: replaced by Add user, kept behind a flag. */}
+      {import.meta.env.VITE_INVITATIONS_ENABLED === 'true' && (
+        <InvitationsSection key={auth.organization.id} organizationId={auth.organization.id} />
+      )}
       <GoverningStandardsSection organizationId={auth.organization.id} />
       <ApiClientsSection organizationId={auth.organization.id} />
     </PageContainer>
@@ -167,7 +177,7 @@ function SitesSection({ organizationId }: { organizationId: string }) {
 
 // --- Users & membership --------------------------------------------------
 
-function MembersSection({ organizationId }: { organizationId: string }) {
+function MembersSection({ organizationId, version = 0 }: { organizationId: string; version?: number }) {
   const auth = useAuth();
   const permitted = auth.hasPermission(ADMINISTRATION_SECTION_PERMISSIONS.members);
   const [state, setState] = useState<AsyncState<OrganizationMembership[]>>({ status: 'loading' });
@@ -183,7 +193,7 @@ function MembersSection({ organizationId }: { organizationId: string }) {
         setState({ status: 'error', message: error instanceof Error ? error.message : 'Could not load members.' });
       });
     return () => controller.abort();
-  }, [organizationId, permitted]);
+  }, [organizationId, permitted, version]);
 
   if (!permitted) return null;
 

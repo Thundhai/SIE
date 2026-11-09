@@ -26,6 +26,7 @@ from app.api.v1 import (
     retrieval,
     risk_assessments,
     sites,
+    user_provisioning,
 )
 
 api_router = APIRouter()
@@ -37,6 +38,7 @@ api_router.include_router(knowledge.router)
 api_router.include_router(memberships.router)
 api_router.include_router(identity_links.router)
 api_router.include_router(invitations.router)
+api_router.include_router(user_provisioning.router)
 api_router.include_router(ingestion.router)
 api_router.include_router(data_ingestion.router)
 api_router.include_router(retrieval.router)

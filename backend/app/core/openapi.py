@@ -53,6 +53,13 @@ OPENAPI_TAGS = [
         ),
     },
     {
+        "name": "users",
+        "description": (
+            "Administrator-added users: add a person by email and role. SIE creates their sign-in with the "
+            "identity provider when needed, and the provider emails them a set-password link."
+        ),
+    },
+    {
         "name": "identity-links",
         "description": (
             "Invitations and account-link codes: the explicit ways an identity-provider sign-in is "

@@ -53,6 +53,9 @@ class ErrorCode:
     # An invitation was refused; `details.reason` says why (see
     # app/services/invitation_service.py).
     INVITATION_REJECTED = "INVITATION_REJECTED"
+    # Adding a user was refused; `details.reason` says why (see
+    # app/services/user_provisioning_service.py).
+    USER_ADD_REJECTED = "USER_ADD_REJECTED"
 
 
 # A reasonable default `code` inferred purely from an ordinary
