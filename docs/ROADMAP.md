@@ -14,13 +14,13 @@
 
 | Phase | Items | Done | % Complete | Last checked |
 |---|---|---|---|---|
-| Phase 0 — Stop the Bleeding | 3 | 3 | 100% | 2026-10-28 |
-| Phase 1 — Close the Decision Loop | 5 | 3 | 60% | 2026-10-28 |
-| Phase 2 — Finish the Intelligence Loop | 4 | 1 | 25% | 2026-10-28 |
-| Phase 3 — Enterprise Readiness | 5 | 0 | 0% | 2026-10-28 |
-| Phase 4 — Strategic Decisions + Expansion | 5 | 0 | 0% | 2026-10-28 |
-| Phase 5 — Hygiene & Long-Term | 7 | 0 | 0% | 2026-10-28 |
-| **Overall** | **29** | **7** | **24%** | **2026-10-28** |
+| Phase 0 — Stop the Bleeding | 3 | 3 | 100% | 2026-11-10 |
+| Phase 1 — Close the Decision Loop | 5 | 3 | 60% | 2026-11-10 |
+| Phase 2 — Finish the Intelligence Loop | 4 | 1 | 25% | 2026-11-10 |
+| Phase 3 — Enterprise Readiness | 5 | 0 | 0% | 2026-11-10 |
+| Phase 4 — Strategic Decisions + Expansion | 5 | 0 | 0% | 2026-11-10 |
+| Phase 5 — Hygiene & Long-Term | 7 | 0 | 0% | 2026-11-10 |
+| **Overall** | **29** | **7** | **24%** | **2026-11-10** |
 
 **2026-10-19 check-in: no numeric change** from the 2026-10-16 check-in — re-verified against live GitHub state (PR states, CI, file contents), not just this file's checkboxes. One relevant development since then, not yet reflected in a checkbox: `Thundhai/SIE` PR #46 (draft) adds `docs/PHASE2_OUTCOMES_VERIFICATION_CONTRACT_SPEC.md` and a handoff doc proposing DTOs for Phase 2's first item below — specification only, explicitly not implemented pending the user's approval of the boundary/field-set questions it raises, so Phase 2 stays 0/4 until that lands for real. The three pre-existing PRs outside the 29 tracked items, previously noted here as open and under separate reconciliation, have since resolved (all 2026-10-19): #39 merged into `main` (`51245b7`); #32 (read-only Attention list for the Intelligence page) merged into `main` (`257cf23`); #30 (demo-key placeholder cleanup) closed without merging, superseded — see its own PR thread for why. None of the three are among the 29 tracked deliverables above, so this resolution leaves the Status Summary table's phase counts unchanged.
 
@@ -41,6 +41,37 @@ Checked explicitly per this check-in's own instruction: whether `Thundhai/SIE` P
 - **Not tracked here, but merged:** `Thundhai/SIE` PR #61 (Commercial Core 404s passed through as 404 for site-scoped reads), and on Commercial Core the multi-tenant tenant-assertion stages (#23 to #28: `sie-contract` 0.9.0, domain and gateway verifiers, review fixes, an end-to-end test). Production still runs in `legacy` mode.
 - **Phase 1's secrets half needs a correction.** The 2026-10-27 secret exposure audit found that `.gitleaks.toml` never extended gitleaks' default rules, so SIE's CI gitleaks job has been running with **no rules** (a test token went undetected). History re-scanned with the default rules finds only the five known false positives, so nothing was missed, but the job gave no protection. The fix is `Thundhai/SIE` PR #62 (open; also adds production startup checks). The item stays `[~]`.
 - **Unchanged:** Outcomes/Verification (PRs #55, #56 open, no change since 2026-10-21; PR #46 still draft), rate limiting (PR #48 still draft), all of Phases 3 and 4, and Phase 5 (14 legacy views and `mockData.ts` still on `main`; Knowledge now has one frontend test, Reports still none; the stale `alembic check` comment in `ci.yml` is still there). Branches: 76 on `Thundhai/SIE`, 48 on Commercial Core (API page cap is 100).
+
+**2026-11-04 recurring check-in: no numeric change** (still 7/29, 24%). Re-verified all 29 items against live state in both repos (file contents, `git log`, GitHub API). Changes since 2026-10-28, none of which completes an item:
+- **Phase 1, CodeQL + secret scanning:** `Thundhai/SIE`'s half is now fully done. PR #62 (`7f86134`) made `.gitleaks.toml` extend gitleaks' default rules (`[extend] useDefault = true`), and CI gitleaks passes on `main`. The item stays `[~]` because Commercial Core's CodeQL is still deferred (plan wall).
+- **Phase 2, Outcomes/Verification contract:** `Thundhai/SIE` `main` now vendors `sie-contract` 0.9.0, which includes `outcomes.py` (via PR #67, `d857b85`). The old re-vendoring PR #55 was closed unmerged as superseded on 2026-10-30. The item stays `[~]`: deleted-actor identity is still unresolved.
+- **Not tracked here, but merged:** on `Thundhai/SIE`, PRs #64 (startup-check fixes), #65 and #68 (OpenAI-compatible embeddings), #66 (migration 0036, tenant entitlements), #67 (tenant-assertion signer, inert until configured) and #71 (access-log and process-wide log redaction, live on Render as `ed3d134`). On Commercial Core, PRs #29 to #32 (hidden API docs, OpenAI-compatible embeddings, the entitlement operator script, ops-probe follow-up). Also merged, on 2026-11-04 after this check-in was first drafted: #69 (OIDC account-linking security; unknown identities now fail closed; migration 0037, live on Render as `afde660`). Still open: #70 (invitations) and draft #72 (not required, per the production identity assessment).
+- **Unchanged:** Phases 3 and 4. Phase 5 has 14 legacy views and `mockData.ts` still on `main`, one Knowledge frontend test and no Reports test, the stale `alembic check` comment in `ci.yml`, and 86 non-`main` branches on `Thundhai/SIE` and 52 on Commercial Core.
+
+**2026-11-07 recurring check-in: no numeric change** (still 7/29, 24%). Re-verified all 29 items against live state in both repos (file contents, `git log`, GitHub API). This carries forward the 2026-11-04 note above from PR #73, which is still open. Changes since 2026-11-04, none of which completes an item:
+- **Merged on `Thundhai/SIE` (not tracked here):**
+  - #70, invitation-based registration (migration 0038). Live on Render as `8fe3e9a` since 2026-11-05.
+  - #74, which records where the email came from on invitation refusals. Live as `6d3f3a8` since 2026-11-07.
+  - Invitations are enabled in production. They need `OIDC_USERINFO_URL`, `TRUSTED_PROXY_HOPS=3` (measured on Render) and the trusted issuer.
+  - A pilot acceptance is in progress.
+- **Phase 3, rate limiting:** #70 adds per-client-IP limits on the invitation routes only. The item stays open: coverage across all routers and a multi-instance limiter are still missing.
+- **Phase 1, Render free tier:** still deferred. The owner reconfirmed it on 2026-11-05: upgrade after production is finished. The free plan's sleep is now confirmed as the cause of the Commercial Core 503s (a sleeping `cc-domain-service` returns 429).
+- **Commercial Core `main`:** unchanged (`a34606f`).
+- **Unchanged:**
+  - Phases 2, 3 and 4. #56 is still open, and deleted-actor identity is still unresolved.
+  - Phase 5. The 14 legacy views and `mockData.ts` are still on `main`, there is one Knowledge frontend test and no Reports test, and the stale `ci.yml` comment remains.
+  - Non-`main` branches: 87 on `Thundhai/SIE`, 52 on Commercial Core.
+
+**2026-11-10 recurring check-in: no numeric change** (still 7/29, 24%). Re-verified all 29 items against live state in both repos (file contents, `git log`, GitHub API). This carries forward the 2026-11-07 note above from PR #75, which is still open, as is #73.
+- **No changes on either `main`:** `Thundhai/SIE` is still `6d3f3a8` and Commercial Core is still `a34606f`.
+- **New on `Thundhai/SIE`, not tracked here:** PR #76, open. It adds Administration → **Add user**: the admin adds a person by email, and Auth0 emails a set-password link. It replaces the copy-a-link invitation flow, at the owner's request. Codex review found no issues.
+- **GitHub Actions has not run any job since 2026-11-09:**
+  - every CI and CodeQL job on #75 and #76 fails within seconds with no runner assigned
+  - this looks account-level (likely billing or a spending limit) and isn't caused by code
+  - it blocks Phase 1's "required status checks" from passing on new PRs until resolved
+- **Unchanged:**
+  - Phases 2–5, as in the 2026-11-07 note
+  - non-`main` branches: 89 on `Thundhai/SIE`, 52 on Commercial Core
 
 Priority legend: **P0** blocking/urgent · **P1** high value, this quarter · **P2** real but can wait · **P3** hygiene/cleanup/long-term.
 
