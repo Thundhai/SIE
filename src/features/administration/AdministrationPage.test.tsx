@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AuthContext } from '../../auth/AuthContext';
@@ -49,6 +49,7 @@ describe('AdministrationPage', () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     vi.resetAllMocks();
   });
 
@@ -129,7 +130,18 @@ describe('AdministrationPage', () => {
     expect(screen.getByText('API clients')).toBeInTheDocument();
   });
 
+  it('shows Add user and hides copy-a-link invitations by default', async () => {
+    vi.mocked(getOrganization).mockResolvedValue(ORGANIZATION);
+    vi.mocked(listApiClients).mockResolvedValue([]);
+    renderWithAuth(['users:manage']);
+
+    expect(await screen.findByText('Add user')).toBeInTheDocument();
+    expect(screen.queryByText('Invitations')).not.toBeInTheDocument();
+    expect(listInvitations).not.toHaveBeenCalled();
+  });
+
   it('remounts the invitations section when the organization changes, so a one-time link never carries over', async () => {
+    vi.stubEnv('VITE_INVITATIONS_ENABLED', 'true');
     vi.mocked(getOrganization).mockResolvedValue(ORGANIZATION);
     vi.mocked(listApiClients).mockResolvedValue([]);
     vi.mocked(createInvitation).mockResolvedValue({
@@ -142,8 +154,9 @@ describe('AdministrationPage', () => {
       code: 'sie_link_ORG1-ONLY',
     });
     const { rerender } = renderWithAuth(['users:manage']);
-    await userEvent.type(await screen.findByLabelText('Email'), 'new@example.com');
-    await userEvent.click(screen.getByRole('button', { name: 'Invite' }));
+    const inviteForm = await screen.findByRole('form', { name: 'Invite a person' });
+    await userEvent.type(within(inviteForm).getByLabelText('Email'), 'new@example.com');
+    await userEvent.click(within(inviteForm).getByRole('button', { name: 'Invite' }));
     expect((await screen.findByTestId('invitation-link')).textContent).toContain('sie_link_ORG1-ONLY');
 
     const value: AuthContextValue = {

@@ -89,4 +89,5 @@ export const ADMINISTRATION_SECTION_PERMISSIONS = {
   standards: 'standards:read',
   apiClients: 'users:manage',
   invitations: 'users:manage',
+  addUser: 'users:manage',
 } as const satisfies Record<string, PermissionKey>;

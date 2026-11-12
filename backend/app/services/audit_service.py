@@ -131,6 +131,10 @@ class AuditAction:
     INVITATION_REGISTRATION_STARTED = "INVITATION_REGISTRATION_STARTED"
     INVITATION_ACCEPTED = "INVITATION_ACCEPTED"
     INVITATION_REJECTED = "INVITATION_REJECTED"
+    # Administrator-added users (app/services/user_provisioning_service.py).
+    # A refusal carries the operation and a fixed reason code, never the email.
+    USER_ADD_REJECTED = "USER_ADD_REJECTED"
+    USER_PASSWORD_EMAIL_SENT = "USER_PASSWORD_EMAIL_SENT"
     # SIE Milestone 25: Enterprise Risk Assessment Foundation v0.1, item
     # 24. app/services/risk_assessment_service.py is the one write path
     # for every one of these (called from app/api/v1/risk_assessments.py).
