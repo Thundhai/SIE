@@ -14,13 +14,13 @@
 
 | Phase | Items | Done | % Complete | Last checked |
 |---|---|---|---|---|
-| Phase 0 — Stop the Bleeding | 3 | 3 | 100% | 2026-11-10 |
-| Phase 1 — Close the Decision Loop | 5 | 3 | 60% | 2026-11-10 |
-| Phase 2 — Finish the Intelligence Loop | 4 | 1 | 25% | 2026-11-10 |
-| Phase 3 — Enterprise Readiness | 5 | 0 | 0% | 2026-11-10 |
-| Phase 4 — Strategic Decisions + Expansion | 5 | 0 | 0% | 2026-11-10 |
-| Phase 5 — Hygiene & Long-Term | 7 | 0 | 0% | 2026-11-10 |
-| **Overall** | **29** | **7** | **24%** | **2026-11-10** |
+| Phase 0 — Stop the Bleeding | 3 | 3 | 100% | 2026-11-15 |
+| Phase 1 — Close the Decision Loop | 5 | 3 | 60% | 2026-11-15 |
+| Phase 2 — Finish the Intelligence Loop | 4 | 1 | 25% | 2026-11-15 |
+| Phase 3 — Enterprise Readiness | 5 | 0 | 0% | 2026-11-15 |
+| Phase 4 — Strategic Decisions + Expansion | 5 | 0 | 0% | 2026-11-15 |
+| Phase 5 — Hygiene & Long-Term | 7 | 0 | 0% | 2026-11-15 |
+| **Overall** | **29** | **7** | **24%** | **2026-11-15** |
 
 **2026-10-19 check-in: no numeric change** from the 2026-10-16 check-in — re-verified against live GitHub state (PR states, CI, file contents), not just this file's checkboxes. One relevant development since then, not yet reflected in a checkbox: `Thundhai/SIE` PR #46 (draft) adds `docs/PHASE2_OUTCOMES_VERIFICATION_CONTRACT_SPEC.md` and a handoff doc proposing DTOs for Phase 2's first item below — specification only, explicitly not implemented pending the user's approval of the boundary/field-set questions it raises, so Phase 2 stays 0/4 until that lands for real. The three pre-existing PRs outside the 29 tracked items, previously noted here as open and under separate reconciliation, have since resolved (all 2026-10-19): #39 merged into `main` (`51245b7`); #32 (read-only Attention list for the Intelligence page) merged into `main` (`257cf23`); #30 (demo-key placeholder cleanup) closed without merging, superseded — see its own PR thread for why. None of the three are among the 29 tracked deliverables above, so this resolution leaves the Status Summary table's phase counts unchanged.
 
@@ -73,6 +73,19 @@ Checked explicitly per this check-in's own instruction: whether `Thundhai/SIE` P
   - Phases 2–5, as in the 2026-11-07 note
   - non-`main` branches: 89 on `Thundhai/SIE`, 52 on Commercial Core
 
+**2026-11-15 recurring check-in (scheduled 2026-11-13): no numeric change** (still 7/29, 24%). Re-verified all 29 items against live state in both repos (file contents, `git log`, GitHub API). Merged on `Thundhai/SIE` since 2026-11-10, all live on Render since 2026-11-12 as `ec54919`:
+- **#77:** the previous check-in.
+- **#76, Add user (not tracked here):** the admin adds a person by email, and Auth0 emails a set-password link. It is inert until the owner's Auth0 setup is done.
+- **#56, which refuses machine callers on the Outcome/Verification write routes:** this completes Public SIE's part of the human-only requirement in Phase 2's Outcomes/Verification contract item. That item stays `[~]`: deleted-actor identity is still unresolved, and wiring is still blocked.
+
+Locally, `main` passes the full backend suite (1593 passed, 24 skipped).
+
+**GitHub Actions is still blocked:** the `main` CI runs for #76 and #56 failed in about 3 seconds with no runner. #73 and #75 are still open; both are superseded by #77.
+
+**Unchanged:**
+- Commercial Core `main` (`a34606f`) and Phases 3–5.
+- Non-`main` branches: 90 on `Thundhai/SIE`, 52 on Commercial Core.
+
 Priority legend: **P0** blocking/urgent · **P1** high value, this quarter · **P2** real but can wait · **P3** hygiene/cleanup/long-term.
 
 ---
@@ -95,7 +108,7 @@ Decisions is fully built on both ends (contract DTO `DecisionReferenceDTO` + bac
 
 ## Phase 2 — Finish the Rest of the Intelligence Loop
 
-- [~] **(P1)** Design contract DTOs for Outcomes/Verification — **in progress, not complete.** Drafted in `Thundhai/SIE` PR #46 (draft); owner authorization recorded in PR #53; merged as `sie-contract` 0.6.0 in `Thundhai/SIE-Commercial-Core` PR #17 (`d303545`). Requirement (1), Outcomes and Verifications are **human-actor-only** (owner decision, 2026-10-21), **is now met in the contract and Commercial Core**: `sie-contract` 0.7.0, `Thundhai/SIE-Commercial-Core` PR #18 (merged `5af97df`, 2026-10-22), restricts `actor_type` to `human` and rejects API clients in the record services. Public SIE's write-path check is `Thundhai/SIE` PR #56 (open). Still unmet: (2) actor identity after a user or API client is hard-deleted is unresolved (open finding on PR #55). Re-vendoring is in PR #55 (conditionally accepted, vendoring only). Not counted as done.
+- [~] **(P1)** Design contract DTOs for Outcomes/Verification — **in progress, not complete.** Drafted in `Thundhai/SIE` PR #46 (draft); owner authorization recorded in PR #53; merged as `sie-contract` 0.6.0 in `Thundhai/SIE-Commercial-Core` PR #17 (`d303545`). Requirement (1), Outcomes and Verifications are **human-actor-only** (owner decision, 2026-10-21), **is now met in the contract and Commercial Core**: `sie-contract` 0.7.0, `Thundhai/SIE-Commercial-Core` PR #18 (merged `5af97df`, 2026-10-22), restricts `actor_type` to `human` and rejects API clients in the record services. Public SIE's write-path check is `Thundhai/SIE` PR #56, **merged 2026-11-12** (`ec54919`, live on Render). Still unmet: (2) actor identity after a user or API client is hard-deleted is unresolved (open finding on PR #55). Re-vendoring is in PR #55 (conditionally accepted, vendoring only). Not counted as done.
 - [ ] **(P1)** Wire Outcomes/Verification end-to-end — **BLOCKED** until the actor-identity remediation and human-only enforcement (contract validation, Commercial Core service checks, Public SIE and Commercial Core write paths) are implemented and tested. No adapter, endpoint or UI before then.
 - [ ] **(P1/P2)** Design contract + wire Organizational Memory / Learning Candidates (fully-built governed pipeline, currently unused).
 - [x] **(P1)** Wire RAG (contract DTO `RAGAnswerDTO`/`CitationReferenceDTO` already exists, zero wiring) — high market differentiation, a working citation-grounded Q&A feature sitting idle. **In progress (2026-10-22):** Commercial Core's half is merged: `Thundhai/SIE-Commercial-Core` PR #19 (`8d8074f`) adds `sie-contract` 0.8.0 (`RAGOutcome`, so abstentions are reported honestly instead of as answers) and the internal RAG route and relay, **off by default** (`DOMAIN_SERVICE_RAG_ENABLED=false`). Public SIE's half is `Thundhai/SIE` PR #58, **merged 2026-10-26** (`6f1eebb`): official 0.8.0 re-vendored with provenance, the client, `/knowledge/rag/query` and the Knowledge-page panel. **Done (2026-10-28).** Turning RAG on in production (model and embedding providers, scope, flag, documents) is a separate owner decision.
