@@ -14,13 +14,13 @@
 
 | Phase | Items | Done | % Complete | Last checked |
 |---|---|---|---|---|
-| Phase 0 — Stop the Bleeding | 3 | 3 | 100% | 2026-11-15 |
-| Phase 1 — Close the Decision Loop | 5 | 3 | 60% | 2026-11-15 |
-| Phase 2 — Finish the Intelligence Loop | 4 | 1 | 25% | 2026-11-15 |
-| Phase 3 — Enterprise Readiness | 5 | 0 | 0% | 2026-11-15 |
-| Phase 4 — Strategic Decisions + Expansion | 5 | 0 | 0% | 2026-11-15 |
-| Phase 5 — Hygiene & Long-Term | 7 | 0 | 0% | 2026-11-15 |
-| **Overall** | **29** | **7** | **24%** | **2026-11-15** |
+| Phase 0 — Stop the Bleeding | 3 | 3 | 100% | 2026-11-25 |
+| Phase 1 — Close the Decision Loop | 5 | 3 | 60% | 2026-11-25 |
+| Phase 2 — Finish the Intelligence Loop | 4 | 1 | 25% | 2026-11-25 |
+| Phase 3 — Enterprise Readiness | 5 | 0 | 0% | 2026-11-25 |
+| Phase 4 — Strategic Decisions + Expansion | 5 | 0 | 0% | 2026-11-25 |
+| Phase 5 — Hygiene & Long-Term | 7 | 0 | 0% | 2026-11-25 |
+| **Overall** | **29** | **7** | **24%** | **2026-11-25** |
 
 **2026-10-19 check-in: no numeric change** from the 2026-10-16 check-in — re-verified against live GitHub state (PR states, CI, file contents), not just this file's checkboxes. One relevant development since then, not yet reflected in a checkbox: `Thundhai/SIE` PR #46 (draft) adds `docs/PHASE2_OUTCOMES_VERIFICATION_CONTRACT_SPEC.md` and a handoff doc proposing DTOs for Phase 2's first item below — specification only, explicitly not implemented pending the user's approval of the boundary/field-set questions it raises, so Phase 2 stays 0/4 until that lands for real. The three pre-existing PRs outside the 29 tracked items, previously noted here as open and under separate reconciliation, have since resolved (all 2026-10-19): #39 merged into `main` (`51245b7`); #32 (read-only Attention list for the Intelligence page) merged into `main` (`257cf23`); #30 (demo-key placeholder cleanup) closed without merging, superseded — see its own PR thread for why. None of the three are among the 29 tracked deliverables above, so this resolution leaves the Status Summary table's phase counts unchanged.
 
@@ -85,6 +85,12 @@ Locally, `main` passes the full backend suite (1593 passed, 24 skipped).
 **Unchanged:**
 - Commercial Core `main` (`a34606f`) and Phases 3–5.
 - Non-`main` branches: 90 on `Thundhai/SIE`, 52 on Commercial Core.
+
+**2026-11-16 recurring check-in: no change** (still 7/29, 24%). Neither `main` moved since the 2026-11-15 check-in (#78): `Thundhai/SIE` is at `59edfaa` (docs only), Commercial Core at `a34606f`. GitHub Actions still starts no jobs.
+
+**2026-11-18 recurring check-in: no change** (still 7/29, 24%). This carries forward the 2026-11-16 note above from PR #79, which is still open. Neither `main` has moved: `Thundhai/SIE` is still at `59edfaa` and Commercial Core at `a34606f` (no commits since 2026-11-15). Add user (#76) is live but stays inert until the owner sets up its Auth0 machine-to-machine application. GitHub Actions still starts no jobs.
+
+**2026-11-25 recurring check-in: no change** (still 7/29, 24%). This carries forward the 2026-11-16 and 2026-11-18 notes above from PRs #79 and #80, which are both still open. Neither `main` has moved: `Thundhai/SIE` is still at `59edfaa` and Commercial Core at `a34606f`, with no commits on either since 2026-11-15. Add user (#76) stays inert until its Auth0 setup is done. GitHub Actions still starts no jobs.
 
 Priority legend: **P0** blocking/urgent · **P1** high value, this quarter · **P2** real but can wait · **P3** hygiene/cleanup/long-term.
 
